@@ -9,9 +9,9 @@ class User:
 
     def __init__(self, user: MB.User):
         """ Initializes the instance variables of the User class. This includes: 
-				MBData:         	the Master_Bot.User object associated 
-									with this user
-				entranceTime:		a float representing the time User queued"""
+                MBData:             the Master_Bot.User object associated 
+                                    with this user
+                entranceTime:       a float representing the time User queued"""
         self.MBData = user
         self.entranceTime = time.time()
 

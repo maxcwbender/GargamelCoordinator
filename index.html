@@ -1,0 +1,42 @@
+<a id="login" style="display: none;" href="https://discord.com/api/oauth2/authorize?client_id=822929136711893063&redirect_uri=http%3A%2F%2F172.100.74.62%2F&response_type=token&scope=identify%20connections">Identify Yourself</a>
+Status: 
+<div id="status">Loading</div>
+<script>
+	window.onload = () => {
+		const fragment = new URLSearchParams(window.location.hash.slice(1));
+		const [accessToken, tokenType] = [fragment.get('access_token'), fragment.get('token_type')];
+
+		if (!accessToken) {
+			return document.getElementById('login').style.display = 'block';
+		} else {
+            let data = { 'accessToken': accessToken, 'tokenType': tokenType };
+            fetch('http://172.100.74.62/', {
+                method: 'PUT', 
+                body: JSON.stringify(data),
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            }).then(response => {
+                if(response.status == 400){
+                    document.getElementById('status').innerText = 'Something real bad happened';
+                } else if(response.status == 202){
+                    document.getElementById('status').innerText = 'Please connect your Steam account to your Discord account in order to participate in the Gargamel League.';
+                } else {
+                    document.getElementById('status').innerText = 'You\'re all set! Check in on your registration status in the registration channel of the Discord group.';
+                }
+            });
+        }
+    };
+
+async function putData(url, data) {
+    fetch(url, {
+        method: 'PUT', 
+        body: JSON.stringify(data),
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    }).then(response => {
+        return response;
+    });
+}
+</script>
