@@ -1,29 +1,38 @@
+from asyncio.events import TimerHandle
 from typing import Callable
 import Master_Bot as MB
 import json
 import time
 import itertools
 import math
+import asyncio
+import discord
 
 class User:
 
-    def __init__(self, user: MB.User):
-        """ Initializes the instance variables of the User class. This includes: 
-                MBData:             the Master_Bot.User object associated 
-                                    with this user
+    def __init__(self, discordID: int, rating: int):
+        """ Initializes the instance variables of the User class. This includes:
+                discordID:          the discord id of the associated User
+                rating:             the skill rating of the associated User
                 entranceTime:       a float representing the time User queued"""
-        self.MBData = user
+        self.discordID = discordID
+        self.rating = rating
         self.entranceTime = time.time()
+        self.eventHandle: TimerHandle = None
 
     def getRating(self) -> int:
-        return self.MBData.rating
+        return self.rating
 
     def getEntranceTime(self) -> float:
         return self.entranceTime
 
+    def __repr__(self) -> str:
+        return str(self.rating)
+
 class Coordinator:
 
-    def __init__(self):
+    def __init__(self, eventLoop: asyncio.AbstractEventLoop, 
+            discordClient: discord.Client):
         """ The __init__ function loads in the config file (located in the same
             directory), and creates instance variables for storing the discord
             info of the users, a queue of the users in FIFO order, and a sorted
@@ -31,8 +40,15 @@ class Coordinator:
         with open("config.json") as configFile:
             self.config: dict = json.load(configFile)
 
+        self.usersByID: dict[int, User] = {}
         self.usersFIFO: list[User] = []
         self.usersByRating: list[User] = []
+        self.eventLoop = eventLoop
+        self.waitingForTen = False
+        self.discordClient = discordClient
+    
+    def start(self):
+        self.eventLoop.run_forever()
 
     def findIndexBS(self, user: User, listOfUsers: list[User], 
                     key: Callable[[User], float]) -> int:
@@ -149,25 +165,48 @@ class Coordinator:
                 totalSkillB += user.getRating()
         return (teamA, teamB)
 
-    def insert(self, user: MB.User):
+    def insert(self, discordID: int, rating: int):
+        self.eventLoop.call_soon(self.__insert, discordID, rating)
+
+    def __insert(self, discordID: int, rating: int):
         """ This inserts user into the queue usersFIFO and the sorted list
             usersByRating.""" 
-        newUser = User(user)
+        newUser = User(discordID, rating)
         self.usersFIFO.append(newUser)
         self.usersByRating.insert(
             self.findIndexBS(newUser, self.usersByRating, User.getRating), 
             newUser)
+        self.usersByID[discordID] = newUser
+        newUser.eventHandle = self.eventLoop.call_later(90, self.__create)
+        if self.waitingForTen and len(self.usersFIFO) == 10:
+            self.waitingForTen = False
+            self.__create()
 
-    def delete(self, user: User):
+    def delete(self, discordID: int):
+        self.eventLoop.call_soon(self.__delete, self.usersByID.get(discordID))
+
+    def __delete(self, user: User):
         """ This deletes user from the queue and usersByRating."""
+        if user == None:
+            print("Tried to delete None")
+            return
         self.usersFIFO.pop(
             self.findIndexBS(user, self.usersFIFO, User.getEntranceTime))
         self.usersByRating.pop(
             self.findIndexBS(user, self.usersByRating, User.getRating))
+        self.usersByID.__delitem__(user.discordID)
+        user.eventHandle.cancel()
 
-    def create(self) -> tuple[tuple[User, ...], tuple[User, ...]]:
+    def create(self):
+        self.eventLoop.call_soon(self.__create)
+
+    def __create(self) -> tuple[tuple[User, ...], tuple[User, ...]]:
         """ This creates the approximately most balanced game involving the user
             who has been waiting in the queue for the longest"""
+        if len(self.usersFIFO)<10:
+            print("Not enough players in queue")
+            self.waitingForTen = True
+            return
         theUser = self.usersFIFO[0]
         thePool = self.findUserPool(theUser)
         bestGame = None
@@ -180,34 +219,21 @@ class Coordinator:
                 bestGame = (teamA, teamB)
                 bestScore = curScore
         for user in bestGame[0] + bestGame[1]:
-            self.delete(user)
+            self.__delete(user)
+        self.discordClient.dispatch("game_created", 
+            list(map(lambda x : x.discordID, bestGame[0] + bestGame[1])))
         return bestGame
 
 def test():
-    coordinator = Coordinator()
     import random
+    eventLoop = asyncio.new_event_loop()
+    coordinator = Coordinator(eventLoop)
+    delay = 0
     for i in range(500):
-        newMBUser = MB.User(None, 
-            max(int(random.normalvariate(2500, 1000)), 0))
-        user = User(newMBUser)
-        coordinator.insert(user)
-
-    print("-----------------------------------------")
-    for i in range(50):
-        curPlayer = coordinator.usersFIFO[0]
-        (teamA, teamB) = coordinator.create()
-        score = coordinator.gameImbalance(teamA, teamB)
-        ratings = []
-        for user in teamA + teamB:
-            ratings.append(user.getRating())
-        print(curPlayer.getRating(), score, ratings)
-        print("-----------------------------------------")
-        if i > 45:
-            print(list(map(lambda x : x.rating, coordinator.usersByRating)))
-            copy = coordinator.usersFIFO[:]
-            copy.sort(key=User.getRating)
-            print(list(map(lambda x : x.getRating(), copy)))
-            print("-----------------------------------------")
+        rating = max(int(random.normalvariate(2500, 1000)), 0)
+        delay += random.expovariate(2)
+        coordinator.eventLoop.call_later(delay, coordinator.insert, i, rating)
+    eventLoop.run_forever()
 
 if __name__ == "__main__":
     test()
