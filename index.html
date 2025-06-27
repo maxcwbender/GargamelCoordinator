@@ -1,4 +1,6 @@
-<a id="login" style="display: none;" href="https://discord.com/api/oauth2/authorize?client_id=822929136711893063&redirect_uri=http%3A%2F%2F172.100.74.62%2F&response_type=token&scope=identify%20connections">Click me to give Gargamel Coordinator bot permission to check your account</a>
+<a id="login" style="display: none;"
+    href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=https%3A%2F%2Fmallard-hopeful-ape.ngrok-free.app%2F&scope=identify+connections+guilds.join">Click
+    me to give Gargamel Coordinator bot permission to check your account</a>
 <div id="status">Status: </div>
 <script>
     window.onload = () => {
@@ -10,19 +12,21 @@
             document.getElementById('status').innerText = 'Status: Permissions not given'
         } else {
             let data = { 'accessToken': accessToken, 'tokenType': tokenType };
-            fetch('http://172.100.74.62/', {
-                method: 'PUT', 
+            fetch('https://mallard-hopeful-ape.ngrok-free.app', {
+                method: 'PUT',
                 body: JSON.stringify(data),
                 headers: {
                     'Content-Type': 'application/json',
                 }
             }).then(response => {
-                if(response.status == 400){
+                if (response.status == 404) {
                     document.getElementById('status').innerText = 'Status: Something real bad happened';
-                } else if(response.status == 202){
+                } else if (response.status == 202) {
                     document.getElementById('status').innerText = 'Status: Please connect your Steam account to your Discord account in order to participate in the Gargamel League.';
                 } else {
-                    document.getElementById('status').innerText = 'Status: You\'re all set! If you check your Discord account, momentarily you should be added to the League channel.';
+                    response.json().then(data => {
+                        document.getElementById('status').innerText = `Status: You're all set! You are now registered with the Steam account **${data.result}**. If you check your Discord account, you should soon be added to the League channel.`;
+                    });
                 }
             });
         }
@@ -30,7 +34,7 @@
 
     async function putData(url, data) {
         fetch(url, {
-            method: 'PUT', 
+            method: 'PUT',
             body: JSON.stringify(data),
             headers: {
                 'Content-Type': 'application/json',

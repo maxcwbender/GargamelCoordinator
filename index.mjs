@@ -4,86 +4,127 @@ import express from 'express';
 import net from 'net';
 import { readFileSync } from 'fs';
 
-let config = JSON.parse(readFileSync('./config.json'))
+let config = JSON.parse(readFileSync('./config.json'));
 
 const server = express();
 server.use(express.json());
 
-const socketTest = new net.Socket();
-socketTest.connect(config.pipePort, '127.0.0.1', function() {
-    console.log('Connected');
+// Optional: Add CORS if needed for browsers
+server.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');  // Allow all for testing
+    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
+    next();
 });
-socketTest.destroy()
 
 let db = new sqlite3.Database('allUsers.db');
 
 server.get('/', (request, response) => {
-    console.log('GET: '+request.url);
+    console.log('GET: ' + request.url);
     console.log('------------------------------------------');
     return response.sendFile('index.html', { root: '.' });
 });
 
-server.put('/', (request, response) => {
-    response.status(102)
-    console.log('PUT: '+JSON.stringify(request.body));
-    let tokenType = request.body.tokenType;
-    let accessToken = request.body.accessToken;
-    let discordID = -1;
-    let steamID = -1;
+server.put('/', async (req, res) => {
+    console.log('PUT: ' + JSON.stringify(req.body));
     console.log('------------------------------------------');
-    let result1 = fetch('https://discord.com/api/users/@me', {
-        headers: {
-            authorization: `${tokenType} ${accessToken}`,
+
+    const { tokenType, accessToken } = req.body;
+
+    if (!tokenType || !accessToken) {
+        return res.status(400).json({ result: 'Missing token information' });
+    }
+
+    try {
+        const [userRes, connRes] = await Promise.all([
+            fetch('https://discord.com/api/users/@me', {
+                headers: { authorization: `${tokenType} ${accessToken}` },
+            }),
+            fetch('https://discord.com/api/users/@me/connections', {
+                headers: { authorization: `${tokenType} ${accessToken}` },
+            }),
+        ]);
+
+        const user = await userRes.json();
+        const connections = await connRes.json();
+
+        if (!user.id) {
+            console.error('Invalid Discord token or user not found');
+            return res.status(400).json({ result: 'Invalid Discord credentials' });
         }
-    }); let result2 = fetch('https://discord.com/api/users/@me/connections', {
-        headers: {
-            authorization: `${tokenType} ${accessToken}`,
-        }
-    });
-    Promise.all([result1, result2]).then( values => {
-        let json1 = values[0].json();
-        let json2 = values[1].json();
-        Promise.all([json1, json2]).then( values2 => {
-            discordID = values2[0].id;
-            console.log('discordID: '+discordID);
-            for (const obj in values2[1]) {
-                if(values2[1][obj].type == 'steam'){
-                    steamID = values2[1][obj].id;
-                    console.log('SteamID: '+steamID);
-                } 
-            } if(discordID == -1){
-                console.log('Big Error: ' + discordID);
-                response.status(400).send({result: 'Big Error'});
-            } else if (steamID == -1){
-                response.status(202).send({result: 'No Steam ID'});
-            } else {
-                response.status(201).send({result: 'All good!'});
-                let command = `INSERT INTO users 
-                    (discord_id, steam_id, dateCreated, modsRemaining, timesVouched) 
-                    VALUES (${discordID}, ${steamID}, datetime('now'), ${config.MOD_ASSIGNMENT}, 0)`;
-                console.log(command);
-                let socketPipe = new net.Socket();
-                socketPipe.connect(config.pipePort, '127.0.0.1', function() {
-                    socketPipe.write(`${discordID}`);
-                    socketPipe.end()
-                }); 
-                try {
-                    db.exec(command);
-                } catch (error) {
-                    console.log(error)
-                }
-                fetch(`https://discord.com/api/guilds/${config.GUILD_ID}/members/${discordID}`, {
-                    method: 'PUT',
-                    body: JSON.stringify({"access_token": `${accessToken}`}),
-                    headers: {
-                        "access_token": `${accessToken}`, 
-                        "Authorization": `Bot ${config.BOT_TOKEN}`, 
-                        "Content-Type": 'application/json'
-                    }
-                });
+
+        const discordID = user.id;
+        let steamID = null;
+        let steamName = null;
+
+        for (const conn of connections) {
+            if (conn.type === 'steam') {
+                steamID = conn.id;
+                steamName = conn.name;
+                break;
             }
+        }
+
+        if (!steamID) {
+            return res.status(202).json({ result: 'No Steam ID linked' });
+        }
+
+        // Insert user into database
+        const stmt = db.prepare(`
+            INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched) 
+            VALUES (?, ?, datetime('now'), ?, 0)
+            ON CONFLICT(discord_id) DO UPDATE SET 
+                steam_id = excluded.steam_id
+        `);
+        await new Promise((resolve, reject) => {
+            stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, err => {
+                if (err) console.error('DB upsert error:', err.message);
+                else resolve();
+            });
         });
-    });
+        stmt.finalize();
+
+        // Notify local pipe
+        try {
+            const socketPipe = new net.Socket();
+            socketPipe.on('error', err => {
+                console.error('Pipe connection error:', err);
+            });
+            socketPipe.connect(config.pipePort, '127.0.0.1', function () {
+                socketPipe.write(`${discordID}`);
+                socketPipe.end();
+            });
+        } catch (pipeErr) {
+            console.error('Pipe error:', pipeErr);
+        }
+
+        // Add member to guild
+        fetch(`https://discord.com/api/guilds/${config.GUILD_ID}/members/${discordID}`, {
+            method: 'PUT',
+            body: JSON.stringify({ access_token: accessToken }),
+            headers: {
+                'Authorization': `Bot ${config.BOT_TOKEN}`,
+                'Content-Type': 'application/json',
+            },
+        }).then(res => {
+            if (!res.ok) {
+                return res.text().then(text => {
+                    console.error(`Failed to add user to guild: ${res.status} ${text}`);
+                });
+            } else {
+                console.log(`Successfully added ${discordID} to guild.`);
+            }
+        }).catch(err => {
+            console.error('Guild add error:', err);
+        });
+
+        console.log(`Registered: ${discordID} with Steam ${steamName} (${steamID})`);
+        return res.status(201).json({ result: steamName });
+    } catch (err) {
+        console.error('Unhandled server error:', err);
+        return res.status(500).json({ result: 'Server error occurred' });
+    }
 });
 
-server.listen(80, () => console.log(`Server listening at http://localhost:80`));
+server.listen(80, '0.0.0.0', () => console.log(`Server listening at http://localhost:80`));
