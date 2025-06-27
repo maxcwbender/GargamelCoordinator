@@ -72,6 +72,7 @@ class Master_Bot(commands.Bot):
         self.game_map_inverse: dict[int, (set[int], set[int])] = {}
         self.queue_status_msg: discord.Message = None
         self.pending_game_task: asyncio.Task | None = None
+        self.lobby_messages: dict[int, discord.Message] = {}
 
     def run(self):
         """
@@ -153,7 +154,7 @@ class Master_Bot(commands.Bot):
         playerQueue = self.coordinator.get_queue()
         for i in range(len(playerQueue)):
             playerQueue[i] = f"<@{playerQueue[i][0]}>"
-        
+
         if len(playerQueue) > self.config["TEAM_SIZE"] * 2:
             playerQueue.insert(self.config["TEAM_SIZE"] * 2, "✂️✂️✂️")
 
@@ -315,7 +316,9 @@ class Master_Bot(commands.Bot):
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
-                    await lobby_channel.send("Not enough players anymore. Game cancelled. ❌")
+                    await lobby_channel.send(
+                        "Not enough players anymore. Game cancelled. ❌"
+                    )
                     break
 
                 radiant, dire = self.coordinator.make_game()
@@ -326,7 +329,9 @@ class Master_Bot(commands.Bot):
                 await self.on_game_created(radiant, dire)
                 await self.update_queue_status_message()
                 if len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
-                    await lobby_channel.send("@here Still enough players! Starting another game in **15 seconds** ⏳")
+                    await lobby_channel.send(
+                        "@here Still enough players! Starting another game in **15 seconds** ⏳"
+                    )
                     seconds = 15  # Shorter delay for repeat games
                 else:
                     break
@@ -449,7 +454,7 @@ class Master_Bot(commands.Bot):
                 interaction (discord.Interaction): Interaction invoking the command.
                 notes (str, optional): Notes about the decision. Defaults to "".
             """
-            await self._mod_decision(interaction, notes = notes, result=False)
+            await self._mod_decision(interaction, notes=notes, result=False)
 
         @app_commands.command(name="vouch", description="Vouch for a user")
         @app_commands.describe(user="User to vouch for", note="Why do you vouch?")
@@ -471,7 +476,8 @@ class Master_Bot(commands.Bot):
             vouch_channel = int(self.config["VOUCH_CHANNEL_ID"])
             if interaction.channel_id != vouch_channel:
                 return await interaction.response.send_message(
-                    f"<@{interaction.user.id}>: please use <#{vouch_channel}>", ephemeral=True
+                    f"<@{interaction.user.id}>: please use <#{vouch_channel}>",
+                    ephemeral=True,
                 )
 
             if user.id == interaction.user.id:
@@ -510,7 +516,9 @@ class Master_Bot(commands.Bot):
                 msg = f"Thanks for vouching for {user.mention}."
 
                 # Auto-assign Vouched role if threshold reached
-                count = self.fetch_one(f"SELECT timesVouched FROM users WHERE discord_id = {user.id}")
+                count = self.fetch_one(
+                    f"SELECT timesVouched FROM users WHERE discord_id = {user.id}"
+                )
                 if count == self.config["VOUCH_REQUIREMENT"]:
                     vouched_role = discord.utils.get(
                         self.the_guild.roles, name="Vouched"
@@ -544,9 +552,7 @@ class Master_Bot(commands.Bot):
                     f"Use <#{mod_channel}>", ephemeral=True
                 )
 
-            self.execute(
-                f"UPDATE users SET rating={rating} WHERE discord_id={user.id}"
-            )
+            self.execute(f"UPDATE users SET rating={rating} WHERE discord_id={user.id}")
             await interaction.response.send_message(
                 f"Set {user.display_name}'s rating to {rating}.", ephemeral=True
             )
@@ -562,12 +568,14 @@ class Master_Bot(commands.Bot):
             Args:
                 interaction (discord.Interaction): Interaction invoking the command.
             """
-            rating = self.fetch_one(f"SELECT rating FROM users WHERE discord_id={interaction.user.id}")
+            rating = self.fetch_one(
+                f"SELECT rating FROM users WHERE discord_id={interaction.user.id}"
+            )
             if not rating:
                 return await interaction.response.send_message(
                     "You don't have a rating yet.", ephemeral=True
                 )
-            
+
             pool_size = self.coordinator.add_player(interaction.user.id, rating)
             await interaction.response.send_message(
                 f"You're now queueing with rating {rating}.", ephemeral=True
@@ -575,9 +583,15 @@ class Master_Bot(commands.Bot):
 
             if pool_size >= TC.TEAM_SIZE * 2:
                 if self.pending_game_task is None or self.pending_game_task.done():
-                    lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-                    await lobby_channel.send("@here Enough players! Game will start in **1 minute** ⏳")
-                    self.pending_game_task = asyncio.create_task(self._start_game_loop(60))
+                    lobby_channel = self.get_channel(
+                        int(self.config["LOBBY_CHANNEL_ID"])
+                    )
+                    await lobby_channel.send(
+                        "@here Enough players! Game will start in **1 minute** ⏳"
+                    )
+                    self.pending_game_task = asyncio.create_task(
+                        self._start_game_loop(60)
+                    )
 
             await self.update_queue_status_message()
 
@@ -595,11 +609,14 @@ class Master_Bot(commands.Bot):
             )
             await self.update_queue_status_message()
 
-        @app_commands.command(name="force_start", description="Immediately start a game if enough players are in queue.")
+        @app_commands.command(
+            name="force_start",
+            description="Immediately start a game if enough players are in queue.",
+        )
         async def force_start(interaction: discord.Interaction):
             """
             Skips the countdown and starts a game immediately if enough players are in queue.
-            
+
             Args:
                 interaction (discord.Interaction): The command invoker.
             """
@@ -613,14 +630,94 @@ class Master_Bot(commands.Bot):
                 self.pending_game_task.cancel()
                 self.pending_game_task = None
 
-            await interaction.response.send_message("Force-starting game now!", ephemeral=True)
+            await interaction.response.send_message(
+                "Force-starting game now!", ephemeral=True
+            )
 
             # Immediately start the loop, with short countdown
             chan = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-            await chan.send("@here ⚡ Force-start requested — game beginning in **5 seconds**!")
+            await chan.send(
+                "@here ⚡ Force-start requested — game beginning in **5 seconds**!"
+            )
             self.pending_game_task = asyncio.create_task(self._start_game_loop(5))
 
-        
+        @app_commands.command(
+            name="force_swap",
+            description="Force swap two players between Radiant and Dire",
+        )
+        async def force_swap(
+            interaction: discord.Interaction,
+            game_id: int,
+            user1: discord.Member,
+            user2: discord.Member,
+        ):
+            """
+            Slash command to force-swap two players and update the lobby message.
+            """
+            await interaction.response.defer(thinking=True)
+            success = self.dota_talker.swap_players_in_game(game_id, user1.id, user2.id)
+
+            if not success:
+                await interaction.followup.send(
+                    f"⚠️ Could not swap <@{user1.id}> and <@{user2.id}>. They may not be on opposite teams."
+                )
+                return
+
+            # Swap them in internal mapping
+            if game_id not in self.game_map_inverse:
+                await interaction.followup.send(
+                    f"⚠️ Game {game_id} not found in internal records."
+                )
+                return
+
+            radiant_set, dire_set = self.game_map_inverse[game_id]
+            if user1.id in radiant_set and user2.id in dire_set:
+                radiant_set.remove(user1.id)
+                dire_set.remove(user2.id)
+                radiant_set.add(user2.id)
+                dire_set.add(user1.id)
+            elif user2.id in radiant_set and user1.id in dire_set:
+                radiant_set.remove(user2.id)
+                dire_set.remove(user1.id)
+                radiant_set.add(user1.id)
+                dire_set.add(user2.id)
+            else:
+                await interaction.followup.send(
+                    "⚠️ One or both players are not on expected teams internally."
+                )
+                return
+
+            # Update player->game_id mapping
+            self.game_map[user1.id], self.game_map[user2.id] = game_id, game_id
+
+            # Recalculate ratings
+            radiant = list(radiant_set)
+            dire = list(dire_set)
+            radiant_ratings = [
+                self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
+                for pid in radiant
+            ]
+            dire_ratings = [
+                self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
+                for pid in dire
+            ]
+            r_radiant = np.exp(np.mean(np.log(radiant_ratings)))
+            r_dire = np.exp(np.mean(np.log(dire_ratings)))
+
+            # Edit original lobby message
+            lobby_msg = self.lobby_messages.get(game_id)
+            new_content = f"""Match updated with Nether-swap!
+
+                Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
+                Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
+                """
+            if lobby_msg:
+                await lobby_msg.edit(content=new_content)
+
+            await interaction.followup.send(
+                f"✅ Swapped <@{user1.id}> and <@{user2.id}> in game {game_id} and updated lobby message."
+            )
+
         @app_commands.command(name="ping", description="Ping the bot")
         async def ping(interaction: discord.Interaction):
             """
@@ -640,12 +737,12 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(queue)
         self.tree.add_command(leave)
         self.tree.add_command(force_start)
+        self.tree.add_command(force_swap)
         self.tree.add_command(ping)
 
         await self.tree.sync()  # Clears global commands from Discord
         await self.tree.sync(guild=self.the_guild)
 
-        
     async def on_game_ended(self, game_id: int, winner: int):
         """
         Cleanup after a game ends and update ratings.
@@ -665,14 +762,25 @@ class Master_Bot(commands.Bot):
             del self.game_map[player]
 
         radiant_channel, dire_channel = self.game_channels.pop(game_id)
+        for user in radiant_channel.members + dire_channel.members:
+            try:
+                await user.move_to(self.config["GENERAL_V_CHANNEL_ID"])
+            except (discord.HTTPException, discord.ClientException):
+                print(
+                    f"[WARN] Couldn't move {user.display_name} — not connected to voice."
+                )
         await radiant_channel.delete()
         await dire_channel.delete()
 
         # Retrieve player ratings
-        radiant_ratings = [self.fetch_one(
-            "SELECT rating FROM users WHERE discord_id = ?", (pid,)) for pid in radiant]
-        dire_ratings = [self.fetch_one(
-            "SELECT rating FROM users WHERE discord_id = ?", (pid,)) for pid in dire]
+        radiant_ratings = [
+            self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
+            for pid in radiant
+        ]
+        dire_ratings = [
+            self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
+            for pid in dire
+        ]
 
         # Calculate geometric means
         r_radiant = np.exp(np.mean(np.log(radiant_ratings)))
@@ -712,11 +820,15 @@ class Master_Bot(commands.Bot):
         Args:
             discord_id (int): Discord user ID for which SteamID was found.
         """
-        steam_id = self.fetch_one(f"SELECT steam_id FROM users WHERE discord_id = {discord_id}")
+        steam_id = self.fetch_one(
+            f"SELECT steam_id FROM users WHERE discord_id = {discord_id}"
+        )
         for dotaClient in self.dota_talker.dotaClients:
             dotaClient.steam.friends.add(steam_id)
 
-        modsRemaining = self.fetch_one(f"SELECT modsRemaining FROM users WHERE discord_id = {discord_id}")
+        modsRemaining = self.fetch_one(
+            f"SELECT modsRemaining FROM users WHERE discord_id = {discord_id}"
+        )
 
         if modsRemaining > 0:
             mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
@@ -761,7 +873,9 @@ class Master_Bot(commands.Bot):
             try:
                 await m.move_to(radiant_channel)
             except (discord.HTTPException, discord.ClientException):
-                print(f"[WARN] Couldn't move {m.display_name} — not connected to voice.")
+                print(
+                    f"[WARN] Couldn't move {m.display_name} — not connected to voice."
+                )
             await m.send(
                 f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮"
             )
@@ -773,7 +887,9 @@ class Master_Bot(commands.Bot):
             try:
                 await m.move_to(dire_channel)
             except (discord.HTTPException, discord.ClientException):
-                print(f"[WARN] Couldn't move {m.display_name} — not connected to voice.")
+                print(
+                    f"[WARN] Couldn't move {m.display_name} — not connected to voice."
+                )
             await m.send(
                 f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮"
             )
@@ -782,28 +898,30 @@ class Master_Bot(commands.Bot):
 
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
-        
-        radiant_ratings = [self.fetch_one(
-            "SELECT rating FROM users WHERE discord_id = ?", (pid,)) for pid in radiant]
-        dire_ratings = [self.fetch_one(
-            "SELECT rating FROM users WHERE discord_id = ?", (pid,)) for pid in dire]
-        
-        
+        radiant_ratings = [
+            self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
+            for pid in radiant
+        ]
+        dire_ratings = [
+            self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
+            for pid in dire
+        ]
+
         # Calculate geometric means
         r_radiant = np.exp(np.mean(np.log(radiant_ratings)))
         r_dire = np.exp(np.mean(np.log(dire_ratings)))
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
-        await self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).send(
+        message = await self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).send(
             f"""New match created!
             
             Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
             Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
             Password: {password}"""
         )
+        self.lobby_messages[game_id] = message
 
         await self.update_queue_status_message(True)
-
 
 
 # Run the bot

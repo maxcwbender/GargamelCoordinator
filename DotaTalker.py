@@ -17,6 +17,12 @@ import Master_Bot
 
 class DotATalker:
     def __init__(self, discordBot: Master_Bot.Master_Bot):
+        """
+        Initializes the DotATalker instance and starts client threads.
+
+        Args:
+            discordBot (Master_Bot.Master_Bot): The Discord bot instance to communicate with.
+        """
         self.discordBot = discordBot
         with open("config.json") as configFile:
             self.config: dict = json.load(configFile)
@@ -25,6 +31,7 @@ class DotATalker:
         self.dotaClients: list[Dota2Client] = [None] * self.config["numClients"]
         self.client_ready: dict[int, bool] = {}
         self.gameBacklog: list[list[int]] = []
+        self.conn = sqlite3.connect("allUsers.db")
 
         for i in range(self.config["numClients"]):
             t = Thread(target=self.setupClient, args=(i,), daemon=True)
@@ -33,26 +40,61 @@ class DotATalker:
 
         print("DotATalker setup done")
 
+    def fetch_steam_id(self, discord_id: str):
+        """
+        Returns the Steam id associated with the given Discord id
+
+        Args:
+            discord_id (str): the Discord id to convert
+
+        Returns:
+            str: the Steam id associated with the given Discord id
+        """
+        cur = self.conn.cursor()
+        result = cur.execute(
+            "SELECT steam_id FROM users WHERE discord_id = ?",
+            (discord_id,)
+        ).fetchone()
+        cur.close()
+        return result[0] if result else None
+
     def is_ready(self, i: int) -> bool:
+        """
+        Checks if the client at index i is ready.
+
+        Args:
+            i (int): Index of the client.
+
+        Returns:
+            bool: True if the client is ready, False otherwise.
+        """
         return self.client_ready.get(i, False)
 
     def set_ready(self, i: int, value: bool):
+        """
+        Sets the readiness of the client at index i.
+
+        Args:
+            i (int): Index of the client.
+            value (bool): Readiness value to set.
+        """
         self.client_ready[i] = value
 
     def make_game(self, gameID: int, radiant_discord_ids: list[int], dire_discord_ids: list[int]) -> str:
-        conn = sqlite3.connect("allUsers.db")
-        cur = conn.cursor()
+        """
+        Attempts to create a game using available Dota2 clients.
 
-        def fetch_steam_id(discord_id):
-            result = cur.execute(
-                "SELECT steam_id FROM users WHERE discord_id = ?",
-                (discord_id,)
-            ).fetchone()
-            return result[0] if result else None
+        Args:
+            gameID (int): The game ID to assign.
+            radiant_discord_ids (list[int]): Discord IDs for Radiant team.
+            dire_discord_ids (list[int]): Discord IDs for Dire team.
 
-        radiant_steam_ids = [fetch_steam_id(did) for did in radiant_discord_ids]
-        dire_steam_ids = [fetch_steam_id(did) for did in dire_discord_ids]
-        cur.close()
+        Returns:
+            str: Password of the created lobby or "-1" if no client is available.
+        """
+
+        radiant_steam_ids = [self.fetch_steam_id(did) for did in radiant_discord_ids]
+        dire_steam_ids = [self.fetch_steam_id(did) for did in dire_discord_ids]
 
         for i in range(self.config["numClients"]):
             client = self.dotaClients[i]
@@ -64,6 +106,16 @@ class DotATalker:
         return "-1"
 
     def make_lobby(self, clientIdx: int, gameID: int, radiant: list[int], dire: list[int], password: str):
+        """
+        Creates a new Dota 2 lobby using the specified client.
+
+        Args:
+            clientIdx (int): Index of the client.
+            gameID (int): Game ID.
+            radiant (list[int]): List of Radiant team Steam IDs.
+            dire (list[int]): List of Dire team Steam IDs.
+            password (str): Lobby password.
+        """
         print(f"[Client {clientIdx}] Looking for game")
         dotaClient = self.dotaClients[clientIdx]
         dotaClient.gameID = gameID
@@ -83,7 +135,71 @@ class DotATalker:
         dotaClient.create_practice_lobby(password=password, options=lobbyConfig)
         print(f"[Client {clientIdx}] Created lobby for game {gameID} with password {dotaClient.password}")
 
+    def swap_players_in_game(self, game_id: int, discord_id_1: int, discord_id_2: int) -> bool:
+        """
+        Swaps two players between teams in the lobby for the given game ID.
+
+        Args:
+            game_id (int): ID of the game.
+            discord_id_1 (int): Discord ID of the first player.
+            discord_id_2 (int): Discord ID of the second player.
+
+        Returns:
+            bool: True if successful, False if the swap couldn't be performed.
+        """
+
+        steam_id_1 = self.fetch_steam_id(discord_id_1)
+        steam_id_2 = self.fetch_steam_id(discord_id_2)
+
+        for client in self.dotaClients:
+            if client and client.gameID == game_id:
+                if steam_id_1 in client.radiant and steam_id_2 in client.dire:
+                    client.radiant.remove(steam_id_1)
+                    client.dire.remove(steam_id_2)
+                    client.radiant.append(steam_id_2)
+                    client.dire.append(steam_id_1)
+                    print(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
+                    return True
+                elif steam_id_1 in client.dire and steam_id_2 in client.radiant:
+                    client.radiant.remove(steam_id_2)
+                    client.dire.remove(steam_id_1)
+                    client.radiant.append(steam_id_1)
+                    client.dire.append(steam_id_2)
+                    print(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
+                    return True
+                else:
+                    print(f"[Game {game_id}] One or both users not found on opposing teams")
+                    return False
+        print(f"No lobby found with game ID {game_id}")
+        return False
+
+    def update_lobby_teams(self, gameID: int, radiant: list[int], dire: list[int]) -> bool:
+        """
+        Updates the Radiant and Dire teams in an existing lobby.
+
+        Args:
+            gameID (int): Game ID to match with a lobby.
+            radiant (list[int]): Updated Radiant team Steam IDs.
+            dire (list[int]): Updated Dire team Steam IDs.
+
+        Returns:
+            bool: True if updated successfully, False if no matching lobby found.
+        """
+        for client in self.dotaClients:
+            if client and client.gameID == gameID and client.lobby:
+                client.radiant = radiant
+                client.dire = dire
+                print(f"[Game {gameID}] Lobby teams updated")
+                return True
+        return False
+
     def setupClient(self, i: int):
+        """
+        Initializes and connects a Steam/Dota2 client.
+
+        Args:
+            i (int): Index of the client.
+        """
         steamClient = SteamClient()
         dotaClient = Dota2Client(steamClient)
         dotaClient.gameID = None
