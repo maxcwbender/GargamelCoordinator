@@ -130,4 +130,4 @@ server.put('/', async (req, res) => {
     }
 });
 
-server.listen(3000, '0.0.0.0', () => console.log(`Server listening at http://localhost:3000`));
+server.listen(80, '0.0.0.0', () => console.log(`Server listening at http://localhost:80`));

@@ -487,8 +487,8 @@
                         Establishing secure neural link to Discord mainframe...<br>
                         Authentication required to access the Grid.
                     </div>
-                    <a id="neural-login" class="neural-button"
-                       href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2F&scope=identify+connections+guilds.join">
+                                         <a id="neural-login" class="neural-button"
+                       href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=https%3A%2F%2Fmallard-hopeful-ape.ngrok-free.app%2F&scope=identify+connections+guilds.join">
                         > JACK IN
                     </a>
                 </div>
@@ -722,7 +722,7 @@
 
             let data = { 'accessToken': accessToken, 'tokenType': tokenType };
             
-            fetch('http://localhost:3000', {
+            fetch('https://mallard-hopeful-ape.ngrok-free.app', {
                 method: 'PUT',
                 body: JSON.stringify(data),
                 headers: {
