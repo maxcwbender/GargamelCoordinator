@@ -14,6 +14,9 @@ class TheCoordinator:
     def __init__(self):
         self.queue = {}  # user -> (rating, priority)
 
+    def in_queue(self, discord_id):
+        return discord_id in self.queue
+
     def add_player(self, user: int, rating: int) -> int:
         if user not in self.queue:
             self.queue[user] = (rating, random.random())

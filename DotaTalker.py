@@ -15,10 +15,10 @@ import sqlite3
 import Master_Bot
 
 
-class DotATalker:
+class DotaTalker:
     def __init__(self, discordBot: Master_Bot.Master_Bot):
         """
-        Initializes the DotATalker instance and starts client threads.
+        Initializes the DotaTalker instance and starts client threads.
 
         Args:
             discordBot (Master_Bot.Master_Bot): The Discord bot instance to communicate with.
@@ -38,7 +38,7 @@ class DotATalker:
             t.start()
             self.threads.append(t)
 
-        print("DotATalker setup done")
+        print("DotaTalker setup done")
 
     def fetch_steam_id(self, discord_id: str):
         """

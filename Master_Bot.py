@@ -1,6 +1,6 @@
 # main_bot.py
 from typing import Tuple
-import DotATalker
+import DotaTalker
 import TheCoordinator as TC
 import json
 import math
@@ -23,9 +23,8 @@ Features:
 - Uses discord.py app_commands (slash commands) for interaction
 - SQLite DB backend for persistent user and mod data
 
-Author: mbender
+Author: m'bender *tips hat*
 """
-
 
 class Master_Bot(commands.Bot):
     """
@@ -35,7 +34,7 @@ class Master_Bot(commands.Bot):
         config (dict): Configuration loaded from JSON file.
         con (sqlite3.Connection): Database connection to 'allUsers.db'.
         coordinator (TheCoordinator): Manages matchmaking and queue logic.
-        dota_talker (DotATalker): Handles Dota 2 client interactions.
+        dota_talker (DotaTalker): Handles Dota 2 client interactions.
         the_guild (discord.Guild): The main Discord guild the bot operates in.
         game_counter (int): Incremental ID for tracking created games.
         game_channels (dict): Maps game_id to tuple of (radiant voice channel, dire voice channel).
@@ -62,7 +61,7 @@ class Master_Bot(commands.Bot):
 
         self.con = sqlite3.connect("allUsers.db")
         self.coordinator = TC.TheCoordinator()
-        self.dota_talker = DotATalker.DotATalker(self)
+        self.dota_talker = DotaTalker.DotaTalker(self)
 
         self.the_guild: discord.Guild = None
         self.game_counter = 0
@@ -74,6 +73,104 @@ class Master_Bot(commands.Bot):
         self.queue_status_msg: discord.Message = None
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
+
+    async def setup_hook(self):
+        # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
+        # commands outside of the on_ready.  Better approach so GUI can share functionality, but also
+        # recommended by discord documentation.
+        # TODO: Pull out more than just the queueing
+        @app_commands.command(name="queue", description="Join the game queue")
+        async def queue(interaction: discord.Interaction):
+            await self.queue_user(interaction)
+
+        @app_commands.command(name="leave", description="Leave the game queue")
+        async def leave(interaction: discord.Interaction):
+            await self.leave_queue(interaction)
+
+
+        self.tree.add_command(queue)
+        self.tree.add_command(leave)
+
+        # Global Sync is slow, TODO: consider conditionally doing this.
+        # TODO: Sync is happening on on_ready right now, once we pull them out add it here and remove it from there.
+        # await self.tree.sync()  # global sync
+        await self.tree.sync(guild=self.the_guild)  # optional: sync for specific guild
+
+    async def queue_user(self, interaction: discord.Interaction, respond=True):
+        if self.coordinator.in_queue(interaction.user.id):
+            await interaction.response.send_message(
+                "You're already in the queue, bozo.", ephemeral=True
+            )
+            return False
+
+        rating = self.fetch_one(
+            "SELECT rating FROM users WHERE discord_id = ?", (interaction.user.id,)
+        )
+        if not rating:
+            await interaction.response.send_message(
+                "You don't have a rating yet. Talk to an Administrator to get started.", ephemeral=True
+            )
+            return False
+
+        pool_size = self.coordinator.add_player(interaction.user.id, rating)
+        await self.update_queue_status_message()
+
+        if pool_size >= self.config["TEAM_SIZE"] * 2:
+            if self.pending_game_task is None or self.pending_game_task.done():
+                lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
+                await lobby_channel.send(
+                    "@here Enough players! Game will start in **1 minute** ⏳"
+                )
+                self.pending_game_task = asyncio.create_task(
+                    self._start_game_loop(60)
+                )
+
+        # Slash command requires a response for success
+        if respond and not interaction.response.is_done():
+            await interaction.response.send_message(
+                f"You're now queueing with rating {rating}.", ephemeral=True,
+                view=self.LeaveQueueView(parent=self, user_id=interaction.user.id)
+            )
+
+        return True  # success
+
+    async def leave_queue(self, interaction: discord.Interaction, respond=True):
+        if not self.coordinator.in_queue(interaction.user.id):
+            await interaction.response.send_message(
+                "You're not in the queue, bozo, how are you gonna leave?", ephemeral=True
+            )
+            return False
+        self.coordinator.remove_player(interaction.user.id)
+        await interaction.response.send_message(
+            "You left the queue.", ephemeral=True
+        )
+        await self.update_queue_status_message()
+
+    # GUI Views
+    class QueueButtonView(discord.ui.View):
+        def __init__(self, parent):
+            super().__init__(timeout=None)
+            self.parent = parent
+
+        @discord.ui.button(label="Join Queue", style=discord.ButtonStyle.primary)
+        async def join_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.parent.queue_user(interaction)
+
+    class LeaveQueueView(discord.ui.View):
+        def __init__(self, parent, user_id):
+            super().__init__(timeout=None)
+            self.parent = parent
+            self.user_id = user_id
+
+        @discord.ui.button(label="Leave Queue", style=discord.ButtonStyle.danger)
+        async def leave_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("This button is not for you.", ephemeral=True)
+                return
+
+            await self.parent.leave_queue(interaction)
+
+
 
     def run(self):
         """
@@ -166,15 +263,17 @@ class Master_Bot(commands.Bot):
             else "*No players are currently queueing.*"
         )
 
+        view = self.QueueButtonView(parent=self)
+
         # If the message exists, try to edit it
         try:
             if self.queue_status_msg and not new_message:
-                await self.queue_status_msg.edit(content=content)
+                await self.queue_status_msg.edit(content=content, view=view)
             else:
-                self.queue_status_msg = await lobby_channel.send(content)
+                self.queue_status_msg = await lobby_channel.send(content, view=view)
         except discord.NotFound:
             # If message was deleted, reset and recreate
-            self.queue_status_msg = await lobby_channel.send(content)
+            self.queue_status_msg = await lobby_channel.send(content, view=view)
 
     def query_mod_results(self, user_id: int) -> tuple[int, int, int]:
         """
@@ -568,58 +667,6 @@ class Master_Bot(commands.Bot):
                 f"Set {user.display_name}'s rating to {rating}.", ephemeral=True
             )
 
-        @app_commands.command(name="queue", description="Join the game queue")
-        async def queue(interaction: discord.Interaction):
-            """
-            Adds a user to the matchmaking queue using their stored rating.
-
-            Notifies user of queue status.
-            Automatically creates game when enough players join.
-
-            Args:
-                interaction (discord.Interaction): Interaction invoking the command.
-            """
-            rating = self.fetch_one(
-                f"SELECT rating FROM users WHERE discord_id={interaction.user.id}"
-            )
-            if not rating:
-                return await interaction.response.send_message(
-                    "You don't have a rating yet.", ephemeral=True
-                )
-
-            pool_size = self.coordinator.add_player(interaction.user.id, rating)
-            await interaction.response.send_message(
-                f"You're now queueing with rating {rating}.", ephemeral=True
-            )
-
-            if pool_size >= TC.TEAM_SIZE * 2:
-                if self.pending_game_task is None or self.pending_game_task.done():
-                    lobby_channel = self.get_channel(
-                        int(self.config["LOBBY_CHANNEL_ID"])
-                    )
-                    await lobby_channel.send(
-                        "@here Enough players! Game will start in **1 minute** ⏳"
-                    )
-                    self.pending_game_task = asyncio.create_task(
-                        self._start_game_loop(60)
-                    )
-
-            await self.update_queue_status_message()
-
-        @app_commands.command(name="leave", description="Leave the game queue")
-        async def leave(interaction: discord.Interaction):
-            """
-            Removes the user from the matchmaking queue.
-
-            Args:
-                interaction (discord.Interaction): Interaction invoking the command.
-            """
-            self.coordinator.remove_player(interaction.user.id)
-            await interaction.response.send_message(
-                "You left the queue.", ephemeral=True
-            )
-            await self.update_queue_status_message()
-
         @app_commands.command(
             name="force_start",
             description="Immediately start a game if enough players are in queue.",
@@ -854,8 +901,6 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(reject)
         self.tree.add_command(vouch)
         self.tree.add_command(set_rating)
-        self.tree.add_command(queue)
-        self.tree.add_command(leave)
         self.tree.add_command(force_start)
         self.tree.add_command(force_swap)
         self.tree.add_command(cancel_game)
