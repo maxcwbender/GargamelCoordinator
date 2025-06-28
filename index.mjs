@@ -9,6 +9,9 @@ let config = JSON.parse(readFileSync('./config.json'));
 const server = express();
 server.use(express.json());
 
+// Serve static files from node_modules
+server.use('/node_modules', express.static('node_modules'));
+
 // Optional: Add CORS if needed for browsers
 server.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');  // Allow all for testing
