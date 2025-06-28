@@ -9,6 +9,9 @@ let config = JSON.parse(readFileSync('./config.json'));
 const server = express();
 server.use(express.json());
 
+// Serve static files from node_modules
+server.use('/node_modules', express.static('node_modules'));
+
 // Optional: Add CORS if needed for browsers
 server.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');  // Allow all for testing
@@ -127,4 +130,4 @@ server.put('/', async (req, res) => {
     }
 });
 
-server.listen(80, '0.0.0.0', () => console.log(`Server listening at http://localhost:80`));
+server.listen(3000, '0.0.0.0', () => console.log(`Server listening at http://localhost:3000`));
