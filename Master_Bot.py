@@ -1,4 +1,5 @@
 # main_bot.py
+from typing import Tuple
 import DotATalker
 import TheCoordinator as TC
 import json
@@ -66,10 +67,10 @@ class Master_Bot(commands.Bot):
         self.the_guild: discord.Guild = None
         self.game_counter = 0
         self.game_channels: dict[
-            int, tuple[discord.VoiceChannel, discord.VoiceChannel]
+            int, Tuple[discord.VoiceChannel, discord.VoiceChannel]
         ] = {}
         self.game_map: dict[int, int] = {}
-        self.game_map_inverse: dict[int, (set[int], set[int])] = {}
+        self.game_map_inverse: dict[int, tuple[set[int], set[int]]] = {}
         self.queue_status_msg: discord.Message = None
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
@@ -151,7 +152,7 @@ class Master_Bot(commands.Bot):
         """
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
 
-        playerQueue = self.coordinator.get_queue()
+        playerQueue = list(self.coordinator.get_queue())
         for i in range(len(playerQueue)):
             playerQueue[i] = f"<@{playerQueue[i][0]}>"
 
@@ -254,11 +255,11 @@ class Master_Bot(commands.Bot):
                 f"<@{mod_id}>: please use <#{chan_id}>", ephemeral=True
             )
 
-        registrant = self.fetch_one(
+        registrant_id = self.fetch_one(
             "SELECT assignedRegistrant FROM users WHERE discord_id = ?", (mod_id,)
         )
 
-        if not registrant:
+        if not registrant_id:
             return await interaction.response.send_message(
                 f"<@{mod_id}>: no registrant assigned. Use /poll_registration.",
                 ephemeral=True,
@@ -270,31 +271,34 @@ class Master_Bot(commands.Bot):
             SET notes = ?, result = ?, resultMessage_id = ?
             WHERE mod_id = ? AND registrant_id = ?
             """,
-            (notes, int(result), interaction.id, mod_id, registrant),
+            (notes, int(result), interaction.id, mod_id, registrant_id),
         )
 
         self.execute(
-            "UPDATE users SET rating = ?, assignedRegistrant = NULL WHERE discord_id = ?",
-            (rating, mod_id),
+            "UPDATE users SET assignedRegistrant = NULL WHERE discord_id = ?",
+            (mod_id,),
         )
 
-        print("Test")
+        self.execute(
+            "UPDATE users SET rating = ? WHERE discord_id = ?", (rating, registrant_id)
+        )
 
-        A, D, W = self.query_mod_results(registrant)
+        A, D, W = self.query_mod_results(registrant_id)
         threshold = math.ceil(self.config["MOD_ASSIGNMENT"] / 2)
-        member = self.the_guild.get_member(registrant)
-        print(registrant)
-        print(member)
+        try:
+            member = await self.the_guild.fetch_member(registrant_id)
+        except discord.NotFound:
+            member = None
         if member:
             if result and A >= threshold:
                 contender = discord.utils.get(self.the_guild.roles, name="Contender")
                 await member.add_roles(contender)
                 general = self.get_channel(int(self.config["GENERAL_CHANNEL_ID"]))
-                await general.send(f"<@{registrant}> is now a Contender🎉")
+                await general.send(f"<@{registrant_id}> is now a Contender🎉")
             elif not result and D >= threshold:
                 bender = int(self.config["BENDER_ID"])
                 await member.send(
-                    f"<@{registrant}>: you were flagged by {D} mods. Contact <@{bender}>."
+                    f"In review for the Gargamel League Server you were flagged by {D} mods. Contact <@{bender}>."
                 )
 
         await interaction.response.send_message(
@@ -336,7 +340,7 @@ class Master_Bot(commands.Bot):
                 else:
                     break
         except asyncio.CancelledError:
-            raise
+            pass
         finally:
             self.pending_game_task = None
 
@@ -390,14 +394,15 @@ class Master_Bot(commands.Bot):
                 )
 
             new_registrant = self.fetch_one(
-                f"""
+                """
                 SELECT discord_id FROM users
                 WHERE modsRemaining > 0
                 AND NOT EXISTS(SELECT 1 FROM mod_notes
-                WHERE mod_id = {mod_id} AND registrant_id = discord_id)
+                WHERE mod_id = ? AND registrant_id = discord_id)
                 ORDER BY dateCreated ASC
                 LIMIT 1
-                """
+                """,
+                (mod_id,),
             )
             if not new_registrant:
                 return await interaction.response.send_message(
@@ -406,16 +411,22 @@ class Master_Bot(commands.Bot):
                 )
 
             self.execute(
-                f"UPDATE users SET modsRemaining = modsRemaining - 1 WHERE discord_id = {new_registrant}"
+                "UPDATE users SET modsRemaining = modsRemaining - 1 WHERE discord_id = ?",
+                (new_registrant,),
             )
             self.execute(
-                f"UPDATE users SET assignedRegistrant = {new_registrant} WHERE discord_id = {mod_id}"
+                "UPDATE users SET assignedRegistrant = ? WHERE discord_id = ?",
+                (
+                    new_registrant,
+                    mod_id,
+                ),
             )
             self.execute(
-                f"INSERT INTO mod_notes (request_id, mod_id, registrant_id) VALUES ({interaction.id}, {mod_id}, {new_registrant})"
+                "INSERT INTO mod_notes (request_id, mod_id, registrant_id) VALUES (?, ?, ?)",
+                (interaction.id, mod_id, new_registrant),
             )
             await interaction.response.send_message(
-                f"<@{mod_id}>: assigned <@{new_registrant}>", ephemeral=True
+                "<@{mod_id}>: assigned <@{new_registrant}>", ephemeral=True
             )
 
         @app_commands.command(
@@ -718,6 +729,115 @@ class Master_Bot(commands.Bot):
                 f"✅ Swapped <@{user1.id}> and <@{user2.id}> in game {game_id} and updated lobby message."
             )
 
+        @app_commands.command(
+            name="cancel_game",
+            description="Cancel an active game by ID (or most recent)",
+        )
+        @app_commands.describe(
+            game_id="The ID of the game to cancel (leave blank for most recent)"
+        )
+        async def cancel_game(interaction: discord.Interaction, game_id: int = None):
+            """
+            Cancel a currently running but unfinished game.
+
+            Args:
+                interaction (discord.Interaction): The slash command context.
+                game_id (int, optional): ID of the game to cancel. Defaults to most recent.
+            """
+            # Find the most recent game if no ID provided
+            if game_id is None:
+                if not self.game_map_inverse:
+                    return await interaction.response.send_message(
+                        "No active games to cancel.", ephemeral=True
+                    )
+                game_id = max(self.game_map_inverse.keys())
+
+            if game_id not in self.game_map_inverse:
+                return await interaction.response.send_message(
+                    f"No active game with ID {game_id}.", ephemeral=True
+                )
+
+            await self.clear_game(game_id)
+            await interaction.response.send_message(
+                f"Game {game_id} has been cancelled. ❌", ephemeral=True
+            )
+
+        @app_commands.command(
+            name="force_replace",
+            description="Force replace a player in an active game.",
+        )
+        @app_commands.describe(
+            game_id="Game ID to modify",
+            old_member="Member to remove from the game",
+            new_member="Member to add to the game",
+        )
+        async def force_replace(
+            interaction: discord.Interaction,
+            game_id: int,
+            old_member: discord.Member,
+            new_member: discord.Member,
+        ):
+            """
+            Replaces one player with another in an active game.
+
+            Args:
+                interaction (discord.Interaction): The command context.
+                game_id (int): ID of the game.
+                old_member (discord.Member): Player to remove.
+                new_member (discord.Member): Player to add.
+            """
+            if game_id not in self.game_map_inverse:
+                return await interaction.response.send_message(
+                    f"No active game with ID {game_id}.", ephemeral=True
+                )
+
+            radiant, dire = self.game_map_inverse[game_id]
+
+            if old_member.id not in radiant and old_member.id not in dire:
+                return await interaction.response.send_message(
+                    f"{old_member.display_name} is not in game {game_id}.",
+                    ephemeral=True,
+                )
+            if new_member.id in radiant or new_member.id in dire:
+                return await interaction.response.send_message(
+                    f"{new_member.display_name} is already in game {game_id}.",
+                    ephemeral=True,
+                )
+
+            radiant_channel, dire_channel = self.game_channels.get(game_id)
+
+            # Update game map structures
+            if old_member.id in radiant:
+                radiant.remove(old_member.id)
+                radiant.add(new_member.id)
+                try:
+                    await new_member.move_to(radiant_channel)
+                except (discord.HTTPException, discord.ClientException):
+                    print(
+                        f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
+                    )
+            else:
+                dire.remove(old_member.id)
+                dire.add(new_member.id)
+                try:
+                    await new_member.move_to(dire_channel)
+                except (discord.HTTPException, discord.ClientException):
+                    print(
+                        f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
+                    )
+            self.game_map.pop(old_member.id, None)
+            self.game_map[new_member.id] = game_id
+
+            await interaction.response.send_message(
+                f"Replaced {old_member.mention} with {new_member.mention} in game {game_id}.",
+                ephemeral=True,
+            )
+
+            try:
+                await old_member.send(f"You've been removed from game {game_id}.")
+            except discord.Forbidden:
+                pass
+
         @app_commands.command(name="ping", description="Ping the bot")
         async def ping(interaction: discord.Interaction):
             """
@@ -738,6 +858,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(leave)
         self.tree.add_command(force_start)
         self.tree.add_command(force_swap)
+        self.tree.add_command(cancel_game)
         self.tree.add_command(ping)
 
         await self.tree.sync()  # Clears global commands from Discord
@@ -754,23 +875,7 @@ class Master_Bot(commands.Bot):
             winner (int): The winner of the game (2 if radiant, 3 if dire)
         """
         radiant, dire = self.game_map_inverse[game_id]
-        del self.game_map_inverse[game_id]
-
-        for player in radiant:
-            del self.game_map[player]
-        for player in dire:
-            del self.game_map[player]
-
-        radiant_channel, dire_channel = self.game_channels.pop(game_id)
-        for user in radiant_channel.members + dire_channel.members:
-            try:
-                await user.move_to(self.config["GENERAL_V_CHANNEL_ID"])
-            except (discord.HTTPException, discord.ClientException):
-                print(
-                    f"[WARN] Couldn't move {user.display_name} — not connected to voice."
-                )
-        await radiant_channel.delete()
-        await dire_channel.delete()
+        await self.clear_game(game_id)
 
         # Retrieve player ratings
         radiant_ratings = [
@@ -794,7 +899,7 @@ class Master_Bot(commands.Bot):
         e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
         e_dire = 1 - e_radiant
 
-        k = self.config.get("ELO_K", 32)  # Use config or default
+        k = self.config.get("ELO_K")  # Use config or default
 
         # Update radiant ratings
         for i, pid in enumerate(radiant):
@@ -809,6 +914,39 @@ class Master_Bot(commands.Bot):
             self.execute(
                 "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
             )
+
+    async def clear_game(self, game_id: int):
+        """
+        Clears an active game and clean up all related state.
+
+        Args:
+            game_id (int): The ID of the game to cancel.
+        """
+
+        radiant, dire = self.game_map_inverse[game_id]
+        del self.game_map_inverse[game_id]
+
+        for player in radiant:
+            del self.game_map[player]
+        for player in dire:
+            del self.game_map[player]
+
+        players = self.game_map_inverse.get(game_id, set())
+        self.game_map_inverse.pop(game_id, None)
+
+        for player in players:
+            self.game_map.pop(player, None)
+
+        radiant_channel, dire_channel = self.game_channels.pop(game_id)
+        for user in radiant_channel.members + dire_channel.members:
+            try:
+                await user.move_to(self.config["GENERAL_V_CHANNEL_ID"])
+            except (discord.HTTPException, discord.ClientException):
+                print(
+                    f"[WARN] Couldn't move {user.display_name} — not connected to voice."
+                )
+        await radiant_channel.delete()
+        await dire_channel.delete()
 
     async def on_steam_id_found(self, discord_id: int):
         """
@@ -876,9 +1014,12 @@ class Master_Bot(commands.Bot):
                 print(
                     f"[WARN] Couldn't move {m.display_name} — not connected to voice."
                 )
-            await m.send(
-                f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮"
-            )
+            try:
+                await m.send(
+                    f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮"
+                )
+            except discord.Forbidden:
+                print(f"Tried to send a message to {m.name} but failed?")
             self.game_map[member_id] = game_id
             self.game_map_inverse[game_id][0].add(member_id)
         for member_id in dire:
@@ -890,9 +1031,12 @@ class Master_Bot(commands.Bot):
                 print(
                     f"[WARN] Couldn't move {m.display_name} — not connected to voice."
                 )
-            await m.send(
-                f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮"
-            )
+            try:
+                await m.send(
+                    f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮"
+                )
+            except discord.Forbidden:
+                print(f"Tried to send a message to {m.name} but failed?")
             self.game_map[member_id] = game_id
             self.game_map_inverse[game_id][1].add(member_id)
 
