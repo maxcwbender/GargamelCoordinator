@@ -94,7 +94,7 @@ class Master_Bot(commands.Bot):
         # Global Sync is slow, TODO: consider conditionally doing this.
         # TODO: Sync is happening on on_ready right now, once we pull them out add it here and remove it from there.
         # await self.tree.sync()  # global sync
-        await self.tree.sync(guild=self.the_guild)  # optional: sync for specific guild
+        # await self.tree.sync(guild=self.the_guild)  # optional: sync for specific guild
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
         if self.coordinator.in_queue(interaction.user.id):
@@ -128,8 +128,7 @@ class Master_Bot(commands.Bot):
         # Slash command requires a response for success
         if respond and not interaction.response.is_done():
             await interaction.response.send_message(
-                f"You're now queueing with rating {rating}.", ephemeral=True,
-                view=self.LeaveQueueView(parent=self, user_id=interaction.user.id)
+                f"You're now queueing with rating {rating}.", ephemeral=True
             )
 
         return True  # success
@@ -142,7 +141,7 @@ class Master_Bot(commands.Bot):
             return False
         self.coordinator.remove_player(interaction.user.id)
         await interaction.response.send_message(
-            "You left the queue.", ephemeral=True
+            "You have left the queue.", ephemeral=True
         )
         await self.update_queue_status_message()
 
@@ -156,21 +155,9 @@ class Master_Bot(commands.Bot):
         async def join_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
             await self.parent.queue_user(interaction)
 
-    class LeaveQueueView(discord.ui.View):
-        def __init__(self, parent, user_id):
-            super().__init__(timeout=None)
-            self.parent = parent
-            self.user_id = user_id
-
         @discord.ui.button(label="Leave Queue", style=discord.ButtonStyle.danger)
         async def leave_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
-            if interaction.user.id != self.user_id:
-                await interaction.response.send_message("This button is not for you.", ephemeral=True)
-                return
-
             await self.parent.leave_queue(interaction)
-
-
 
     def run(self):
         """
@@ -248,32 +235,90 @@ class Master_Bot(commands.Bot):
         Updates or creates the queue status message listing all queued users and their ratings.
         """
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
+        full_queue = list(self.coordinator.get_queue())  # [(discord_id, rating)]
+        # playerQueue = list(self.coordinator.get_queue())
 
-        playerQueue = list(self.coordinator.get_queue())
-        for i in range(len(playerQueue)):
-            playerQueue[i] = f"<@{playerQueue[i][0]}>"
-
-        if len(playerQueue) > self.config["TEAM_SIZE"] * 2:
-            playerQueue.insert(self.config["TEAM_SIZE"] * 2, "✂️✂️✂️")
-
-        content = (
-            f"**Current Queue ({len(playerQueue)} player{"s" if len(playerQueue) != 1 else ""}):**\n"
-            + ", ".join(playerQueue)
-            if playerQueue
-            else "*No players are currently queueing.*"
+        team_size = self.config["TEAM_SIZE"]
+        embed = discord.Embed(
+            title="🎮 Gargamel League Queue",
+            color=discord.Color.dark_gold()
         )
+
+        if not full_queue:
+            embed.description = "*No Players are currently queueing.*"
+        elif len(full_queue) < team_size * 2:
+
+            # embed.description = f"**Players in queue ({len(full_queue)}):**"
+            player_lines = "\n".join(f"<@{user_id}>" for user_id, rating in full_queue)
+
+            embed.add_field(
+                name=f"**Players in queue ({len(full_queue)}):**",  # invisible character to avoid numbering
+                value=player_lines,
+                inline=False
+            )
+            # for user_id, _ in full_queue:
+            #     embed.add_field(
+            #         name="**Players in queue ({len(full_queue)}):**",  # invisible character to avoid numbering
+            #         value=player_lines,
+            #         inline=False
+            #     )
+            # Note: `code` is used for numbering in the display on Raid-Helper
+            # This is a good way to show MMR in the final team selection
+
+        else:
+            # Show Radiant Vs. Dire
+            radiant = full_queue[:team_size]
+            dire = full_queue[team_size:team_size * 2]
+
+            embed.add_field(
+                name=f"🌞 Radiant ({team_size})",
+                value="\n".join(
+                    f"`{rating}`<@{uid}>" for uid, rating in radiant
+                ),
+                inline=True
+            )
+
+
+            embed.add_field(
+                name=f"🌚 Dire ({team_size})",
+                value="\n".join(
+                    f"`{rating}`<@{uid}>" for uid, rating in dire
+                ),
+                inline=True
+            )
+
+            leftovers = full_queue[team_size * 2:]
+            if leftovers:
+                embed.add_field(
+                    name="🧍‍♂️ Waiting List",
+                    value="\n".join(f"`{rating}`<@{uid}>" for uid, rating in leftovers),
+                    inline=False
+                )
+
+        # for i in range(len(playerQueue)):
+        #     playerQueue[i] = f"<@{playerQueue[i][0]}>"
+        #
+        # if len(playerQueue) > self.config["TEAM_SIZE"] * 2:
+        #     playerQueue.insert(self.config["TEAM_SIZE"] * 2, "✂️✂️✂️")
+        #
+        # content = (
+        #     f"**Current Queue ({len(playerQueue)} player{"s" if len(playerQueue) != 1 else ""}):**\n"
+        #     + ", ".join(playerQueue)
+        #     if playerQueue
+        #     else "*No players are currently queueing.*"
+        # )
 
         view = self.QueueButtonView(parent=self)
 
         # If the message exists, try to edit it
         try:
             if self.queue_status_msg and not new_message:
-                await self.queue_status_msg.edit(content=content, view=view)
+                await self.queue_status_msg.edit(embed=embed, view=view)
             else:
-                self.queue_status_msg = await lobby_channel.send(content, view=view)
+                self.queue_status_msg = await lobby_channel.send(embed=embed, view=view)
         except discord.NotFound:
             # If message was deleted, reset and recreate
-            self.queue_status_msg = await lobby_channel.send(content, view=view)
+            self.queue_status_msg = await lobby_channel.send(embed=embed, view=view)
 
     def query_mod_results(self, user_id: int) -> tuple[int, int, int]:
         """
@@ -455,6 +500,8 @@ class Master_Bot(commands.Bot):
         print(f"Logged in as {self.user}")
         await self._start_tcp_server()
         self.the_guild = self.guilds[0]
+        lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
+        await lobby_channel.purge()
         await self.update_queue_status_message()
 
         # --------------- #
@@ -906,8 +953,8 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(cancel_game)
         self.tree.add_command(ping)
 
-        await self.tree.sync()  # Clears global commands from Discord
-        await self.tree.sync(guild=self.the_guild)
+        # await self.tree.sync()  # Clears global commands from Discord
+        # await self.tree.sync(guild=self.the_guild)
 
     async def on_game_ended(self, game_id: int, winner: int):
         """
