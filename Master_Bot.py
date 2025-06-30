@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 import random
 import numpy as np
+import signal
 
 """
 Main bot script for Discord MasterBot managing Dota 2 community interactions.
@@ -95,6 +96,27 @@ class Master_Bot(commands.Bot):
         # TODO: Sync is happening on on_ready right now, once we pull them out add it here and remove it from there.
         # await self.tree.sync()  # global sync
         # await self.tree.sync(guild=self.the_guild)  # optional: sync for specific guild
+
+    def handle_exit_signals(self, signum, frame):
+        print(f"Received exit signal {signum}, cleaning up bot creations.")
+
+        # Clean up Discord Voice and Text Channels, Clear the Bot Channel
+        # TODO: Clean up Dota Lobbies that are empty if we bailed at the wrong time.
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.clean_up_on_exit_helper())
+        loop.call_later(3, loop.stop)
+
+    async def clean_up_on_exit_helper(self):
+        # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
+        # clean them up and just assume it's fine.
+        for channel in self.the_guild.voice_channels:
+            if channel.name.startswith("Game"):
+                await channel.delete()
+
+        lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
+        await lobby_channel.purge()
+
+        await self.close()
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
         if self.coordinator.in_queue(interaction.user.id):
@@ -256,14 +278,6 @@ class Master_Bot(commands.Bot):
                 value=player_lines,
                 inline=False
             )
-            # for user_id, _ in full_queue:
-            #     embed.add_field(
-            #         name="**Players in queue ({len(full_queue)}):**",  # invisible character to avoid numbering
-            #         value=player_lines,
-            #         inline=False
-            #     )
-            # Note: `code` is used for numbering in the display on Raid-Helper
-            # This is a good way to show MMR in the final team selection
 
         else:
             # Show Radiant Vs. Dire
@@ -294,19 +308,6 @@ class Master_Bot(commands.Bot):
                     value="\n".join(f"`{rating}`<@{uid}>" for uid, rating in leftovers),
                     inline=False
                 )
-
-        # for i in range(len(playerQueue)):
-        #     playerQueue[i] = f"<@{playerQueue[i][0]}>"
-        #
-        # if len(playerQueue) > self.config["TEAM_SIZE"] * 2:
-        #     playerQueue.insert(self.config["TEAM_SIZE"] * 2, "✂️✂️✂️")
-        #
-        # content = (
-        #     f"**Current Queue ({len(playerQueue)} player{"s" if len(playerQueue) != 1 else ""}):**\n"
-        #     + ", ".join(playerQueue)
-        #     if playerQueue
-        #     else "*No players are currently queueing.*"
-        # )
 
         view = self.QueueButtonView(parent=self)
 
@@ -500,8 +501,12 @@ class Master_Bot(commands.Bot):
         print(f"Logged in as {self.user}")
         await self._start_tcp_server()
         self.the_guild = self.guilds[0]
+
+        # Cleanup all messages in the Bot Channel
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         await lobby_channel.purge()
+
+
         await self.update_queue_status_message()
 
         # --------------- #
@@ -1163,4 +1168,6 @@ class Master_Bot(commands.Bot):
 # Run the bot
 if __name__ == "__main__":
     bot = Master_Bot()
+    signal.signal(signal.SIGINT, bot.handle_exit_signals)
+    signal.signal(signal.SIGTERM, bot.handle_exit_signals)
     bot.run()
