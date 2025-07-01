@@ -104,7 +104,7 @@ class Master_Bot(commands.Bot):
         # TODO: Clean up Dota Lobbies that are empty if we bailed at the wrong time.
         loop = asyncio.get_event_loop()
         loop.create_task(self.clean_up_on_exit_helper())
-        loop.call_later(3, loop.stop)
+        loop.call_later(15, loop.stop)
 
     async def clean_up_on_exit_helper(self):
         # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
@@ -140,11 +140,13 @@ class Master_Bot(commands.Bot):
         if pool_size >= self.config["TEAM_SIZE"] * 2:
             if self.pending_game_task is None or self.pending_game_task.done():
                 lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-                await lobby_channel.send(
-                    "@here Enough players! Game will start in **1 minute** ⏳"
-                )
+
+                await self.update_queue_status_message(content="@here Enough players! Game will start in **1 minute** ⏳")
+                # await lobby_channel.send(
+                #     "@here Enough players! Game will start in **1 minute** ⏳"
+                # )
                 self.pending_game_task = asyncio.create_task(
-                    self._start_game_loop(60)
+                    self._start_game_loop(5)
                 )
 
         # Slash command requires a response for success
@@ -252,7 +254,7 @@ class Master_Bot(commands.Bot):
         )
         asyncio.create_task(server.serve_forever())
 
-    async def update_queue_status_message(self, new_message: bool = False):
+    async def update_queue_status_message(self, new_message: bool = False, content=None):
         """
         Updates or creates the queue status message listing all queued users and their ratings.
         """
@@ -262,7 +264,7 @@ class Master_Bot(commands.Bot):
 
         team_size = self.config["TEAM_SIZE"]
         embed = discord.Embed(
-            title="🎮 Gargamel League Queue",
+            title="🎮 Gargamel League Queue 🎮",
             color=discord.Color.dark_gold()
         )
 
@@ -280,26 +282,6 @@ class Master_Bot(commands.Bot):
             )
 
         else:
-            # Show Radiant Vs. Dire
-            radiant = full_queue[:team_size]
-            dire = full_queue[team_size:team_size * 2]
-
-            embed.add_field(
-                name=f"🌞 Radiant ({team_size})",
-                value="\n".join(
-                    f"`{rating}`<@{uid}>" for uid, rating in radiant
-                ),
-                inline=True
-            )
-
-
-            embed.add_field(
-                name=f"🌚 Dire ({team_size})",
-                value="\n".join(
-                    f"`{rating}`<@{uid}>" for uid, rating in dire
-                ),
-                inline=True
-            )
 
             leftovers = full_queue[team_size * 2:]
             if leftovers:
@@ -308,6 +290,34 @@ class Master_Bot(commands.Bot):
                     value="\n".join(f"`{rating}`<@{uid}>" for uid, rating in leftovers),
                     inline=False
                 )
+
+        # Allowing custom messages to be added to the queue pane
+        if content is not None:
+            embed.add_field(
+                name="\u200b",
+                value=content,
+                inline=False
+            )
+            # Show Radiant Vs. Dire
+            # radiant = full_queue[:team_size]
+            # dire = full_queue[team_size:team_size * 2]
+            #
+            # embed.add_field(
+            #     name=f"🌞 Radiant ({team_size})",
+            #     value="\n".join(
+            #         f"`{rating}`<@{uid}>" for uid, rating in radiant
+            #     ),
+            #     inline=True
+            # )
+            #
+            #
+            # embed.add_field(
+            #     name=f"🌚 Dire ({team_size})",
+            #     value="\n".join(
+            #         f"`{rating}`<@{uid}>" for uid, rating in dire
+            #     ),
+            #     inline=True
+            # )
 
         view = self.QueueButtonView(parent=self)
 
@@ -465,9 +475,7 @@ class Master_Bot(commands.Bot):
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
-                    await lobby_channel.send(
-                        "Not enough players anymore. Game cancelled. ❌"
-                    )
+                    await self.update_queue_status_message(content="Not enough players anymore. Game cancelled. ❌")
                     break
 
                 radiant, dire = self.coordinator.make_game()
@@ -476,11 +484,11 @@ class Master_Bot(commands.Bot):
                 radiant, dire = teams
 
                 await self.on_game_created(radiant, dire)
-                await self.update_queue_status_message()
+                # This may be a problem update:
+                # await self.update_queue_status_message()
+
                 if len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
-                    await lobby_channel.send(
-                        "@here Still enough players! Starting another game in **15 seconds** ⏳"
-                    )
+                    await self.update_queue_status_message(content="@here Still enough players! Starting another game in **15 seconds** ⏳")
                     seconds = 15  # Shorter delay for repeat games
                 else:
                     break
@@ -816,13 +824,33 @@ class Master_Bot(commands.Bot):
 
             # Edit original lobby message
             lobby_msg = self.lobby_messages.get(game_id)
-            new_content = f"""Match updated with Nether-swap!
 
-                Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
-                Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
-                """
+            embed = discord.Embed(
+                title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
+                color=discord.Color.red()
+            )
+
+            embed.add_field(
+                name=f"🌞 Radiant ({int(r_radiant)})",
+                value="\n".join(
+                    f"`{rating}`<@{uid}>" for uid, rating in zip(radiant, radiant_ratings)) or "*Empty*",
+                inline=True
+            )
+
+            embed.add_field(
+                name=f"🌚 Dire ({int(r_dire)})",
+                value="\n".join(
+                    f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)) or "*Empty*",
+                inline=True
+            )
+            # new_content = f"""Match updated with Nether-swap!
+            #
+            #     Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
+            #     Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
+            #     """
+
             if lobby_msg:
-                await lobby_msg.edit(content=new_content)
+                await lobby_msg.edit(embed=embed)
 
             await interaction.followup.send(
                 f"✅ Swapped <@{user1.id}> and <@{user2.id}> in game {game_id} and updated lobby message."
@@ -1153,13 +1181,56 @@ class Master_Bot(commands.Bot):
         r_dire = np.exp(np.mean(np.log(dire_ratings)))
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
-        message = await self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).send(
-            f"""New match created!
-            
-            Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
-            Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
-            Password: {password}"""
+
+
+        # message = await self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).send(
+        #     f"""New match created!
+        #
+        #     Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
+        #     Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
+        #     Password: {password}"""
+        # )
+
+        # Edit original lobby message
+        # lobby_msg = self.lobby_messages.get(game_id)
+
+        embed = discord.Embed(
+            title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id}",
+            color=discord.Color.red()
         )
+
+        # player_lines = "\n".join(f"<@{user_id}>" for user_id, rating in full_queue)
+        embed.add_field(
+            name=f"🌞 Radiant `{int(r_radiant)}`",
+            value="\n".join(
+                f"`{rating}`<@{uid}>" for uid, rating in zip(radiant, radiant_ratings)) or "*Empty*",
+            inline=True
+        )
+
+        embed.add_field(
+            name=f"🌚 Dire `{int(r_dire)}`",
+            value="\n".join(
+                f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)) or "*Empty*",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Password",
+            value=f"{password}",
+            inline=False
+        )
+
+        channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
+        message = await channel.send(embed=embed)
+        # new_content = f"""Match updated with Nether-swap!
+        #
+        #     Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
+        #     Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
+        #     """
+
+        # if lobby_msg:
+        #     await lobby_msg.edit(embed=embed)
+
         self.lobby_messages[game_id] = message
 
         await self.update_queue_status_message(True)
