@@ -116,6 +116,9 @@ class Master_Bot(commands.Bot):
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         await lobby_channel.purge()
 
+        match_channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+        await match_channel.purge()
+
         await self.close()
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
@@ -139,12 +142,9 @@ class Master_Bot(commands.Bot):
 
         if pool_size >= self.config["TEAM_SIZE"] * 2:
             if self.pending_game_task is None or self.pending_game_task.done():
-                lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
 
                 await self.update_queue_status_message(content="@here Enough players! Game will start in **1 minute** ⏳")
-                # await lobby_channel.send(
-                #     "@here Enough players! Game will start in **1 minute** ⏳"
-                # )
+
                 self.pending_game_task = asyncio.create_task(
                     self._start_game_loop(5)
                 )
@@ -260,7 +260,6 @@ class Master_Bot(commands.Bot):
         """
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         full_queue = list(self.coordinator.get_queue())  # [(discord_id, rating)]
-        # playerQueue = list(self.coordinator.get_queue())
 
         team_size = self.config["TEAM_SIZE"]
         embed = discord.Embed(
@@ -450,7 +449,6 @@ class Master_Bot(commands.Bot):
         Only exits when player count drops below threshold.
         """
         try:
-            lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
             while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
                 await asyncio.sleep(seconds)
 
@@ -464,8 +462,6 @@ class Master_Bot(commands.Bot):
                 radiant, dire = teams
 
                 await self.on_game_created(radiant, dire)
-                # This may be a problem update:
-                # await self.update_queue_status_message()
 
                 if len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
                     await self.update_queue_status_message(content="@here Still enough players! Starting another game in **15 seconds** ⏳")
@@ -493,6 +489,9 @@ class Master_Bot(commands.Bot):
         # Cleanup all messages in the Bot Channel
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         await lobby_channel.purge()
+
+        match_channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+        await match_channel.purge()
 
 
         await self.update_queue_status_message()
@@ -733,10 +732,7 @@ class Master_Bot(commands.Bot):
             )
 
             # Immediately start the loop, with short countdown
-            chan = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-            await chan.send(
-                "@here ⚡ Force-start requested — game beginning in **5 seconds**!"
-            )
+            await self.update_queue_status_message(content="@here ⚡ Force-start requested — game beginning in **5 seconds**!")
             self.pending_game_task = asyncio.create_task(self._start_game_loop(5))
 
         @app_commands.command(
@@ -1162,24 +1158,11 @@ class Master_Bot(commands.Bot):
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
 
-
-        # message = await self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).send(
-        #     f"""New match created!
-        #
-        #     Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
-        #     Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
-        #     Password: {password}"""
-        # )
-
-        # Edit original lobby message
-        # lobby_msg = self.lobby_messages.get(game_id)
-
         embed = discord.Embed(
-            title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id}",
+            title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
             color=discord.Color.red()
         )
 
-        # player_lines = "\n".join(f"<@{user_id}>" for user_id, rating in full_queue)
         embed.add_field(
             name=f"🌞 Radiant `{int(r_radiant)}`",
             value="\n".join(
@@ -1200,16 +1183,8 @@ class Master_Bot(commands.Bot):
             inline=False
         )
 
-        channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
+        channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
         message = await channel.send(embed=embed)
-        # new_content = f"""Match updated with Nether-swap!
-        #
-        #     Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
-        #     Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
-        #     """
-
-        # if lobby_msg:
-        #     await lobby_msg.edit(embed=embed)
 
         self.lobby_messages[game_id] = message
 
