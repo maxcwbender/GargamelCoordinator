@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 import random
 import numpy as np
+import signal
 
 """
 Main bot script for Discord MasterBot managing Dota 2 community interactions.
@@ -96,6 +97,30 @@ class Master_Bot(commands.Bot):
         # await self.tree.sync()  # global sync
         # await self.tree.sync(guild=self.the_guild)  # optional: sync for specific guild
 
+    def handle_exit_signals(self, signum, frame):
+        print(f"Received exit signal {signum}, cleaning up bot creations.")
+
+        # Clean up Discord Voice and Text Channels, Clear the Bot Channel
+        # TODO: Clean up Dota Lobbies that are empty if we bailed at the wrong time.
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.clean_up_on_exit_helper())
+        loop.call_later(15, loop.stop)
+
+    async def clean_up_on_exit_helper(self):
+        # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
+        # clean them up and just assume it's fine.
+        for channel in self.the_guild.voice_channels:
+            if channel.name.startswith("Game"):
+                await channel.delete()
+
+        lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
+        await lobby_channel.purge()
+
+        match_channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+        await match_channel.purge()
+
+        await self.close()
+
     async def queue_user(self, interaction: discord.Interaction, respond=True):
         if self.coordinator.in_queue(interaction.user.id):
             await interaction.response.send_message(
@@ -117,12 +142,11 @@ class Master_Bot(commands.Bot):
 
         if pool_size >= self.config["TEAM_SIZE"] * 2:
             if self.pending_game_task is None or self.pending_game_task.done():
-                lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-                await lobby_channel.send(
-                    "@here Enough players! Game will start in **1 minute** ⏳"
-                )
+
+                await self.update_queue_status_message(content="@here Enough players! Game will start in **1 minute** ⏳")
+
                 self.pending_game_task = asyncio.create_task(
-                    self._start_game_loop(60)
+                    self._start_game_loop(5)
                 )
 
         # Slash command requires a response for success
@@ -230,17 +254,16 @@ class Master_Bot(commands.Bot):
         )
         asyncio.create_task(server.serve_forever())
 
-    async def update_queue_status_message(self, new_message: bool = False):
+    async def update_queue_status_message(self, new_message: bool = False, content=None):
         """
         Updates or creates the queue status message listing all queued users and their ratings.
         """
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         full_queue = list(self.coordinator.get_queue())  # [(discord_id, rating)]
-        # playerQueue = list(self.coordinator.get_queue())
 
         team_size = self.config["TEAM_SIZE"]
         embed = discord.Embed(
-            title="🎮 Gargamel League Queue",
+            title="🎮 Gargamel League Queue 🎮",
             color=discord.Color.dark_gold()
         )
 
@@ -256,36 +279,8 @@ class Master_Bot(commands.Bot):
                 value=player_lines,
                 inline=False
             )
-            # for user_id, _ in full_queue:
-            #     embed.add_field(
-            #         name="**Players in queue ({len(full_queue)}):**",  # invisible character to avoid numbering
-            #         value=player_lines,
-            #         inline=False
-            #     )
-            # Note: `code` is used for numbering in the display on Raid-Helper
-            # This is a good way to show MMR in the final team selection
 
         else:
-            # Show Radiant Vs. Dire
-            radiant = full_queue[:team_size]
-            dire = full_queue[team_size:team_size * 2]
-
-            embed.add_field(
-                name=f"🌞 Radiant ({team_size})",
-                value="\n".join(
-                    f"`{rating}`<@{uid}>" for uid, rating in radiant
-                ),
-                inline=True
-            )
-
-
-            embed.add_field(
-                name=f"🌚 Dire ({team_size})",
-                value="\n".join(
-                    f"`{rating}`<@{uid}>" for uid, rating in dire
-                ),
-                inline=True
-            )
 
             leftovers = full_queue[team_size * 2:]
             if leftovers:
@@ -295,18 +290,13 @@ class Master_Bot(commands.Bot):
                     inline=False
                 )
 
-        # for i in range(len(playerQueue)):
-        #     playerQueue[i] = f"<@{playerQueue[i][0]}>"
-        #
-        # if len(playerQueue) > self.config["TEAM_SIZE"] * 2:
-        #     playerQueue.insert(self.config["TEAM_SIZE"] * 2, "✂️✂️✂️")
-        #
-        # content = (
-        #     f"**Current Queue ({len(playerQueue)} player{"s" if len(playerQueue) != 1 else ""}):**\n"
-        #     + ", ".join(playerQueue)
-        #     if playerQueue
-        #     else "*No players are currently queueing.*"
-        # )
+        # Allowing custom messages to be added to the queue pane
+        if content is not None:
+            embed.add_field(
+                name="\u200b",
+                value=content,
+                inline=False
+            )
 
         view = self.QueueButtonView(parent=self)
 
@@ -459,14 +449,11 @@ class Master_Bot(commands.Bot):
         Only exits when player count drops below threshold.
         """
         try:
-            lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
             while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
-                    await lobby_channel.send(
-                        "Not enough players anymore. Game cancelled. ❌"
-                    )
+                    await self.update_queue_status_message(content="Not enough players anymore. Game cancelled. ❌")
                     break
 
                 radiant, dire = self.coordinator.make_game()
@@ -475,11 +462,9 @@ class Master_Bot(commands.Bot):
                 radiant, dire = teams
 
                 await self.on_game_created(radiant, dire)
-                await self.update_queue_status_message()
+
                 if len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
-                    await lobby_channel.send(
-                        "@here Still enough players! Starting another game in **15 seconds** ⏳"
-                    )
+                    await self.update_queue_status_message(content="@here Still enough players! Starting another game in **15 seconds** ⏳")
                     seconds = 15  # Shorter delay for repeat games
                 else:
                     break
@@ -500,8 +485,15 @@ class Master_Bot(commands.Bot):
         print(f"Logged in as {self.user}")
         await self._start_tcp_server()
         self.the_guild = self.guilds[0]
+
+        # Cleanup all messages in the Bot Channel
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         await lobby_channel.purge()
+
+        match_channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+        await match_channel.purge()
+
+
         await self.update_queue_status_message()
 
         # --------------- #
@@ -740,10 +732,7 @@ class Master_Bot(commands.Bot):
             )
 
             # Immediately start the loop, with short countdown
-            chan = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-            await chan.send(
-                "@here ⚡ Force-start requested — game beginning in **5 seconds**!"
-            )
+            await self.update_queue_status_message(content="@here ⚡ Force-start requested — game beginning in **5 seconds**!")
             self.pending_game_task = asyncio.create_task(self._start_game_loop(5))
 
         @app_commands.command(
@@ -811,13 +800,33 @@ class Master_Bot(commands.Bot):
 
             # Edit original lobby message
             lobby_msg = self.lobby_messages.get(game_id)
-            new_content = f"""Match updated with Nether-swap!
 
-                Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
-                Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
-                """
+            embed = discord.Embed(
+                title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
+                color=discord.Color.red()
+            )
+
+            embed.add_field(
+                name=f"🌞 Radiant ({int(r_radiant)})",
+                value="\n".join(
+                    f"`{rating}`<@{uid}>" for uid, rating in zip(radiant, radiant_ratings)) or "*Empty*",
+                inline=True
+            )
+
+            embed.add_field(
+                name=f"🌚 Dire ({int(r_dire)})",
+                value="\n".join(
+                    f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)) or "*Empty*",
+                inline=True
+            )
+            # new_content = f"""Match updated with Nether-swap!
+            #
+            #     Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
+            #     Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
+            #     """
+
             if lobby_msg:
-                await lobby_msg.edit(content=new_content)
+                await lobby_msg.edit(embed=embed)
 
             await interaction.followup.send(
                 f"✅ Swapped <@{user1.id}> and <@{user2.id}> in game {game_id} and updated lobby message."
@@ -1148,19 +1157,43 @@ class Master_Bot(commands.Bot):
         r_dire = np.exp(np.mean(np.log(dire_ratings)))
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
-        message = await self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).send(
-            f"""New match created!
-            
-            Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
-            Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
-            Password: {password}"""
+
+        embed = discord.Embed(
+            title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
+            color=discord.Color.red()
         )
+
+        embed.add_field(
+            name=f"🌞 Radiant `{int(r_radiant)}`",
+            value="\n".join(
+                f"`{rating}`<@{uid}>" for uid, rating in zip(radiant, radiant_ratings)) or "*Empty*",
+            inline=True
+        )
+
+        embed.add_field(
+            name=f"🌚 Dire `{int(r_dire)}`",
+            value="\n".join(
+                f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)) or "*Empty*",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Password",
+            value=f"{password}",
+            inline=False
+        )
+
+        channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+        message = await channel.send(embed=embed)
+
         self.lobby_messages[game_id] = message
 
-        await self.update_queue_status_message(True)
+        await self.update_queue_status_message()
 
 
 # Run the bot
 if __name__ == "__main__":
     bot = Master_Bot()
+    signal.signal(signal.SIGINT, bot.handle_exit_signals)
+    signal.signal(signal.SIGTERM, bot.handle_exit_signals)
     bot.run()
