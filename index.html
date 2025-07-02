@@ -1,13 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gargamel League | Neural Interface</title>
-    <script src="node_modules/animejs/lib/anime.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600&display=swap');
-        
+
         * {
             margin: 0;
             padding: 0;
@@ -30,7 +31,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background-image: 
+            background-image:
                 linear-gradient(rgba(0, 255, 136, 0.03) 1px, transparent 1px),
                 linear-gradient(90deg, rgba(0, 255, 136, 0.03) 1px, transparent 1px);
             background-size: 50px 50px;
@@ -39,8 +40,15 @@
         }
 
         @keyframes gridPulse {
-            0%, 100% { opacity: 0.3; }
-            50% { opacity: 0.6; }
+
+            0%,
+            100% {
+                opacity: 0.3;
+            }
+
+            50% {
+                opacity: 0.6;
+            }
         }
 
         /* Digital Rain Effect */
@@ -64,7 +72,9 @@
         }
 
         @keyframes matrixFall {
-            to { transform: translateY(100vh); }
+            to {
+                transform: translateY(100vh);
+            }
         }
 
         /* Main Container */
@@ -84,7 +94,7 @@
             max-width: 600px;
             width: 90%;
             position: relative;
-            box-shadow: 
+            box-shadow:
                 0 0 30px rgba(0, 255, 136, 0.3),
                 inset 0 0 30px rgba(0, 255, 136, 0.05);
         }
@@ -103,8 +113,15 @@
         }
 
         @keyframes borderGlow {
-            0%, 100% { opacity: 0.6; }
-            50% { opacity: 1; }
+
+            0%,
+            100% {
+                opacity: 0.6;
+            }
+
+            50% {
+                opacity: 1;
+            }
         }
 
         /* Header */
@@ -118,7 +135,7 @@
             font-size: 2.8rem;
             font-weight: 900;
             color: #00ff88;
-            text-shadow: 
+            text-shadow:
                 0 0 10px #00ff88,
                 0 0 20px #00ff88,
                 0 0 30px #00ff88;
@@ -149,13 +166,39 @@
         }
 
         @keyframes glitch-1 {
-            0%, 14%, 15%, 49%, 50%, 99%, 100% { transform: translate(0); }
-            15%, 49% { transform: translate(-2px, 1px); }
+
+            0%,
+            14%,
+            15%,
+            49%,
+            50%,
+            99%,
+            100% {
+                transform: translate(0);
+            }
+
+            15%,
+            49% {
+                transform: translate(-2px, 1px);
+            }
         }
 
         @keyframes glitch-2 {
-            0%, 20%, 21%, 62%, 63%, 99%, 100% { transform: translate(0); }
-            21%, 62% { transform: translate(2px, -1px); }
+
+            0%,
+            20%,
+            21%,
+            62%,
+            63%,
+            99%,
+            100% {
+                transform: translate(0);
+            }
+
+            21%,
+            62% {
+                transform: translate(2px, -1px);
+            }
         }
 
         .neural-subtitle {
@@ -217,8 +260,13 @@
         }
 
         @keyframes neuralPulse {
-            0% { left: -100%; }
-            100% { left: 100%; }
+            0% {
+                left: -100%;
+            }
+
+            100% {
+                left: 100%;
+            }
         }
 
         /* Content States */
@@ -331,8 +379,13 @@
         }
 
         @keyframes quantumSpin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
 
         .loading-text {
@@ -444,17 +497,18 @@
                 padding: 20px;
                 margin: 20px;
             }
-            
+
             .logo-glitch {
                 font-size: 2rem;
             }
-            
+
             .neural-connection {
                 width: 40px;
             }
         }
     </style>
 </head>
+
 <body>
     <!-- Background Effects -->
     <div class="cyber-grid"></div>
@@ -465,7 +519,8 @@
         <div class="terminal-window">
             <!-- Header -->
             <div class="system-header">
-                <div class="logo-glitch" data-text="GARGAMEL.EXE">GARGAMEL.EXE</div>
+                <div class="logo-glitch" data-text="GARGAMEL.EXE">GARGAMEL.EXE
+                </div>
                 <div class="neural-subtitle">NEURAL INTERFACE v2.077</div>
             </div>
 
@@ -484,11 +539,12 @@
                 <div id="auth-state">
                     <div class="auth-title">INITIATE CONNECTION</div>
                     <div class="auth-description">
-                        Establishing secure neural link to Discord mainframe...<br>
+                        Establishing secure neural link to Discord
+                        mainframe...<br>
                         Authentication required to access the Grid.
                     </div>
-                                         <a id="neural-login" class="neural-button"
-                       href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=https%3A%2F%2Fmallard-hopeful-ape.ngrok-free.app%2F&scope=identify+connections+guilds.join">
+                    <a id="neural-login" class="neural-button"
+                        href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2F104.248.53.168%2F&scope=identify+connections+guilds.join">
                         > JACK IN
                     </a>
                 </div>
@@ -516,7 +572,8 @@
                 <div id="error-state" class="state-hidden">
                     <div class="status-icon error">⚠</div>
                     <div class="status-text" id="error-message"></div>
-                    <button class="retry-button" onclick="location.reload()">RETRY CONNECTION</button>
+                    <button class="retry-button"
+                        onclick="location.reload()">RETRY CONNECTION</button>
                 </div>
 
                 <!-- Steam Required State -->
@@ -525,11 +582,14 @@
                     <div class="status-text">
                         <strong>STEAM UPLINK REQUIRED</strong><br>
                         Neural pathway to Steam mainframe not detected.<br>
-                        <small style="opacity: 0.7; margin-top: 15px; display: block;">
-                            Discord → Settings → Connections → Link Steam Account
+                        <small
+                            style="opacity: 0.7; margin-top: 15px; display: block;">
+                            Discord → Settings → Connections → Link Steam
+                            Account
                         </small>
                     </div>
-                    <button class="retry-button" onclick="location.reload()">RETRY CONNECTION</button>
+                    <button class="retry-button"
+                        onclick="location.reload()">RETRY CONNECTION</button>
                 </div>
             </div>
         </div>
@@ -540,7 +600,7 @@
         function initMatrixRain() {
             const container = document.querySelector('.matrix-rain');
             const chars = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン';
-            
+
             for (let i = 0; i < 20; i++) {
                 const column = document.createElement('div');
                 column.className = 'rain-column';
@@ -548,13 +608,13 @@
                 column.style.animationDuration = (Math.random() * 3 + 2) + 's';
                 column.style.animationDelay = Math.random() * 2 + 's';
                 column.style.opacity = Math.random() * 0.5 + 0.1;
-                
+
                 let text = '';
                 for (let j = 0; j < 20; j++) {
                     text += chars[Math.floor(Math.random() * chars.length)] + '\n';
                 }
                 column.textContent = text;
-                
+
                 container.appendChild(column);
             }
         }
@@ -562,14 +622,14 @@
         // Initialize Particle System
         function initParticleSystem() {
             const container = document.querySelector('.particle-system');
-            
+
             for (let i = 0; i < 50; i++) {
                 const particle = document.createElement('div');
                 particle.className = 'cyber-particle';
                 particle.style.left = Math.random() * 100 + '%';
                 particle.style.top = Math.random() * 100 + '%';
                 container.appendChild(particle);
-                
+
                 anime({
                     targets: particle,
                     opacity: [0, 1, 0],
@@ -587,11 +647,11 @@
         // Update Neural Progress
         function updateNeuralProgress(step) {
             const nodes = ['node1', 'node2', 'node3'];
-            
+
             nodes.forEach((nodeId, index) => {
                 const node = document.getElementById(nodeId);
                 node.classList.remove('active', 'completed');
-                
+
                 if (index < step - 1) {
                     node.classList.add('completed');
                 } else if (index === step - 1) {
@@ -627,7 +687,7 @@
                     easing: 'easeInQuad',
                     complete: () => {
                         currentState.classList.add('state-hidden');
-                        
+
                         // Animate in new state
                         newState.classList.remove('state-hidden');
                         anime({
@@ -655,7 +715,7 @@
         function updateQuantumSteps(text) {
             const steps = document.getElementById('quantum-steps');
             steps.style.opacity = 0;
-            
+
             setTimeout(() => {
                 steps.textContent = '> ' + text;
                 anime({
@@ -681,7 +741,7 @@
         window.onload = () => {
             initMatrixRain();
             initParticleSystem();
-            
+
             // Animate terminal window entrance
             anime({
                 targets: '.terminal-window',
@@ -721,8 +781,8 @@
             }, 800);
 
             let data = { 'accessToken': accessToken, 'tokenType': tokenType };
-            
-            fetch('https://mallard-hopeful-ape.ngrok-free.app', {
+
+            fetch('http://104.248.53.168/', {
                 method: 'PUT',
                 body: JSON.stringify(data),
                 headers: {
@@ -731,10 +791,10 @@
             }).then(response => {
                 clearInterval(processingInterval);
                 updateNeuralProgress(3);
-                
+
                 if (response.status === 404) {
                     showState('error-state');
-                    document.getElementById('error-message').innerHTML = 
+                    document.getElementById('error-message').innerHTML =
                         '<strong>SYSTEM ERROR</strong><br>Neural interface malfunction detected.<br>Please retry connection.';
                     triggerGlitch(document.querySelector('.logo-glitch'));
                 } else if (response.status === 202) {
@@ -742,13 +802,13 @@
                 } else if (response.ok) {
                     return response.json().then(data => {
                         showState('success-state');
-                        document.getElementById('success-message').innerHTML = 
+                        document.getElementById('success-message').innerHTML =
                             `<strong>CONNECTION ESTABLISHED</strong><br>
                             Neural link active with Steam ID: <strong>${data.result}</strong><br>
                             <small style="opacity: 0.8; margin-top: 15px; display: block;">
                             Grid access granted. Welcome to the League, operative. 🎮
                             </small>`;
-                        
+
                         // Success celebration animation
                         anime({
                             targets: '.status-icon.success',
@@ -760,7 +820,7 @@
                     });
                 } else {
                     showState('error-state');
-                    document.getElementById('error-message').innerHTML = 
+                    document.getElementById('error-message').innerHTML =
                         '<strong>AUTHENTICATION FAILED</strong><br>Neural handshake rejected.<br>Verify Discord and Steam connections.';
                     triggerGlitch(document.querySelector('.logo-glitch'));
                 }
@@ -768,11 +828,12 @@
                 clearInterval(processingInterval);
                 console.error('Neural interface error:', err);
                 showState('error-state');
-                document.getElementById('error-message').innerHTML = 
+                document.getElementById('error-message').innerHTML =
                     '<strong>CONNECTION TIMEOUT</strong><br>Unable to reach neural network.<br>Check connection and retry.';
                 triggerGlitch(document.querySelector('.logo-glitch'));
             });
         };
     </script>
 </body>
+
 </html>
