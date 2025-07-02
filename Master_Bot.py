@@ -298,26 +298,6 @@ class Master_Bot(commands.Bot):
                 value=content,
                 inline=False
             )
-            # Show Radiant Vs. Dire
-            # radiant = full_queue[:team_size]
-            # dire = full_queue[team_size:team_size * 2]
-            #
-            # embed.add_field(
-            #     name=f"🌞 Radiant ({team_size})",
-            #     value="\n".join(
-            #         f"`{rating}`<@{uid}>" for uid, rating in radiant
-            #     ),
-            #     inline=True
-            # )
-            #
-            #
-            # embed.add_field(
-            #     name=f"🌚 Dire ({team_size})",
-            #     value="\n".join(
-            #         f"`{rating}`<@{uid}>" for uid, rating in dire
-            #     ),
-            #     inline=True
-            # )
 
         view = self.QueueButtonView(parent=self)
 
@@ -1233,7 +1213,7 @@ class Master_Bot(commands.Bot):
 
         self.lobby_messages[game_id] = message
 
-        await self.update_queue_status_message(True)
+        await self.update_queue_status_message()
 
 
 # Run the bot
