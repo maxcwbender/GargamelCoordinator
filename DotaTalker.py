@@ -127,7 +127,7 @@ class DotaTalker:
             "game_name": f"Gargamel League Game {gameID}",
             "server_region": 2,
             "game_mode": 22,
-            "allow_cheats": False,
+            "allow_cheats": True,
             "allow_spectating": True,
             "leagueid": self.config["league_id"],
         }
