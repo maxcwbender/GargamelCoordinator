@@ -12,6 +12,17 @@ from discord.ext import commands
 import random
 import numpy as np
 import signal
+import traceback
+
+from datetime import datetime
+import logging
+timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+logging.basicConfig(
+    filename=f'logs/Gargamel_Log_{timestamp}.txt',        # Log file name
+    filemode='a',              # 'w' = overwrite on each run, use 'a' to append
+    level=logging.DEBUG,       # Capture everything from DEBUG and up
+    format='[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s'
+)
 
 """
 Main bot script for Discord MasterBot managing Dota 2 community interactions.
@@ -109,17 +120,21 @@ class Master_Bot(commands.Bot):
     async def clean_up_on_exit_helper(self):
         # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
         # clean them up and just assume it's fine.
-        for channel in self.the_guild.voice_channels:
-            if channel.name.startswith("Game"):
-                await channel.delete()
 
-        lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-        await lobby_channel.purge()
+        delete_tasks = [
+            channel.delete()
+            for channel in self.the_guild.voice_channels
+            if channel.name.startswith("Game")
+        ]
 
-        match_channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-        await match_channel.purge()
+        purge_task = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).purge()
+        close_task = self.close()
 
-        await self.close()
+        await asyncio.gather(
+            *delete_tasks,
+            purge_task,
+            close_task
+        )
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
         if self.coordinator.in_queue(interaction.user.id):
@@ -146,7 +161,7 @@ class Master_Bot(commands.Bot):
                 await self.update_queue_status_message(content="@here Enough players! Game will start in **1 minute** ⏳")
 
                 self.pending_game_task = asyncio.create_task(
-                    self._start_game_loop(5)
+                    self._start_game_loop(60)
                 )
 
         # Slash command requires a response for success
@@ -490,10 +505,6 @@ class Master_Bot(commands.Bot):
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         await lobby_channel.purge()
 
-        match_channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-        await match_channel.purge()
-
-
         await self.update_queue_status_message()
 
         # --------------- #
@@ -819,11 +830,6 @@ class Master_Bot(commands.Bot):
                     f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)) or "*Empty*",
                 inline=True
             )
-            # new_content = f"""Match updated with Nether-swap!
-            #
-            #     Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
-            #     Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
-            #     """
 
             if lobby_msg:
                 await lobby_msg.edit(embed=embed)
@@ -1039,15 +1045,23 @@ class Master_Bot(commands.Bot):
             self.game_map.pop(player, None)
 
         radiant_channel, dire_channel = self.game_channels.pop(game_id)
-        for user in radiant_channel.members + dire_channel.members:
-            try:
-                await user.move_to(self.config["GENERAL_V_CHANNEL_ID"])
-            except (discord.HTTPException, discord.ClientException):
-                print(
-                    f"[WARN] Couldn't move {user.display_name} — not connected to voice."
-                )
-        await radiant_channel.delete()
-        await dire_channel.delete()
+        try:
+            target_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
+            all_members = radiant_channel.members + dire_channel.members
+            move_tasks = [
+                member.move_to(target_channel)
+                for member in all_members
+                if member.voice and member.voice.channel != target_channel
+            ]
+            delete_channels_tasks = [
+                radiant_channel.delete(),
+                dire_channel.delete()
+            ]
+            await asyncio.gather(*move_tasks, *delete_channels_tasks)
+
+        except Exception as e:
+            print(f"Unexpected Exception: ")
+            traceback.print_exc()
 
     async def on_steam_id_found(self, discord_id: int):
         """
@@ -1106,15 +1120,17 @@ class Master_Bot(commands.Bot):
 
         self.game_map_inverse[game_id] = (set(), set())
         # Give perms for viewing new channels; movement feature currently disabled
+
+        tasks = [self.the_guild.get_member(member).move_to(radiant_channel) for member in radiant]
+        await asyncio.gather(*tasks)
+
+        tasks = [self.the_guild.get_member(member).move_to(dire_channel) for member in dire]
+        await asyncio.gather(*tasks)
+
+
         for member_id in radiant:
             m = self.the_guild.get_member(member_id)
             await radiant_channel.set_permissions(m, view_channel=True, connect=True)
-            try:
-                await m.move_to(radiant_channel)
-            except (discord.HTTPException, discord.ClientException):
-                print(
-                    f"[WARN] Couldn't move {m.display_name} — not connected to voice."
-                )
             try:
                 await m.send(
                     f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮"
@@ -1126,12 +1142,6 @@ class Master_Bot(commands.Bot):
         for member_id in dire:
             m = self.the_guild.get_member(member_id)
             await dire_channel.set_permissions(m, view_channel=True, connect=True)
-            try:
-                await m.move_to(dire_channel)
-            except (discord.HTTPException, discord.ClientException):
-                print(
-                    f"[WARN] Couldn't move {m.display_name} — not connected to voice."
-                )
             try:
                 await m.send(
                     f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮"

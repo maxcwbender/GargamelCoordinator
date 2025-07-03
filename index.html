@@ -34,11 +34,12 @@
       width: 100%;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
       border: 1px solid #e0e0e0;
+      transition: opacity 0.5s ease, transform 0.5s ease;
     }
 
     .system-header {
       text-align: center;
-      margin-bottom: 30px;
+      margin-bottom: 10px;
     }
 
     .logo-title {
@@ -51,10 +52,10 @@
     .logo-image {
       max-width: 200px;
       height: auto;
-      margin-bottom: 8px;
+      margin-bottom: 0;
     }
 
-    .auth-title, .success-title, .error-title {
+    .auth-title, .success-title, .error-title, .loading-title {
       font-size: 1.5rem;
       font-weight: 600;
       color: #2c3e50;
@@ -118,14 +119,23 @@
 
     <div id="auth-state" class="state-hidden">
       <div class="auth-title">Account Link Required</div>
+
       <div class="auth-description">
-        To participate in Gargamel League matches, you need to link your Discord account to your Steam account.<br>
-        Click the button below to authenticate and complete the connection.
+        To participate in Gargamel League matches, you need to link your Discord account to your Steam account.<br><br>
+        Click the button below to authenticate and join the Gargamel Discord Server.
+      </div>
+      <div style="color: red; font-size: 0.75rem; text-align: center; margin-bottom: 20px;">
+        Warning: Before clicking the link, please ensure your Discord User Settings have your Steam Account added under Connections
       </div>
       <a id="neural-login" class="authenticate-button"
         href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2F104.248.53.168%2F&scope=identify+connections+guilds.join">
-        Link Discord & Steam
+        Register for the Gargamel League
       </a>
+    </div>
+
+    <div id="loading-state" class="state-hidden">
+      <div class="loading-title">🔄 Processing...</div>
+      <div class="status-message">Please wait while we verify your connection.</div>
     </div>
 
     <div id="success-state" class="state-hidden">
@@ -142,14 +152,22 @@
 
   <script>
     function showState(stateName) {
-      const states = ['auth-state', 'success-state', 'error-state'];
+      const states = ['auth-state', 'success-state', 'error-state', 'loading-state'];
       states.forEach(state => {
         const el = document.getElementById(state);
-        if (el) el.style.display = 'none';
+        if (el) {
+          el.style.opacity = 0;
+          el.style.display = 'none';
+        }
       });
 
       const newState = document.getElementById(stateName);
-      if (newState) newState.style.display = 'block';
+      if (newState) {
+        newState.style.display = 'block';
+        setTimeout(() => {
+          newState.style.opacity = 1;
+        }, 10);
+      }
     }
 
     window.onload = () => {
@@ -160,6 +178,8 @@
         showState('auth-state');
         return;
       }
+
+      showState('loading-state');
 
       fetch('http://104.248.53.168/', {
         method: 'PUT',
