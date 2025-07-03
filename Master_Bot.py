@@ -830,11 +830,6 @@ class Master_Bot(commands.Bot):
                     f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)) or "*Empty*",
                 inline=True
             )
-            # new_content = f"""Match updated with Nether-swap!
-            #
-            #     Radiant ({int(r_radiant)}):  {', '.join([f'(<@{str(radiant[i])}>, {str(radiant_ratings[i])})' for i in range(len(radiant))])}
-            #     Dire ({int(r_dire)}): {', '.join([f'(<@{str(dire[i])}>, {str(dire_ratings[i])})' for i in range(len(dire))])}
-            #     """
 
             if lobby_msg:
                 await lobby_msg.edit(embed=embed)
@@ -1136,12 +1131,6 @@ class Master_Bot(commands.Bot):
         for member_id in radiant:
             m = self.the_guild.get_member(member_id)
             await radiant_channel.set_permissions(m, view_channel=True, connect=True)
-            # try:
-            #     await m.move_to(radiant_channel)
-            # except (discord.HTTPException, discord.ClientException):
-            #     print(
-            #         f"[WARN] Couldn't move {m.display_name} — not connected to voice."
-            #     )
             try:
                 await m.send(
                     f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮"
@@ -1153,12 +1142,6 @@ class Master_Bot(commands.Bot):
         for member_id in dire:
             m = self.the_guild.get_member(member_id)
             await dire_channel.set_permissions(m, view_channel=True, connect=True)
-            # try:
-            #     await m.move_to(dire_channel)
-            # except (discord.HTTPException, discord.ClientException):
-            #     print(
-            #         f"[WARN] Couldn't move {m.display_name} — not connected to voice."
-            #     )
             try:
                 await m.send(
                     f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮"
