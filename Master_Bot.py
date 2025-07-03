@@ -14,15 +14,9 @@ import numpy as np
 import signal
 import traceback
 
-from datetime import datetime
-import logging
-timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-logging.basicConfig(
-    filename=f'logs/Gargamel_Log_{timestamp}.txt',        # Log file name
-    filemode='a',              # 'w' = overwrite on each run, use 'a' to append
-    level=logging.DEBUG,       # Capture everything from DEBUG and up
-    format='[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s'
-)
+
+import logger
+logger.setup_logging()
 
 """
 Main bot script for Discord MasterBot managing Dota 2 community interactions.
@@ -114,27 +108,48 @@ class Master_Bot(commands.Bot):
         # Clean up Discord Voice and Text Channels, Clear the Bot Channel
         # TODO: Clean up Dota Lobbies that are empty if we bailed at the wrong time.
         loop = asyncio.get_event_loop()
-        loop.create_task(self.clean_up_on_exit_helper())
-        loop.call_later(15, loop.stop)
+
+        async def shutdown_sequence():
+            try :
+                await self.clean_up_on_exit_helper()
+            except Exception as e:
+                print(f"Cleanup failed with exception: {e}")
+                traceback.print_exc()
+
+        loop.create_task(shutdown_sequence())
 
     async def clean_up_on_exit_helper(self):
         # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
         # clean them up and just assume it's fine.
-
         delete_tasks = [
             channel.delete()
             for channel in self.the_guild.voice_channels
             if channel.name.startswith("Game")
         ]
 
-        purge_task = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).purge()
-        close_task = self.close()
+        lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
+        if lobby_channel:
+            purge_task = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).purge(limit=100)
 
-        await asyncio.gather(
-            *delete_tasks,
-            purge_task,
-            close_task
-        )
+            await asyncio.gather(
+                *delete_tasks,
+                purge_task
+            )
+
+        else:
+            await asyncio.gather(*delete_tasks)
+
+        if hasattr(bot, 'tcp_server') and bot.tcp_server:
+            bot.tcp_server.close()
+            await bot.tcp_server.wait_closed()
+
+        await self.close()
+
+        pending = [t for t in asyncio.all_tasks() if not t.done()]
+        print(f"🔍 Pending tasks after self.close: {len(pending)}")
+
+        for task in pending:
+            print(f" - {task}")
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
         if self.coordinator.in_queue(interaction.user.id):
@@ -165,7 +180,7 @@ class Master_Bot(commands.Bot):
                 )
 
         # Slash command requires a response for success
-        if respond and not interaction.response.is_done():
+        if respond and not await interaction.response.is_done():
             await interaction.response.send_message(
                 f"You're now queueing with rating {rating}.", ephemeral=True
             )
@@ -264,10 +279,10 @@ class Master_Bot(commands.Bot):
             self.dispatch("steam_id_found", int(message))
             writer.close()
 
-        server = await asyncio.start_server(
+        self.tcp_server = await asyncio.start_server(
             handle, "127.0.0.1", self.config["pipePort"]
         )
-        asyncio.create_task(server.serve_forever())
+        asyncio.create_task(self.tcp_server.serve_forever())
 
     async def update_queue_status_message(self, new_message: bool = False, content=None):
         """

@@ -12,11 +12,14 @@ import json
 from threading import Thread
 import random
 import sqlite3
-import Master_Bot
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from Master_Bot import Master_Bot
 
 
 class DotaTalker:
-    def __init__(self, discordBot: Master_Bot.Master_Bot):
+    def __init__(self, discordBot: 'Master_Bot.Master_Bot'):
         """
         Initializes the DotaTalker instance and starts client threads.
 
