@@ -8,6 +8,7 @@ let config = JSON.parse(readFileSync('./config.json'));
 
 const server = express();
 server.use(express.json());
+server.use(express.static('.'));
 
 // Serve static files from node_modules
 server.use('/node_modules', express.static('node_modules'));
