@@ -180,7 +180,7 @@ class Master_Bot(commands.Bot):
                 )
 
         # Slash command requires a response for success
-        if respond and not await interaction.response.is_done():
+        if respond and not interaction.response.is_done():
             await interaction.response.send_message(
                 f"You're now queueing with rating {rating}.", ephemeral=True
             )
