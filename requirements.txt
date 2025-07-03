@@ -1,3 +1,5 @@
 numpy
 dota2
 steam
+pytest
+pytest-asyncio
