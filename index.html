@@ -2,838 +2,125 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gargamel League | Neural Interface</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600&display=swap');
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Rajdhani', monospace;
-            background: #000012;
-            color: #00ff88;
-            min-height: 100vh;
-            overflow-x: hidden;
-            position: relative;
-        }
-
-        /* Cyberpunk Grid Background */
-        .cyber-grid {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-image:
-                linear-gradient(rgba(0, 255, 136, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0, 255, 136, 0.03) 1px, transparent 1px);
-            background-size: 50px 50px;
-            z-index: -3;
-            animation: gridPulse 4s ease-in-out infinite;
-        }
-
-        @keyframes gridPulse {
-
-            0%,
-            100% {
-                opacity: 0.3;
-            }
-
-            50% {
-                opacity: 0.6;
-            }
-        }
-
-        /* Digital Rain Effect */
-        .matrix-rain {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -2;
-            pointer-events: none;
-        }
-
-        .rain-column {
-            position: absolute;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            color: #00ff88;
-            white-space: pre;
-            animation: matrixFall linear infinite;
-        }
-
-        @keyframes matrixFall {
-            to {
-                transform: translateY(100vh);
-            }
-        }
-
-        /* Main Container */
-        .neural-interface {
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            position: relative;
-        }
-
-        .terminal-window {
-            background: rgba(0, 0, 18, 0.95);
-            border: 2px solid #00ff88;
-            border-radius: 0;
-            padding: 40px;
-            max-width: 600px;
-            width: 90%;
-            position: relative;
-            box-shadow:
-                0 0 30px rgba(0, 255, 136, 0.3),
-                inset 0 0 30px rgba(0, 255, 136, 0.05);
-        }
-
-        .terminal-window::before {
-            content: '';
-            position: absolute;
-            top: -2px;
-            left: -2px;
-            right: -2px;
-            bottom: -2px;
-            background: linear-gradient(45deg, #00ff88, #0088ff, #8800ff, #ff0088);
-            z-index: -1;
-            border-radius: 0;
-            animation: borderGlow 3s ease-in-out infinite;
-        }
-
-        @keyframes borderGlow {
-
-            0%,
-            100% {
-                opacity: 0.6;
-            }
-
-            50% {
-                opacity: 1;
-            }
-        }
-
-        /* Header */
-        .system-header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-
-        .logo-glitch {
-            font-family: 'Orbitron', monospace;
-            font-size: 2.8rem;
-            font-weight: 900;
-            color: #00ff88;
-            text-shadow:
-                0 0 10px #00ff88,
-                0 0 20px #00ff88,
-                0 0 30px #00ff88;
-            position: relative;
-            display: inline-block;
-        }
-
-        .logo-glitch::before,
-        .logo-glitch::after {
-            content: attr(data-text);
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-        }
-
-        .logo-glitch::before {
-            animation: glitch-1 0.5s infinite;
-            color: #ff0088;
-            z-index: -1;
-        }
-
-        .logo-glitch::after {
-            animation: glitch-2 0.5s infinite;
-            color: #0088ff;
-            z-index: -2;
-        }
-
-        @keyframes glitch-1 {
-
-            0%,
-            14%,
-            15%,
-            49%,
-            50%,
-            99%,
-            100% {
-                transform: translate(0);
-            }
-
-            15%,
-            49% {
-                transform: translate(-2px, 1px);
-            }
-        }
-
-        @keyframes glitch-2 {
-
-            0%,
-            20%,
-            21%,
-            62%,
-            63%,
-            99%,
-            100% {
-                transform: translate(0);
-            }
-
-            21%,
-            62% {
-                transform: translate(2px, -1px);
-            }
-        }
-
-        .neural-subtitle {
-            font-size: 1.2rem;
-            color: #66ffaa;
-            margin-top: 10px;
-            font-weight: 300;
-            letter-spacing: 2px;
-        }
-
-        /* Progress Neural Network */
-        .neural-progress {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            margin: 40px 0;
-            height: 60px;
-        }
-
-        .neural-node {
-            width: 20px;
-            height: 20px;
-            border: 2px solid #00ff88;
-            border-radius: 50%;
-            background: transparent;
-            position: relative;
-            transition: all 0.3s ease;
-        }
-
-        .neural-node.active {
-            background: #00ff88;
-            box-shadow: 0 0 20px #00ff88;
-        }
-
-        .neural-node.completed {
-            background: #0088ff;
-            border-color: #0088ff;
-            box-shadow: 0 0 20px #0088ff;
-        }
-
-        .neural-connection {
-            width: 80px;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, #00ff88, transparent);
-            margin: 0 10px;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .neural-connection::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, #ffffff, transparent);
-            animation: neuralPulse 2s infinite;
-        }
-
-        @keyframes neuralPulse {
-            0% {
-                left: -100%;
-            }
-
-            100% {
-                left: 100%;
-            }
-        }
-
-        /* Content States */
-        .state-container {
-            min-height: 300px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            text-align: center;
-        }
-
-        .state-hidden {
-            display: none;
-        }
-
-        /* Auth State */
-        .auth-title {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #00ff88;
-            margin-bottom: 20px;
-            text-shadow: 0 0 10px #00ff88;
-        }
-
-        .auth-description {
-            font-size: 1.1rem;
-            color: #66ffaa;
-            margin-bottom: 30px;
-            line-height: 1.6;
-        }
-
-        .neural-button {
-            background: transparent;
-            border: 2px solid #00ff88;
-            color: #00ff88;
-            padding: 15px 40px;
-            font-family: 'Orbitron', monospace;
-            font-size: 1.1rem;
-            font-weight: 600;
-            text-decoration: none;
-            display: inline-block;
-            position: relative;
-            overflow: hidden;
-            transition: all 0.3s ease;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .neural-button::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, #00ff88, transparent);
-            transition: left 0.5s ease;
-        }
-
-        .neural-button:hover {
-            color: #000012;
-            text-shadow: none;
-            box-shadow: 0 0 30px #00ff88;
-        }
-
-        .neural-button:hover::before {
-            left: 0;
-        }
-
-        /* Loading State */
-        .quantum-spinner {
-            width: 100px;
-            height: 100px;
-            position: relative;
-            margin: 20px auto;
-        }
-
-        .quantum-ring {
-            position: absolute;
-            border: 2px solid transparent;
-            border-radius: 50%;
-            animation: quantumSpin 2s linear infinite;
-        }
-
-        .quantum-ring:nth-child(1) {
-            width: 100px;
-            height: 100px;
-            border-top-color: #00ff88;
-            animation-duration: 1s;
-        }
-
-        .quantum-ring:nth-child(2) {
-            width: 80px;
-            height: 80px;
-            top: 10px;
-            left: 10px;
-            border-right-color: #0088ff;
-            animation-duration: 1.5s;
-            animation-direction: reverse;
-        }
-
-        .quantum-ring:nth-child(3) {
-            width: 60px;
-            height: 60px;
-            top: 20px;
-            left: 20px;
-            border-bottom-color: #ff0088;
-            animation-duration: 2s;
-        }
-
-        @keyframes quantumSpin {
-            0% {
-                transform: rotate(0deg);
-            }
-
-            100% {
-                transform: rotate(360deg);
-            }
-        }
-
-        .loading-text {
-            font-size: 1.4rem;
-            font-weight: 600;
-            color: #00ff88;
-            margin: 20px 0;
-            text-shadow: 0 0 10px #00ff88;
-        }
-
-        .processing-steps {
-            font-size: 1rem;
-            color: #66ffaa;
-            font-family: 'Courier New', monospace;
-            max-width: 350px;
-            line-height: 1.8;
-        }
-
-        /* Success/Error States */
-        .status-icon {
-            width: 120px;
-            height: 120px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 3rem;
-            margin: 20px auto;
-            position: relative;
-        }
-
-        .status-icon.success {
-            background: radial-gradient(circle, rgba(0, 255, 136, 0.2), transparent);
-            border: 3px solid #00ff88;
-            color: #00ff88;
-            box-shadow: 0 0 40px rgba(0, 255, 136, 0.4);
-        }
-
-        .status-icon.error {
-            background: radial-gradient(circle, rgba(255, 0, 136, 0.2), transparent);
-            border: 3px solid #ff0088;
-            color: #ff0088;
-            box-shadow: 0 0 40px rgba(255, 0, 136, 0.4);
-        }
-
-        .status-icon.warning {
-            background: radial-gradient(circle, rgba(255, 136, 0, 0.2), transparent);
-            border: 3px solid #ff8800;
-            color: #ff8800;
-            box-shadow: 0 0 40px rgba(255, 136, 0, 0.4);
-        }
-
-        .status-text {
-            font-size: 1.3rem;
-            line-height: 1.6;
-            color: #66ffaa;
-            max-width: 400px;
-            margin: 20px auto;
-        }
-
-        .status-text strong {
-            color: #00ff88;
-            text-shadow: 0 0 5px #00ff88;
-        }
-
-        .retry-button {
-            background: transparent;
-            border: 2px solid #ff0088;
-            color: #ff0088;
-            padding: 12px 30px;
-            font-family: 'Orbitron', monospace;
-            font-size: 1rem;
-            cursor: pointer;
-            margin-top: 20px;
-            transition: all 0.3s ease;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .retry-button:hover {
-            background: #ff0088;
-            color: #000012;
-            box-shadow: 0 0 30px #ff0088;
-        }
-
-        /* Particles System */
-        .particle-system {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: -1;
-        }
-
-        .cyber-particle {
-            position: absolute;
-            width: 2px;
-            height: 2px;
-            background: #00ff88;
-            border-radius: 50%;
-            opacity: 0;
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .terminal-window {
-                padding: 20px;
-                margin: 20px;
-            }
-
-            .logo-glitch {
-                font-size: 2rem;
-            }
-
-            .neural-connection {
-                width: 40px;
-            }
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gargamel League | Authentication</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f9f9f9;
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 2rem;
+    }
+
+    .terminal-window {
+      background: #ffffff;
+      padding: 40px;
+      border-radius: 12px;
+      max-width: 600px;
+      width: 100%;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      border: 1px solid #e0e0e0;
+    }
+
+    .system-header {
+      text-align: center;
+      margin-bottom: 0px;
+    }
+
+    .logo-title {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 8px;
+    }
+
+    .logo-image {
+      max-width: 200px;
+      height: auto;
+      margin-bottom: 0px;
+    }
+
+    .auth-title {
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+
+    .auth-description {
+      font-size: 1rem;
+      color: #555;
+      margin-bottom: 30px;
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    .authenticate-button {
+      display: block;
+      width: 100%;
+      text-align: center;
+      background: #4e9fd1;
+      color: #fff;
+      padding: 14px 32px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-size: 1rem;
+      transition: background 0.3s ease;
+    }
+
+    .authenticate-button:hover {
+      background: #3b84b3;
+    }
+
+    @media (max-width: 480px) {
+      .terminal-window {
+        padding: 24px;
+      }
+
+      .auth-title {
+        font-size: 1.25rem;
+      }
+
+      .logo-title {
+        font-size: 1.5rem;
+      }
+    }
+  </style>
 </head>
 
 <body>
-    <!-- Background Effects -->
-    <div class="cyber-grid"></div>
-    <div class="matrix-rain"></div>
-    <div class="particle-system"></div>
-
-    <div class="neural-interface">
-        <div class="terminal-window">
-            <!-- Header -->
-            <div class="system-header">
-                <div class="logo-glitch" data-text="GARGAMEL.EXE">GARGAMEL.EXE
-                </div>
-                <div class="neural-subtitle">NEURAL INTERFACE v2.077</div>
-            </div>
-
-            <!-- Progress Indicator -->
-            <div class="neural-progress">
-                <div class="neural-node" id="node1"></div>
-                <div class="neural-connection"></div>
-                <div class="neural-node" id="node2"></div>
-                <div class="neural-connection"></div>
-                <div class="neural-node" id="node3"></div>
-            </div>
-
-            <!-- Content States -->
-            <div class="state-container">
-                <!-- Auth State -->
-                <div id="auth-state">
-                    <div class="auth-title">INITIATE CONNECTION</div>
-                    <div class="auth-description">
-                        Establishing secure neural link to Discord
-                        mainframe...<br>
-                        Authentication required to access the Grid.
-                    </div>
-                    <a id="neural-login" class="neural-button"
-                        href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2F104.248.53.168%2F&scope=identify+connections+guilds.join">
-                        > JACK IN
-                    </a>
-                </div>
-
-                <!-- Loading State -->
-                <div id="loading-state" class="state-hidden">
-                    <div class="quantum-spinner">
-                        <div class="quantum-ring"></div>
-                        <div class="quantum-ring"></div>
-                        <div class="quantum-ring"></div>
-                    </div>
-                    <div class="loading-text">NEURAL HANDSHAKE IN PROGRESS</div>
-                    <div class="processing-steps" id="quantum-steps">
-                        > Decrypting synaptic pathways...
-                    </div>
-                </div>
-
-                <!-- Success State -->
-                <div id="success-state" class="state-hidden">
-                    <div class="status-icon success">⚡</div>
-                    <div class="status-text" id="success-message"></div>
-                </div>
-
-                <!-- Error State -->
-                <div id="error-state" class="state-hidden">
-                    <div class="status-icon error">⚠</div>
-                    <div class="status-text" id="error-message"></div>
-                    <button class="retry-button"
-                        onclick="location.reload()">RETRY CONNECTION</button>
-                </div>
-
-                <!-- Steam Required State -->
-                <div id="steam-state" class="state-hidden">
-                    <div class="status-icon warning">🔗</div>
-                    <div class="status-text">
-                        <strong>STEAM UPLINK REQUIRED</strong><br>
-                        Neural pathway to Steam mainframe not detected.<br>
-                        <small
-                            style="opacity: 0.7; margin-top: 15px; display: block;">
-                            Discord → Settings → Connections → Link Steam
-                            Account
-                        </small>
-                    </div>
-                    <button class="retry-button"
-                        onclick="location.reload()">RETRY CONNECTION</button>
-                </div>
-            </div>
-        </div>
+  <div class="terminal-window">
+    <div class="system-header">
+      <div class="logo-title">Gargamel Dota League</div>
+      <img class="logo-image" src="GargamelPuppets.png" alt="Gargamel League Logo">
     </div>
-
-    <script>
-        // Initialize Matrix Rain Effect
-        function initMatrixRain() {
-            const container = document.querySelector('.matrix-rain');
-            const chars = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン';
-
-            for (let i = 0; i < 20; i++) {
-                const column = document.createElement('div');
-                column.className = 'rain-column';
-                column.style.left = Math.random() * 100 + '%';
-                column.style.animationDuration = (Math.random() * 3 + 2) + 's';
-                column.style.animationDelay = Math.random() * 2 + 's';
-                column.style.opacity = Math.random() * 0.5 + 0.1;
-
-                let text = '';
-                for (let j = 0; j < 20; j++) {
-                    text += chars[Math.floor(Math.random() * chars.length)] + '\n';
-                }
-                column.textContent = text;
-
-                container.appendChild(column);
-            }
-        }
-
-        // Initialize Particle System
-        function initParticleSystem() {
-            const container = document.querySelector('.particle-system');
-
-            for (let i = 0; i < 50; i++) {
-                const particle = document.createElement('div');
-                particle.className = 'cyber-particle';
-                particle.style.left = Math.random() * 100 + '%';
-                particle.style.top = Math.random() * 100 + '%';
-                container.appendChild(particle);
-
-                anime({
-                    targets: particle,
-                    opacity: [0, 1, 0],
-                    scale: [0, 1, 0],
-                    translateX: () => anime.random(-50, 50),
-                    translateY: () => anime.random(-50, 50),
-                    duration: anime.random(2000, 4000),
-                    delay: anime.random(0, 2000),
-                    loop: true,
-                    easing: 'easeInOutQuad'
-                });
-            }
-        }
-
-        // Update Neural Progress
-        function updateNeuralProgress(step) {
-            const nodes = ['node1', 'node2', 'node3'];
-
-            nodes.forEach((nodeId, index) => {
-                const node = document.getElementById(nodeId);
-                node.classList.remove('active', 'completed');
-
-                if (index < step - 1) {
-                    node.classList.add('completed');
-                } else if (index === step - 1) {
-                    node.classList.add('active');
-                }
-            });
-
-            // Animate the active node
-            const activeNode = document.querySelector('.neural-node.active');
-            if (activeNode) {
-                anime({
-                    targets: activeNode,
-                    scale: [1, 1.3, 1],
-                    duration: 800,
-                    easing: 'easeInOutQuad'
-                });
-            }
-        }
-
-        // Show State with Animation
-        function showState(stateName) {
-            const states = ['auth-state', 'loading-state', 'success-state', 'error-state', 'steam-state'];
-            const currentState = document.querySelector('.state-container > div:not(.state-hidden)');
-            const newState = document.getElementById(stateName);
-
-            // Animate out current state
-            if (currentState) {
-                anime({
-                    targets: currentState,
-                    opacity: [1, 0],
-                    translateY: [0, -30],
-                    duration: 300,
-                    easing: 'easeInQuad',
-                    complete: () => {
-                        currentState.classList.add('state-hidden');
-
-                        // Animate in new state
-                        newState.classList.remove('state-hidden');
-                        anime({
-                            targets: newState,
-                            opacity: [0, 1],
-                            translateY: [30, 0],
-                            duration: 500,
-                            easing: 'easeOutQuad'
-                        });
-                    }
-                });
-            } else {
-                newState.classList.remove('state-hidden');
-                anime({
-                    targets: newState,
-                    opacity: [0, 1],
-                    translateY: [30, 0],
-                    duration: 500,
-                    easing: 'easeOutQuad'
-                });
-            }
-        }
-
-        // Update Processing Steps
-        function updateQuantumSteps(text) {
-            const steps = document.getElementById('quantum-steps');
-            steps.style.opacity = 0;
-
-            setTimeout(() => {
-                steps.textContent = '> ' + text;
-                anime({
-                    targets: steps,
-                    opacity: [0, 1],
-                    duration: 300
-                });
-            }, 150);
-        }
-
-        // Glitch Effect for Errors
-        function triggerGlitch(element) {
-            element.style.animation = 'none';
-            setTimeout(() => {
-                element.style.animation = 'glitch-1 0.1s infinite';
-                setTimeout(() => {
-                    element.style.animation = 'none';
-                }, 500);
-            }, 10);
-        }
-
-        // Initialize on Load
-        window.onload = () => {
-            // initMatrixRain();
-            initParticleSystem();
-
-            // Animate terminal window entrance
-            anime({
-                targets: '.terminal-window',
-                opacity: [0, 1],
-                scale: [0.8, 1],
-                duration: 1000,
-                easing: 'easeOutExpo'
-            });
-
-            const fragment = new URLSearchParams(window.location.hash.slice(1));
-            const [accessToken, tokenType] = [fragment.get('access_token'), fragment.get('token_type')];
-
-            if (!accessToken) {
-                updateNeuralProgress(1);
-                showState('auth-state');
-                return;
-            }
-
-            // Start processing
-            updateNeuralProgress(2);
-            showState('loading-state');
-
-            const processingMessages = [
-                'Decrypting synaptic pathways...',
-                'Scanning neural patterns...',
-                'Establishing Steam uplink...',
-                'Synchronizing data matrices...',
-                'Finalizing connection protocol...'
-            ];
-
-            let messageIndex = 0;
-            const processingInterval = setInterval(() => {
-                if (messageIndex < processingMessages.length) {
-                    updateQuantumSteps(processingMessages[messageIndex]);
-                    messageIndex++;
-                }
-            }, 800);
-
-            let data = { 'accessToken': accessToken, 'tokenType': tokenType };
-
-            fetch('http://104.248.53.168/', {
-                method: 'PUT',
-                body: JSON.stringify(data),
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            }).then(response => {
-                clearInterval(processingInterval);
-                updateNeuralProgress(3);
-
-                if (response.status === 404) {
-                    showState('error-state');
-                    document.getElementById('error-message').innerHTML =
-                        '<strong>SYSTEM ERROR</strong><br>Neural interface malfunction detected.<br>Please retry connection.';
-                    triggerGlitch(document.querySelector('.logo-glitch'));
-                } else if (response.status === 202) {
-                    showState('steam-state');
-                } else if (response.ok) {
-                    return response.json().then(data => {
-                        showState('success-state');
-                        document.getElementById('success-message').innerHTML =
-                            `<strong>CONNECTION ESTABLISHED</strong><br>
-                            Neural link active with Steam ID: <strong>${data.result}</strong><br>
-                            <small style="opacity: 0.8; margin-top: 15px; display: block;">
-                            Grid access granted. Welcome to the League, operative. 🎮
-                            </small>`;
-
-                        // Success celebration animation
-                        anime({
-                            targets: '.status-icon.success',
-                            rotate: [0, 360],
-                            scale: [1, 1.2, 1],
-                            duration: 1000,
-                            easing: 'easeOutElastic(1, .8)'
-                        });
-                    });
-                } else {
-                    showState('error-state');
-                    document.getElementById('error-message').innerHTML =
-                        '<strong>AUTHENTICATION FAILED</strong><br>Neural handshake rejected.<br>Verify Discord and Steam connections.';
-                    triggerGlitch(document.querySelector('.logo-glitch'));
-                }
-            }).catch(err => {
-                clearInterval(processingInterval);
-                console.error('Neural interface error:', err);
-                showState('error-state');
-                document.getElementById('error-message').innerHTML =
-                    '<strong>CONNECTION TIMEOUT</strong><br>Unable to reach neural network.<br>Check connection and retry.';
-                triggerGlitch(document.querySelector('.logo-glitch'));
-            });
-        };
-    </script>
+    <div class="auth-title">Account Link Required</div>
+    <div class="auth-description">
+      To participate in Gargamel League matches, you need to link your Discord account to your Steam account.<br><br>
+      Click the button below to join the Gargamel Discord Server and complete the Steam Account Link process.
+    </div>
+    <a id="authentication-login" class="authenticate-button"
+      href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2F104.248.53.168%2F&scope=identify+connections+guilds.join">
+      Link Discord & Steam
+    </a>
+  </div>
 </body>
 
 </html>
