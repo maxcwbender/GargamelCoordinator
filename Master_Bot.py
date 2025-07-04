@@ -178,7 +178,7 @@ class Master_Bot(commands.Bot):
                     content="@here Enough players! Game will start in **1 minute** ⏳"
                 )
 
-                self.pending_game_task = asyncio.create_task(self._start_game_loop(60))
+                self.pending_game_task = asyncio.create_task(self._start_game_loop(5))
 
         # Slash command requires a response for success
         if respond and not interaction.response.is_done():

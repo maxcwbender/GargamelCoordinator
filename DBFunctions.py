@@ -19,7 +19,7 @@ def fetch_one(query, params=()):
     print(f"Query: {query}")
     print(f"Params: {params}")
     cursor = con.cursor()
-    result = cursor.execute(query).fetchone()
+    result = cursor.execute(query, params).fetchone()
     print(f"Result: {result}")
     return result[0] if result else None
 
