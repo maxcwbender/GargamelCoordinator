@@ -161,6 +161,7 @@ class Master_Bot(commands.Bot):
 
         rating = DB.fetch_rating(interaction.id)
         if not rating:
+            print(f"User with ID: {interaction.user.id} doesn't have a rating")
             await interaction.response.send_message(
                 "You don't have a rating yet. Talk to an Administrator to get started.",
                 ephemeral=True,
