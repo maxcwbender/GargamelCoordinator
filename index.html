@@ -128,7 +128,7 @@
         Warning: Before clicking the link, please ensure your Discord User Settings have your Steam Account added under Connections
       </div>
       <a id="neural-login" class="authenticate-button"
-        href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2F104.248.53.168%2F&scope=identify+connections+guilds.join">
+        href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=code&redirect_uri=http%3A%2F%2Fwww.gargamel-league.com%2F&scope=identify+connections+guilds.join">
         Register for the Gargamel League
       </a>
     </div>
@@ -181,7 +181,7 @@
 
       showState('loading-state');
 
-      fetch('http://104.248.53.168/', {
+      fetch('http://www.gargamel-league.com/', {
         method: 'PUT',
         body: JSON.stringify({ accessToken, tokenType }),
         headers: { 'Content-Type': 'application/json' }
