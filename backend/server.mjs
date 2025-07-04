@@ -3,15 +3,21 @@ import sqlite3 from 'sqlite3';
 import express from 'express';
 import net from 'net';
 import { readFileSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-let config = JSON.parse(readFileSync('./config.json'));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+let config = JSON.parse(readFileSync(path.join(__dirname, '../config.json')));
 
 const server = express();
 server.use(express.json());
-server.use(express.static('.'));
+server.use(express.static(path.join(__dirname, '../public')));
 
 // Serve static files from node_modules
 server.use('/node_modules', express.static('node_modules'));
+
 
 // Optional: Add CORS if needed for browsers
 server.use((req, res, next) => {
@@ -22,12 +28,12 @@ server.use((req, res, next) => {
     next();
 });
 
-let db = new sqlite3.Database('allUsers.db');
+let db = new sqlite3.Database('../allUsers.db');
 
 server.get('/', (request, response) => {
     console.log('GET: ' + request.url);
     console.log('------------------------------------------');
-    return response.sendFile('index.html', { root: '.' });
+    return response.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
 server.put('/', async (req, res) => {
@@ -131,4 +137,4 @@ server.put('/', async (req, res) => {
     }
 });
 
-server.listen(80, '0.0.0.0', () => console.log(`Server listening at http://localhost:80`));
+server.listen(8080, '0.0.0.0', () => console.log(`Server listening at http://localhost:80`));

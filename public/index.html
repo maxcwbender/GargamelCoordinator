@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gargamel Dota League Authentication Page</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="src/index.css">
+</head>
+
+<body>
+  <div class="terminal-window">
+    <div class="system-header">
+      <div class="logo-title">Gargamel Dota League</div>
+      <img class="logo-image" src="imgs/GargamelPuppets.png" alt="Gargamel League Logo">
+    </div>
+
+    <div id="auth-state" class="state-hidden">
+      <div class="auth-title">Account Link Required</div>
+      <div class="auth-description">
+        To participate in Gargamel League matches, you need to link your Discord account to your Steam account.<br>
+        Click the button below to authenticate and complete the connection.
+      </div>
+      <div style="color: red; font-size: 0.75rem; text-align: center; margin-bottom: 20px;">
+        Warning: Before clicking the link, please ensure your Discord User Settings have your Steam Account added under Connections
+      </div>
+      <a id="neural-login" class="authenticate-button"
+        href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2Fwww.gargamel-league.com%2F&scope=identify+connections+guilds.join">
+        Register for the Gargamel League
+      </a>
+    </div>
+
+    <div id="loading-state" class="state-hidden">
+      <div class="loading-title">🔄 Processing...</div>
+      <div class="status-message">Please wait while we verify your connection.</div>
+    </div>
+
+    <div id="success-state" class="state-hidden">
+      <div class="success-title">✅ Connection Successful</div>
+      <div class="status-message">Your Discord account has been successfully linked to your Steam account.</div>
+    </div>
+
+    <div id="error-state" class="state-hidden">
+      <div class="error-title">❌ Connection Failed</div>
+      <div class="status-message">There was a problem linking your accounts. Please try again.</div>
+      <button class="authenticate-button" onclick="location.reload()">Retry</button>
+    </div>
+  </div>
+
+  <script type="module" src="src/index.mjs"></script>
+</body>
+
+</html>
