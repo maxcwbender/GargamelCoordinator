@@ -32,7 +32,6 @@ class DotaTalker:
         self.dotaClients: list[Dota2Client] = [None] * self.config["numClients"]
         self.client_ready: dict[int, bool] = {}
         self.gameBacklog: list[list[int]] = []
-        self.conn = sqlite3.connect("allUsers.db")
 
         for i in range(self.config["numClients"]):
             t = Thread(target=self.setupClient, args=(i,), daemon=True)
