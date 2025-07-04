@@ -11,11 +11,9 @@ from steam.enums import EFriendRelationship
 import json
 from threading import Thread
 import random
-import sqlite3
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from Master_Bot import Master_Bot
+from Master_Bot import Master_Bot
+import DBFunctions as DB
 
 
 class DotaTalker:
@@ -42,24 +40,6 @@ class DotaTalker:
             self.threads.append(t)
 
         print("DotaTalker setup done")
-
-    def fetch_steam_id(self, discord_id: str):
-        """
-        Returns the Steam id associated with the given Discord id
-
-        Args:
-            discord_id (str): the Discord id to convert
-
-        Returns:
-            str: the Steam id associated with the given Discord id
-        """
-        cur = self.conn.cursor()
-        result = cur.execute(
-            "SELECT steam_id FROM users WHERE discord_id = ?",
-            (discord_id,)
-        ).fetchone()
-        cur.close()
-        return result[0] if result else None
 
     def is_ready(self, i: int) -> bool:
         """
@@ -96,8 +76,8 @@ class DotaTalker:
             str: Password of the created lobby or "-1" if no client is available.
         """
 
-        radiant_steam_ids = [self.fetch_steam_id(did) for did in radiant_discord_ids]
-        dire_steam_ids = [self.fetch_steam_id(did) for did in dire_discord_ids]
+        radiant_steam_ids = [DB.fetch_steam_id(did) for did in radiant_discord_ids]
+        dire_steam_ids = [DB.fetch_steam_id(did) for did in dire_discord_ids]
 
         for i in range(self.config["numClients"]):
             client = self.dotaClients[i]
@@ -151,8 +131,8 @@ class DotaTalker:
             bool: True if successful, False if the swap couldn't be performed.
         """
 
-        steam_id_1 = self.fetch_steam_id(discord_id_1)
-        steam_id_2 = self.fetch_steam_id(discord_id_2)
+        steam_id_1 = DB.fetch_steam_id(discord_id_1)
+        steam_id_2 = DB.fetch_steam_id(discord_id_2)
 
         for client in self.dotaClients:
             if client and client.gameID == game_id:

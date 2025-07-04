@@ -13,9 +13,11 @@ import random
 import numpy as np
 import signal
 import traceback
+import DBFunctions as DB
 
 
 import logger
+
 logger.setup_logging()
 
 """
@@ -31,6 +33,7 @@ Features:
 
 Author: m'bender *tips hat*
 """
+
 
 class Master_Bot(commands.Bot):
     """
@@ -93,7 +96,6 @@ class Master_Bot(commands.Bot):
         async def leave(interaction: discord.Interaction):
             await self.leave_queue(interaction)
 
-
         self.tree.add_command(queue)
         self.tree.add_command(leave)
 
@@ -110,7 +112,7 @@ class Master_Bot(commands.Bot):
         loop = asyncio.get_event_loop()
 
         async def shutdown_sequence():
-            try :
+            try:
                 await self.clean_up_on_exit_helper()
             except Exception as e:
                 print(f"Cleanup failed with exception: {e}")
@@ -129,17 +131,16 @@ class Master_Bot(commands.Bot):
 
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         if lobby_channel:
-            purge_task = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).purge(limit=100)
-
-            await asyncio.gather(
-                *delete_tasks,
-                purge_task
+            purge_task = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).purge(
+                limit=100
             )
+
+            await asyncio.gather(*delete_tasks, purge_task)
 
         else:
             await asyncio.gather(*delete_tasks)
 
-        if hasattr(bot, 'tcp_server') and bot.tcp_server:
+        if hasattr(bot, "tcp_server") and bot.tcp_server:
             bot.tcp_server.close()
             await bot.tcp_server.wait_closed()
 
@@ -158,12 +159,11 @@ class Master_Bot(commands.Bot):
             )
             return False
 
-        rating = self.fetch_one(
-            "SELECT rating FROM users WHERE discord_id = ?", (interaction.user.id,)
-        )
+        rating = DB.fetch_rating(interaction.id)
         if not rating:
             await interaction.response.send_message(
-                "You don't have a rating yet. Talk to an Administrator to get started.", ephemeral=True
+                "You don't have a rating yet. Talk to an Administrator to get started.",
+                ephemeral=True,
             )
             return False
 
@@ -173,11 +173,11 @@ class Master_Bot(commands.Bot):
         if pool_size >= self.config["TEAM_SIZE"] * 2:
             if self.pending_game_task is None or self.pending_game_task.done():
 
-                await self.update_queue_status_message(content="@here Enough players! Game will start in **1 minute** ⏳")
-
-                self.pending_game_task = asyncio.create_task(
-                    self._start_game_loop(60)
+                await self.update_queue_status_message(
+                    content="@here Enough players! Game will start in **1 minute** ⏳"
                 )
+
+                self.pending_game_task = asyncio.create_task(self._start_game_loop(60))
 
         # Slash command requires a response for success
         if respond and not interaction.response.is_done():
@@ -190,7 +190,8 @@ class Master_Bot(commands.Bot):
     async def leave_queue(self, interaction: discord.Interaction, respond=True):
         if not self.coordinator.in_queue(interaction.user.id):
             await interaction.response.send_message(
-                "You're not in the queue, bozo, how are you gonna leave?", ephemeral=True
+                "You're not in the queue, bozo, how are you gonna leave?",
+                ephemeral=True,
             )
             return False
         self.coordinator.remove_player(interaction.user.id)
@@ -206,11 +207,15 @@ class Master_Bot(commands.Bot):
             self.parent = parent
 
         @discord.ui.button(label="Join Queue", style=discord.ButtonStyle.primary)
-        async def join_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async def join_queue(
+            self, interaction: discord.Interaction, button: discord.ui.Button
+        ):
             await self.parent.queue_user(interaction)
 
         @discord.ui.button(label="Leave Queue", style=discord.ButtonStyle.danger)
-        async def leave_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async def leave_queue(
+            self, interaction: discord.Interaction, button: discord.ui.Button
+        ):
             await self.parent.leave_queue(interaction)
 
     def run(self):
@@ -219,44 +224,6 @@ class Master_Bot(commands.Bot):
         Overrides commands.Bot.run for clarity and encapsulation.
         """
         super().run(self.config["BOT_TOKEN"])
-
-    def fetch_one(self, query, params=()):
-        """Execute a SQL query and return a single row or None.
-
-        Args:
-            query (str): SQL query string.
-            params (tuple): Query parameters.
-
-        Returns:
-            tuple or None: The first row of the result set, or None if no results.
-        """
-        with self.con as con:
-            result = con.execute(query, params).fetchone()
-        return result[0] if result else None
-
-    def fetch_all(self, query, params=()):
-        """Execute a SQL query and return all matching rows.
-
-        Args:
-            query (str): SQL query string.
-            params (tuple): Query parameters.
-
-        Returns:
-            list of tuples: All rows matching the query.
-        """
-        with self.con as con:
-            return con.execute(query, params).fetchall()
-
-    def execute(self, query, params=()):
-        """Execute a SQL command (INSERT, UPDATE, DELETE).
-
-        Args:
-            query (str): SQL command string.
-            params (tuple): Command parameters.
-        """
-        with self.con as con:
-            con.execute(query, params)
-        con.commit()
 
     async def _start_tcp_server(self):
         """
@@ -284,7 +251,9 @@ class Master_Bot(commands.Bot):
         )
         asyncio.create_task(self.tcp_server.serve_forever())
 
-    async def update_queue_status_message(self, new_message: bool = False, content=None):
+    async def update_queue_status_message(
+        self, new_message: bool = False, content=None
+    ):
         """
         Updates or creates the queue status message listing all queued users and their ratings.
         """
@@ -293,8 +262,7 @@ class Master_Bot(commands.Bot):
 
         team_size = self.config["TEAM_SIZE"]
         embed = discord.Embed(
-            title="🎮 Gargamel League Queue 🎮",
-            color=discord.Color.dark_gold()
+            title="🎮 Gargamel League Queue 🎮", color=discord.Color.dark_gold()
         )
 
         if not full_queue:
@@ -307,26 +275,22 @@ class Master_Bot(commands.Bot):
             embed.add_field(
                 name=f"**Players in queue ({len(full_queue)}):**",  # invisible character to avoid numbering
                 value=player_lines,
-                inline=False
+                inline=False,
             )
 
         else:
 
-            leftovers = full_queue[team_size * 2:]
+            leftovers = full_queue[team_size * 2 :]
             if leftovers:
                 embed.add_field(
                     name="🧍‍♂️ Waiting List",
                     value="\n".join(f"`{rating}`<@{uid}>" for uid, rating in leftovers),
-                    inline=False
+                    inline=False,
                 )
 
         # Allowing custom messages to be added to the queue pane
         if content is not None:
-            embed.add_field(
-                name="\u200b",
-                value=content,
-                inline=False
-            )
+            embed.add_field(name="\u200b", value=content, inline=False)
 
         view = self.QueueButtonView(parent=self)
 
@@ -339,57 +303,6 @@ class Master_Bot(commands.Bot):
         except discord.NotFound:
             # If message was deleted, reset and recreate
             self.queue_status_msg = await lobby_channel.send(embed=embed, view=view)
-
-    def query_mod_results(self, user_id: int) -> tuple[int, int, int]:
-        """
-        Count moderation results for a user.
-
-        Args:
-            user_id (int): Discord ID of the user.
-
-        Returns:
-            tuple(int, int, int): Counts of (approvals, disapprovals, undecided) mod votes.
-        """
-        rows = self.fetch_all(
-            "SELECT result FROM mod_notes WHERE registrant_id = ?", (user_id,)
-        )
-        A = sum(1 for r in rows if r[0] == 1)
-        D = sum(1 for r in rows if r[0] == 0)
-        W = sum(1 for r in rows if r[0] not in (0, 1))
-        return A, D, W
-
-    def exists_in(self, table: str, where_clause: str, params: tuple = ()) -> bool:
-        """
-        Check if any row exists in a specified table that satisfies a given WHERE clause.
-
-        Args:
-            table (str): Name of the table.
-            where_clause (str): SQL WHERE clause (without the 'WHERE' keyword).
-            params (tuple): Parameters to substitute into the query.
-
-        Returns:
-            bool: True if a matching row exists, False otherwise.
-
-        Warning:
-            This method does not sanitize the table name or WHERE clause.
-            Ensure they are constructed safely to avoid SQL injection.
-        """
-        query = f"SELECT 1 FROM {table} WHERE {where_clause} LIMIT 1"
-        return bool(self.fetch_one(query, params))
-
-    def get_steamid(self, discord_id: int) -> int | None:
-        """
-        Retrieve SteamID associated with a Discord user ID.
-
-        Args:
-            discord_id (int): Discord user ID.
-
-        Returns:
-            (int or None): SteamID if found, else None.
-        """
-        return self.fetch_one(
-            "SELECT steam_id FROM users WHERE discord_id = ?", (discord_id,)
-        )
 
     async def _mod_decision(
         self,
@@ -419,7 +332,7 @@ class Master_Bot(commands.Bot):
                 f"<@{mod_id}>: please use <#{chan_id}>", ephemeral=True
             )
 
-        registrant_id = self.fetch_one(
+        registrant_id = DB.fetch_one(
             "SELECT assignedRegistrant FROM users WHERE discord_id = ?", (mod_id,)
         )
 
@@ -447,7 +360,7 @@ class Master_Bot(commands.Bot):
             "UPDATE users SET rating = ? WHERE discord_id = ?", (rating, registrant_id)
         )
 
-        A, D, W = self.query_mod_results(registrant_id)
+        A, D, W = DB.query_mod_results(registrant_id)
         threshold = math.ceil(self.config["MOD_ASSIGNMENT"] / 2)
         try:
             member = await self.the_guild.fetch_member(registrant_id)
@@ -483,7 +396,9 @@ class Master_Bot(commands.Bot):
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
-                    await self.update_queue_status_message(content="Not enough players anymore. Game cancelled. ❌")
+                    await self.update_queue_status_message(
+                        content="Not enough players anymore. Game cancelled. ❌"
+                    )
                     break
 
                 radiant, dire = self.coordinator.make_game()
@@ -494,7 +409,9 @@ class Master_Bot(commands.Bot):
                 await self.on_game_created(radiant, dire)
 
                 if len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
-                    await self.update_queue_status_message(content="@here Still enough players! Starting another game in **15 seconds** ⏳")
+                    await self.update_queue_status_message(
+                        content="@here Still enough players! Starting another game in **15 seconds** ⏳"
+                    )
                     seconds = 15  # Shorter delay for repeat games
                 else:
                     break
@@ -548,7 +465,7 @@ class Master_Bot(commands.Bot):
                     f"<@{mod_id}>: please use <#{chan_id}>", ephemeral=True
                 )
 
-            prev_registrant_id = self.fetch_one(
+            prev_registrant_id = DB.fetch_one(
                 f"SELECT assignedRegistrant FROM users WHERE discord_id = ?", (mod_id,)
             )
             if prev_registrant_id:
@@ -557,7 +474,7 @@ class Master_Bot(commands.Bot):
                     ephemeral=True,
                 )
 
-            new_registrant = self.fetch_one(
+            new_registrant = DB.fetch_one(
                 """
                 SELECT discord_id FROM users
                 WHERE modsRemaining > 0
@@ -691,7 +608,7 @@ class Master_Bot(commands.Bot):
                 msg = f"Thanks for vouching for {user.mention}."
 
                 # Auto-assign Vouched role if threshold reached
-                count = self.fetch_one(
+                count = DB.fetch_one(
                     f"SELECT timesVouched FROM users WHERE discord_id = {user.id}"
                 )
                 if count == self.config["VOUCH_REQUIREMENT"]:
@@ -758,7 +675,9 @@ class Master_Bot(commands.Bot):
             )
 
             # Immediately start the loop, with short countdown
-            await self.update_queue_status_message(content="@here ⚡ Force-start requested — game beginning in **5 seconds**!")
+            await self.update_queue_status_message(
+                content="@here ⚡ Force-start requested — game beginning in **5 seconds**!"
+            )
             self.pending_game_task = asyncio.create_task(self._start_game_loop(5))
 
         @app_commands.command(
@@ -813,37 +732,35 @@ class Master_Bot(commands.Bot):
             # Recalculate ratings
             radiant = list(radiant_set)
             dire = list(dire_set)
-            radiant_ratings = [
-                self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
-                for pid in radiant
-            ]
-            dire_ratings = [
-                self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
-                for pid in dire
-            ]
-            r_radiant = np.exp(np.mean(np.log(radiant_ratings)))
-            r_dire = np.exp(np.mean(np.log(dire_ratings)))
-
+            radiant_ratings = [DB.fetch_rating(id) for id in radiant]
+            dire_ratings = [DB.fetch_rating(id) for id in dire]
+            r_radiant = DB.power_mean(radiant_ratings, 5)
+            r_dire = DB.power_mean(dire_ratings, 5)
             # Edit original lobby message
             lobby_msg = self.lobby_messages.get(game_id)
 
             embed = discord.Embed(
                 title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
-                color=discord.Color.red()
+                color=discord.Color.red(),
             )
 
             embed.add_field(
                 name=f"🌞 Radiant ({int(r_radiant)})",
                 value="\n".join(
-                    f"`{rating}`<@{uid}>" for uid, rating in zip(radiant, radiant_ratings)) or "*Empty*",
-                inline=True
+                    f"`{rating}`<@{uid}>"
+                    for uid, rating in zip(radiant, radiant_ratings)
+                )
+                or "*Empty*",
+                inline=True,
             )
 
             embed.add_field(
                 name=f"🌚 Dire ({int(r_dire)})",
                 value="\n".join(
-                    f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)) or "*Empty*",
-                inline=True
+                    f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)
+                )
+                or "*Empty*",
+                inline=True,
             )
 
             if lobby_msg:
@@ -1000,18 +917,12 @@ class Master_Bot(commands.Bot):
         await self.clear_game(game_id)
 
         # Retrieve player ratings
-        radiant_ratings = [
-            self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
-            for pid in radiant
-        ]
-        dire_ratings = [
-            self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
-            for pid in dire
-        ]
+        radiant_ratings = [DB.fetch_rating(id) for id in radiant]
+        dire_ratings = [DB.fetch_rating(id) for id in dire]
 
-        # Calculate geometric means
-        r_radiant = np.exp(np.mean(np.log(radiant_ratings)))
-        r_dire = np.exp(np.mean(np.log(dire_ratings)))
+        # Calculate means
+        r_radiant = DB.power_mean(radiant_ratings, 5)
+        r_dire = DB.power_mean(dire_ratings, 5)
 
         # Determine results
         s_radiant = 1 if winner == 2 else 0
@@ -1068,13 +979,10 @@ class Master_Bot(commands.Bot):
                 for member in all_members
                 if member.voice and member.voice.channel != target_channel
             ]
-            delete_channels_tasks = [
-                radiant_channel.delete(),
-                dire_channel.delete()
-            ]
+            delete_channels_tasks = [radiant_channel.delete(), dire_channel.delete()]
             await asyncio.gather(*move_tasks, *delete_channels_tasks)
 
-        except Exception as e:
+        except Exception as _:
             print(f"Unexpected Exception: ")
             traceback.print_exc()
 
@@ -1088,13 +996,11 @@ class Master_Bot(commands.Bot):
         Args:
             discord_id (int): Discord user ID for which SteamID was found.
         """
-        steam_id = self.fetch_one(
-            f"SELECT steam_id FROM users WHERE discord_id = {discord_id}"
-        )
+        steam_id = DB.fetch_steam_id(discord_id)
         for dotaClient in self.dota_talker.dotaClients:
             dotaClient.steam.friends.add(steam_id)
 
-        modsRemaining = self.fetch_one(
+        modsRemaining = DB.fetch_one(
             f"SELECT modsRemaining FROM users WHERE discord_id = {discord_id}"
         )
 
@@ -1127,21 +1033,13 @@ class Master_Bot(commands.Bot):
             f"Game {self.game_counter} — Dire"
         )
 
-        # # Disable view/connect for default roles (undecided feature)
-        # for role in await self.the_guild.fetch_roles():
-        #     if role.name not in ("League Commish", "GargamelCoordinator", "Mod"):
-        #         await radiant.set_permissions(role, view_channel=False, connect=False)
-        #         await dire.set_permissions(role, view_channel=False, connect=False)
-
         self.game_map_inverse[game_id] = (set(), set())
-        # Give perms for viewing new channels; movement feature currently disabled
 
-        tasks = [self.the_guild.get_member(member).move_to(radiant_channel) for member in radiant]
+        tasks = [
+            self.the_guild.get_member(member).move_to(radiant_channel)
+            for member in radiant
+        ] + [self.the_guild.get_member(member).move_to(dire_channel) for member in dire]
         await asyncio.gather(*tasks)
-
-        tasks = [self.the_guild.get_member(member).move_to(dire_channel) for member in dire]
-        await asyncio.gather(*tasks)
-
 
         for member_id in radiant:
             m = self.the_guild.get_member(member_id)
@@ -1168,45 +1066,39 @@ class Master_Bot(commands.Bot):
 
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
-        radiant_ratings = [
-            self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
-            for pid in radiant
-        ]
-        dire_ratings = [
-            self.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (pid,))
-            for pid in dire
-        ]
+        radiant_ratings = [DB.fetch_rating(id) for id in radiant]
+        dire_ratings = [DB.fetch_rating(id) for id in dire]
 
-        # Calculate geometric means
-        r_radiant = np.exp(np.mean(np.log(radiant_ratings)))
-        r_dire = np.exp(np.mean(np.log(dire_ratings)))
+        # Calculate means
+        r_radiant = DB.power_mean(radiant_ratings, 5)
+        r_dire = DB.power_mean(dire_ratings, 5)
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
 
         embed = discord.Embed(
             title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
-            color=discord.Color.red()
+            color=discord.Color.red(),
         )
 
         embed.add_field(
             name=f"🌞 Radiant `{int(r_radiant)}`",
             value="\n".join(
-                f"`{rating}`<@{uid}>" for uid, rating in zip(radiant, radiant_ratings)) or "*Empty*",
-            inline=True
+                f"`{rating}`<@{uid}>" for uid, rating in zip(radiant, radiant_ratings)
+            )
+            or "*Empty*",
+            inline=True,
         )
 
         embed.add_field(
             name=f"🌚 Dire `{int(r_dire)}`",
             value="\n".join(
-                f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)) or "*Empty*",
-            inline=True
+                f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)
+            )
+            or "*Empty*",
+            inline=True,
         )
 
-        embed.add_field(
-            name="Password",
-            value=f"{password}",
-            inline=False
-        )
+        embed.add_field(name="Password", value=f"{password}", inline=False)
 
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
         message = await channel.send(embed=embed)

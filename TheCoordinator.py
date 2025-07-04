@@ -3,6 +3,7 @@ import math
 import itertools
 import json
 from typing import List, Tuple
+from DBFunctions import power_mean
 
 with open("config.json") as configFile:
     config: dict = json.load(configFile)
@@ -40,7 +41,7 @@ class TheCoordinator:
         users, user_infos = zip(*top)
         ratings = [rating for rating, _ in user_infos]
 
-        # Try all split partitions and find the one with smallest diff in geo means
+        # Try all split partitions and find the one with smallest diff in power means
         best_partition = None
         min_diff = float("inf")
 
@@ -48,9 +49,9 @@ class TheCoordinator:
             team1 = [ratings[i] for i in team1_indices]
             team2 = [ratings[i] for i in range(TEAM_SIZE * 2) if i not in team1_indices]
 
-            geo1 = math.prod(team1) ** (1 / TEAM_SIZE)
-            geo2 = math.prod(team2) ** (1 / TEAM_SIZE)
-            diff = abs(geo1 - geo2)
+            team1_rating = power_mean(team1)
+            team2_rating = power_mean(team2)
+            diff = abs(team1_rating - team2_rating)
 
             if diff < min_diff:
                 min_diff = diff
