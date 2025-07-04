@@ -159,7 +159,7 @@ class Master_Bot(commands.Bot):
             )
             return False
 
-        rating = DB.fetch_rating(interaction.id)
+        rating = DB.fetch_rating(interaction.user.id)
         if not rating:
             print(f"User with ID: {interaction.user.id} doesn't have a rating")
             await interaction.response.send_message(
