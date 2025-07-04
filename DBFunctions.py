@@ -17,6 +17,7 @@ def fetch_one(query, params=()):
         tuple or None: The first row of the result set, or None if no results.
     """
     result = con.execute(query, params).fetchone()
+    print(result)
     return result[0] if result else None
 
 def fetch_all(query, params=()):
