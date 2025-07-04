@@ -33,7 +33,8 @@ def fetch_all(query, params=()):
     Returns:
         list of tuples: All rows matching the query.
     """
-    return con.execute(query, params).fetchall()
+    cursor = con.cursor()
+    return cursor.execute(query, params).fetchall()
 
 def execute(query, params=()):
     """Execute a SQL command (INSERT, UPDATE, DELETE).
@@ -74,6 +75,7 @@ def fetch_steam_id(discord_id: str):
     Returns:
         str: the Steam id associated with the given Discord id
     """
+    query = "SELECT steam_id FROM users WHERE discord_id = ?"
     return fetch_one("SELECT steam_id FROM users WHERE discord_id = ?",
         (discord_id,))
 
@@ -101,8 +103,9 @@ def query_mod_results(user_id: int) -> tuple[int, int, int]:
     Returns:
         tuple(int, int, int): Counts of (approvals, disapprovals, undecided) mod votes.
     """
+    query = f"SELECT result FROM mod_notes WHERE registrant_id = ?"
     rows = fetch_all(
-        "SELECT result FROM mod_notes WHERE registrant_id = ?", (user_id,)
+        query, (user_id,)
     )
     A = sum(1 for r in rows if r[0] == 1)
     D = sum(1 for r in rows if r[0] == 0)
