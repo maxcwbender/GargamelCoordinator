@@ -14,6 +14,7 @@ import numpy as np
 import signal
 import traceback
 import DBFunctions as DB
+import logging
 
 
 import logger
@@ -105,7 +106,7 @@ class Master_Bot(commands.Bot):
         # await self.tree.sync(guild=self.the_guild)  # optional: sync for specific guild
 
     def handle_exit_signals(self, signum, frame):
-        print(f"Received exit signal {signum}, cleaning up bot creations.")
+        logging.info(f"Received exit signal {signum}, cleaning up bot creations.")
 
         # Clean up Discord Voice and Text Channels, Clear the Bot Channel
         # TODO: Clean up Dota Lobbies that are empty if we bailed at the wrong time.
@@ -115,8 +116,7 @@ class Master_Bot(commands.Bot):
             try:
                 await self.clean_up_on_exit_helper()
             except Exception as e:
-                print(f"Cleanup failed with exception: {e}")
-                traceback.print_exc()
+                logging.exception(f"Cleanup failed with exception: {e}")
 
         loop.create_task(shutdown_sequence())
 
@@ -147,10 +147,10 @@ class Master_Bot(commands.Bot):
         await self.close()
 
         pending = [t for t in asyncio.all_tasks() if not t.done()]
-        print(f"🔍 Pending tasks after self.close: {len(pending)}")
+        logging.debug(f"🔍 Pending tasks after self.close: {len(pending)}")
 
         for task in pending:
-            print(f" - {task}")
+            logging.debug(f" - {task}")
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
         if self.coordinator.in_queue(interaction.user.id):
@@ -159,8 +159,9 @@ class Master_Bot(commands.Bot):
             )
             return False
 
-        rating = DB.fetch_rating(interaction.id)
+        rating = DB.fetch_rating(interaction.user.id)
         if not rating:
+            logging.info(f"User with ID: {interaction.user.id} doesn't have a rating")
             await interaction.response.send_message(
                 "You don't have a rating yet. Talk to an Administrator to get started.",
                 ephemeral=True,
@@ -170,6 +171,7 @@ class Master_Bot(commands.Bot):
         pool_size = self.coordinator.add_player(interaction.user.id, rating)
         await self.update_queue_status_message()
 
+        # Debug mode allows executing with a 2 man game without changing team size
         if pool_size >= self.config["TEAM_SIZE"] * 2:
             if self.pending_game_task is None or self.pending_game_task.done():
 
@@ -177,7 +179,11 @@ class Master_Bot(commands.Bot):
                     content="@here Enough players! Game will start in **1 minute** ⏳"
                 )
 
-                self.pending_game_task = asyncio.create_task(self._start_game_loop(60))
+                start_game_timer = 60
+                if self.config["DEBUG_MODE"]:
+                    start_timer = 5
+
+                self.pending_game_task = asyncio.create_task(self._start_game_loop(start_game_timer))
 
         # Slash command requires a response for success
         if respond and not interaction.response.is_done():
@@ -236,13 +242,13 @@ class Master_Bot(commands.Bot):
         async def handle(reader, writer):
             addr = writer.get_extra_info("peername")
             if addr[0] != "127.0.0.1":
-                print(f"Blocked non-local request: {addr}")
+                logging.debug(f"Blocked non-local request: {addr}")
                 writer.close()
                 return
 
             data = await reader.read(1024)
             message = data.decode().strip()
-            print(f"steam_id found: {message}")
+            logging.info(f"steam_id found: {message}")
             self.dispatch("steam_id_found", int(message))
             writer.close()
 
@@ -271,6 +277,9 @@ class Master_Bot(commands.Bot):
 
             # embed.description = f"**Players in queue ({len(full_queue)}):**"
             player_lines = "\n".join(f"<@{user_id}>" for user_id, rating in full_queue)
+
+            # Add list of Players in General Voice Channel who are not in Queue Here
+            # Make new embed underneath the Players in Queue to help see who hasn't clicked the button.
 
             embed.add_field(
                 name=f"**Players in queue ({len(full_queue)}):**",  # invisible character to avoid numbering
@@ -342,7 +351,7 @@ class Master_Bot(commands.Bot):
                 ephemeral=True,
             )
 
-        self.execute(
+        DB.execute(
             """
             UPDATE mod_notes
             SET notes = ?, result = ?, resultMessage_id = ?
@@ -351,12 +360,12 @@ class Master_Bot(commands.Bot):
             (notes, int(result), interaction.id, mod_id, registrant_id),
         )
 
-        self.execute(
+        DB.execute(
             "UPDATE users SET assignedRegistrant = NULL WHERE discord_id = ?",
             (mod_id,),
         )
 
-        self.execute(
+        DB.execute(
             "UPDATE users SET rating = ? WHERE discord_id = ?", (rating, registrant_id)
         )
 
@@ -429,7 +438,7 @@ class Master_Bot(commands.Bot):
 
         All slash command handlers are defined as nested async functions here.
         """
-        print(f"Logged in as {self.user}")
+        logging.info(f"Logged in as {self.user}")
         await self._start_tcp_server()
         self.the_guild = self.guilds[0]
 
@@ -491,18 +500,18 @@ class Master_Bot(commands.Bot):
                     ephemeral=True,
                 )
 
-            self.execute(
+            DB.execute(
                 "UPDATE users SET modsRemaining = modsRemaining - 1 WHERE discord_id = ?",
                 (new_registrant,),
             )
-            self.execute(
+            DB.execute(
                 "UPDATE users SET assignedRegistrant = ? WHERE discord_id = ?",
                 (
                     new_registrant,
                     mod_id,
                 ),
             )
-            self.execute(
+            DB.execute(
                 "INSERT INTO mod_notes (request_id, mod_id, registrant_id) VALUES (?, ?, ?)",
                 (interaction.id, mod_id, new_registrant),
             )
@@ -591,17 +600,17 @@ class Master_Bot(commands.Bot):
                 ),
             )
             if already_vouched:
-                self.execute(
+                DB.execute(
                     f"UPDATE vouches SET notes=? WHERE voucher_id={interaction.user.id} AND vouchee_id={user.id}",
                     (note,),
                 )
                 msg = f"Updated your vouch for {user.mention}."
             else:
                 # New vouch
-                self.execute(
+                DB.execute(
                     f"UPDATE users SET timesVouched = timesVouched + 1 WHERE discord_id = {user.id}"
                 )
-                self.execute(
+                DB.execute(
                     f"INSERT INTO vouches (vouch_id, vouchee_id, voucher_id, notes) VALUES ({interaction.id}, {user.id}, {interaction.user.id}, ?)",
                     (note,),
                 )
@@ -644,7 +653,7 @@ class Master_Bot(commands.Bot):
                     f"Use <#{mod_channel}>", ephemeral=True
                 )
 
-            self.execute(f"UPDATE users SET rating={rating} WHERE discord_id={user.id}")
+            DB.execute(f"UPDATE users SET rating={rating} WHERE discord_id={user.id}")
             await interaction.response.send_message(
                 f"Set {user.display_name}'s rating to {rating}.", ephemeral=True
             )
@@ -854,7 +863,7 @@ class Master_Bot(commands.Bot):
                 try:
                     await new_member.move_to(radiant_channel)
                 except (discord.HTTPException, discord.ClientException):
-                    print(
+                    logging.exception(
                         f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
                     )
             else:
@@ -863,7 +872,7 @@ class Master_Bot(commands.Bot):
                 try:
                     await new_member.move_to(dire_channel)
                 except (discord.HTTPException, discord.ClientException):
-                    print(
+                    logging.exception(
                         f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
                     )
             self.game_map.pop(old_member.id, None)
@@ -937,16 +946,18 @@ class Master_Bot(commands.Bot):
         # Update radiant ratings
         for i, pid in enumerate(radiant):
             new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
-            self.execute(
+            DB.execute(
                 "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
             )
 
         # Update dire ratings
         for i, pid in enumerate(dire):
             new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
-            self.execute(
+            DB.execute(
                 "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
             )
+
+        # Todo: Add match results to Database here
 
     async def clear_game(self, game_id: int):
         """
@@ -974,17 +985,23 @@ class Master_Bot(commands.Bot):
         try:
             target_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
             all_members = radiant_channel.members + dire_channel.members
+            for member in all_members:
+                logging.info(
+                    f"{member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
             move_tasks = [
                 member.move_to(target_channel)
                 for member in all_members
                 if member.voice and member.voice.channel != target_channel
             ]
             delete_channels_tasks = [radiant_channel.delete(), dire_channel.delete()]
-            await asyncio.gather(*move_tasks, *delete_channels_tasks)
+            await asyncio.gather(*move_tasks)
+            await asyncio.gather(
+                radiant_channel.delete(),
+                dire_channel.delete()
+            )
 
         except Exception as _:
-            print(f"Unexpected Exception: ")
-            traceback.print_exc()
+            logging.exception(f"Unexpected Exception: ")
 
     async def on_steam_id_found(self, discord_id: int):
         """
@@ -1035,32 +1052,24 @@ class Master_Bot(commands.Bot):
 
         self.game_map_inverse[game_id] = (set(), set())
 
-        tasks = [
-            self.the_guild.get_member(member).move_to(radiant_channel)
-            for member in radiant
-        ] + [self.the_guild.get_member(member).move_to(dire_channel) for member in dire]
-        await asyncio.gather(*tasks)
-
         for member_id in radiant:
             m = self.the_guild.get_member(member_id)
-            await radiant_channel.set_permissions(m, view_channel=True, connect=True)
             try:
                 await m.send(
                     f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮"
                 )
             except discord.Forbidden:
-                print(f"Tried to send a message to {m.name} but failed?")
+                logging.exception(f"Tried to send a message to {m.name} but failed?")
             self.game_map[member_id] = game_id
             self.game_map_inverse[game_id][0].add(member_id)
         for member_id in dire:
             m = self.the_guild.get_member(member_id)
-            await dire_channel.set_permissions(m, view_channel=True, connect=True)
             try:
                 await m.send(
                     f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮"
                 )
             except discord.Forbidden:
-                print(f"Tried to send a message to {m.name} but failed?")
+                logging.exception(f"Tried to send a message to {m.name} but failed?")
             self.game_map[member_id] = game_id
             self.game_map_inverse[game_id][1].add(member_id)
 
@@ -1069,7 +1078,7 @@ class Master_Bot(commands.Bot):
         radiant_ratings = [DB.fetch_rating(id) for id in radiant]
         dire_ratings = [DB.fetch_rating(id) for id in dire]
 
-        # Calculate means
+        # Calculate means and form the most imbalanced teams possible
         r_radiant = DB.power_mean(radiant_ratings, 5)
         r_dire = DB.power_mean(dire_ratings, 5)
 
@@ -1102,6 +1111,20 @@ class Master_Bot(commands.Bot):
 
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
         message = await channel.send(embed=embed)
+
+        try:
+            tasks = [
+                self.the_guild.get_member(member).move_to(radiant_channel)
+                for member in radiant
+                if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
+            ] + [
+                self.the_guild.get_member(member).move_to(dire_channel)
+                for member in dire
+                if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
+            ]
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            logging.exception(f"Unexpected Exception: {e}")
 
         self.lobby_messages[game_id] = message
 

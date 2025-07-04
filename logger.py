@@ -1,9 +1,6 @@
 import logging
 from datetime import datetime
 
-
-timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-
 def setup_logging():
 
     #TODO: Capture Stdout/Stderr  or just use logging.info instead of prints

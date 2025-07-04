@@ -14,7 +14,7 @@ import random
 
 from Master_Bot import Master_Bot
 import DBFunctions as DB
-
+import logging
 
 class DotaTalker:
     def __init__(self, discordBot: 'Master_Bot.Master_Bot'):
@@ -38,7 +38,7 @@ class DotaTalker:
             t.start()
             self.threads.append(t)
 
-        print("DotaTalker setup done")
+        logging.info("DotaTalker setup done")
 
     def is_ready(self, i: int) -> bool:
         """
@@ -78,6 +78,7 @@ class DotaTalker:
         radiant_steam_ids = [DB.fetch_steam_id(did) for did in radiant_discord_ids]
         dire_steam_ids = [DB.fetch_steam_id(did) for did in dire_discord_ids]
 
+
         for i in range(self.config["numClients"]):
             client = self.dotaClients[i]
             if client.gameID is None and self.is_ready(i):
@@ -98,7 +99,7 @@ class DotaTalker:
             dire (list[int]): List of Dire team Steam IDs.
             password (str): Lobby password.
         """
-        print(f"[Client {clientIdx}] Looking for game")
+        logging.info(f"[Client {clientIdx}] Looking for game")
         dotaClient = self.dotaClients[clientIdx]
         dotaClient.gameID = gameID
         dotaClient.radiant = radiant
@@ -109,13 +110,13 @@ class DotaTalker:
             "game_name": f"Gargamel League Game {gameID}",
             "server_region": 2,
             "game_mode": 22,
-            "allow_cheats": False,
+            "allow_cheats": self.config["DEBUG_MODE"],
             "allow_spectating": True,
             "leagueid": self.config["league_id"],
         }
 
         dotaClient.create_practice_lobby(password=password, options=lobbyConfig)
-        print(f"[Client {clientIdx}] Created lobby for game {gameID} with password {dotaClient.password}")
+        logging.info(f"[Client {clientIdx}] Created lobby for game {gameID} with password {dotaClient.password}")
 
     def swap_players_in_game(self, game_id: int, discord_id_1: int, discord_id_2: int) -> bool:
         """
@@ -140,19 +141,19 @@ class DotaTalker:
                     client.dire.remove(steam_id_2)
                     client.radiant.append(steam_id_2)
                     client.dire.append(steam_id_1)
-                    print(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
+                    logging.info(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
                     return True
                 elif steam_id_1 in client.dire and steam_id_2 in client.radiant:
                     client.radiant.remove(steam_id_2)
                     client.dire.remove(steam_id_1)
                     client.radiant.append(steam_id_1)
                     client.dire.append(steam_id_2)
-                    print(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
+                    logging.info(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
                     return True
                 else:
-                    print(f"[Game {game_id}] One or both users not found on opposing teams")
+                    logging.error(f"[Game {game_id}] One or both users not found on opposing teams")
                     return False
-        print(f"No lobby found with game ID {game_id}")
+        logging.error(f"No lobby found with game ID {game_id}")
         return False
 
     def update_lobby_teams(self, gameID: int, radiant: list[int], dire: list[int]) -> bool:
@@ -171,7 +172,7 @@ class DotaTalker:
             if client and client.gameID == gameID and client.lobby:
                 client.radiant = radiant
                 client.dire = dire
-                print(f"[Game {gameID}] Lobby teams updated")
+                logging.info(f"[Game {gameID}] Lobby teams updated")
                 return True
         return False
 
@@ -193,15 +194,15 @@ class DotaTalker:
 
         @steamClient.on("logged_on")
         def _():
-            print(f"[Client {i}] Logged on to Steam")
+            logging.info(f"[Client {i}] Logged on to Steam")
             dotaClient.launch()
 
         @steamClient.on("friendlist")
         def _(message):
-            print("Friendlist message: " + str(message))
+            logging.info("Friendlist message: " + str(message))
             for steam_id, relationship in steamClient.friends.items():
                 if relationship == EFriendRelationship.RequestRecipient:
-                    print(f"Received friend request from: {steam_id}")
+                    logging.info(f"Received friend request from: {steam_id}")
                     steamClient.friends.add(steam_id)
 
                     if dotaClient.gameID and steam_id in (dotaClient.radiant + dotaClient.dire):
@@ -209,10 +210,11 @@ class DotaTalker:
 
         @dotaClient.on("ready")
         def _():
-            print(f"[Client {i}] Dota 2 client ready")
+            logging.info(f"[Client {i}] Dota 2 client ready")
             dotaClient.abandon_current_game()
             dotaClient.leave_practice_lobby()
             self.set_ready(i, True)
+
 
         @dotaClient.on("lobby_new")
         def _(lobby):
@@ -226,14 +228,25 @@ class DotaTalker:
                 dotaClient.steam.get_user(sid).send_message(
                     f"Just invited you to a lobby! The lobby name is 'Gargamel League Game {dotaClient.gameID}' and the password is {dotaClient.password}"
                 )
-                print(f"[Game {dotaClient.gameID}] Inviting {dotaClient.steam.get_user(sid).name}")
+                logging.info(f"[Game {dotaClient.gameID}] Inviting {dotaClient.steam.get_user(sid).name}")
+
+        # Allegedly we cannot access member.name until this event triggers
+        # TODO here, I just want to see how long it takes to get them
+        @dotaClient.steam.on("persona_state")
+        def handle_persona_update(persona):
+            logging.info(f"Persona update: {persona.name} (SteamID: {persona.steam_id})")
 
         @dotaClient.on("lobby_changed")
         def _(message):
-            print(f"[Client {i}] Lobby changed")
+            logging.info(f"[Client {i}] Lobby changed")
 
             for member in message.all_members:
-                print(member.id, member.team, member.name, member.slot, member.channel)
+                try:
+                    dotaClient.steam.request_persona_state([member.id])
+                except Exception as e:
+                    logging.exception(f"Error requesting user persona for member:id: {member.id}, err: {e}")
+
+                logging.info(f"Member.id: {member.id}, Member.team: {member.team}, Member.name: {member.name}, Member.slot: {member.slot}, Member.channel: {member.channel}")
                 if member.id not in dotaClient.steam.friends:
                     dotaClient.steam.friends.add(member.id)
 
@@ -243,23 +256,24 @@ class DotaTalker:
                     sid32 = SteamID(member.id).as_32
                     if member.id in dotaClient.radiant and member.team != DOTA_GC_TEAM_GOOD_GUYS:
                         dotaClient.practice_lobby_kick_from_team(sid32)
-                        print(f"[Client {i}] {member.name}: wrong team (should be Radiant)")
+                        logging.info(f"[Client {i}] {member.name}: wrong team (should be Radiant)")
                     elif member.id in dotaClient.dire and member.team != DOTA_GC_TEAM_BAD_GUYS:
                         dotaClient.practice_lobby_kick_from_team(sid32)
-                        print(f"[Client {i}] {member.name}: wrong team (should be Dire)")
+                        logging.info(f"[Client {i}] {member.name}: wrong team (should be Dire)")
                     elif (member.id in dotaClient.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS) or \
                          (member.id in dotaClient.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
                         correct += 1
                     elif member.team in [DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS]:
                         dotaClient.practice_lobby_kick_from_team(sid32)
-                        print(f"[Client {i}] {member.name} not part of current game")
+                        logging.info(f"[Client {i}] {member.name} not part of current game")
+                    logging.info(f"User found on team: {member.team} (SteamID: {member.id} Member.name: {member.name})")
 
                 if correct == len(dotaClient.radiant + dotaClient.dire):
                     dotaClient.launch_practice_lobby()
-                    print(f"[Client {i}] Game launched")
+                    logging.info(f"[Client {i}] Game launched")
 
             elif message.state == 3:
-                print(f"[Client {i}] Game ended, match ID: {message.match_id}")
+                logging.info(f"[Client {i}] Game ended, match ID: {message.match_id}")
                 dotaClient.leave_practice_lobby()
                 self.discordBot.dispatch("game_ended", dotaClient.gameID, message.match_outcome)
                 dotaClient.gameID = None
