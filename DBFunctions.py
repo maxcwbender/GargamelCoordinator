@@ -16,11 +16,11 @@ def fetch_one(query, params=()):
     Returns:
         tuple or None: The first row of the result set, or None if no results.
     """
-    print(query)
-    print(params)
+    print(f"Query: {query}")
+    print(f"Params: {params}")
     cursor = con.cursor()
     result = cursor.execute(query).fetchone()
-    print(result)
+    print(f"Result: {result}")
     return result[0] if result else None
 
 def fetch_all(query, params=()):
