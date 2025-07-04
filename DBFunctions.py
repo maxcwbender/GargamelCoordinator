@@ -18,7 +18,8 @@ def fetch_one(query, params=()):
     """
     print(query)
     print(params)
-    result = con.execute(query, params).fetchone()
+    cursor = con.cursor()
+    result = cursor.execute(query).fetchone()
     print(result)
     return result[0] if result else None
 
@@ -86,7 +87,8 @@ def fetch_rating(discord_id: str):
     Returns:
         str: the rating associated with the given Discord id
     """
-    return fetch_one("SELECT rating FROM users WHERE discord_id = ?",
+    query = f"SELECT rating FROM users WHERE discord_id = {discord_id}"
+    return fetch_one(query,
         (discord_id,))
 
 def query_mod_results(user_id: int) -> tuple[int, int, int]:
