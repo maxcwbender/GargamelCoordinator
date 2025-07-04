@@ -197,19 +197,6 @@ class DotaTalker:
             print(f"[Client {i}] Logged on to Steam")
             dotaClient.launch()
 
-            current_friends = set(str(friend.steam_id) for friend in steamClient.friends)
-
-            conn = sqlite3.connect("allUsers.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT steam_id FROM users")
-            steam_ids = {str(row[0]) for row in cursor.fetchall()}
-            conn.close()
-
-            for sid in steam_ids:
-                if sid not in current_friends:
-                    steamClient.friends.add(SteamID(sid))
-                    print(f"[Client {i}] Sent friend request to {sid}")
-
         @steamClient.on("friendlist")
         def _(message):
             print("Friendlist message: " + str(message))
