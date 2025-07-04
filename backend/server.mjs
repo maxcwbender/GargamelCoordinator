@@ -137,4 +137,4 @@ server.put('/', async (req, res) => {
     }
 });
 
-server.listen(8080, '0.0.0.0', () => console.log(`Server listening at http://localhost:80`));
+server.listen(80, '0.0.0.0', () => console.log(`Server listening at http://localhost:80`));
