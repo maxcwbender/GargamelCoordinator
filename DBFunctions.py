@@ -41,7 +41,7 @@ def execute(query, params=()):
     con.execute(query, params)
     con.commit()
 
-def exists_in(self, table: str, where_clause: str, params: tuple = ()) -> bool:
+def exists_in(table: str, where_clause: str, params: tuple = ()) -> bool:
     """
     Check if any row exists in a specified table that satisfies a given WHERE clause.
 
@@ -60,7 +60,7 @@ def exists_in(self, table: str, where_clause: str, params: tuple = ()) -> bool:
     query = f"SELECT 1 FROM {table} WHERE {where_clause} LIMIT 1"
     return bool(fetch_one(query, params))
 
-def fetch_steam_id(self, discord_id: str):
+def fetch_steam_id(discord_id: str):
     """
     Returns the Steam id associated with the given Discord id
 
@@ -73,7 +73,7 @@ def fetch_steam_id(self, discord_id: str):
     return fetch_one("SELECT steam_id FROM users WHERE discord_id = ?",
         (discord_id,))
 
-def fetch_rating(self, discord_id: str):
+def fetch_rating(discord_id: str):
     """
     Returns the rating associated with the given Discord id
 
@@ -86,7 +86,7 @@ def fetch_rating(self, discord_id: str):
     return fetch_one("SELECT rating FROM users WHERE discord_id = ?",
         (discord_id,))
 
-def query_mod_results(self, user_id: int) -> tuple[int, int, int]:
+def query_mod_results(user_id: int) -> tuple[int, int, int]:
     """
     Count moderation results for a user.
 
