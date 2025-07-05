@@ -982,7 +982,8 @@ class Master_Bot(commands.Bot):
                 if member.voice and member.voice.channel != target_channel
             ]
             delete_channels_tasks = [radiant_channel.delete(), dire_channel.delete()]
-            await asyncio.gather(*move_tasks, *delete_channels_tasks)
+            await asyncio.gather(*move_tasks)
+            await asyncio.gather(*delete_channels_tasks)
 
         except Exception as _:
             print(f"Unexpected Exception: ")
