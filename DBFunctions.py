@@ -89,7 +89,7 @@ def fetch_rating(discord_id: str):
     Returns:
         str: the rating associated with the given Discord id
     """
-    query = f"SELECT rating FROM users WHERE discord_id = {discord_id}"
+    query = f"SELECT rating FROM users WHERE discord_id = ?"
     return fetch_one(query,
         (discord_id,))
 
