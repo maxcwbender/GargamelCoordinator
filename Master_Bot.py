@@ -1047,6 +1047,7 @@ class Master_Bot(commands.Bot):
         tasks = [
             self.the_guild.get_member(member).move_to(radiant_channel)
             for member in radiant
+            if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
         ] + [self.the_guild.get_member(member).move_to(dire_channel) for member in dire]
         await asyncio.gather(*tasks)
 
