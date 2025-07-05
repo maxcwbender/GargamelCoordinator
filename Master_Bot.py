@@ -172,8 +172,7 @@ class Master_Bot(commands.Bot):
         await self.update_queue_status_message()
 
         # Debug mode allows executing with a 2 man game without changing team size
-        game_start_size = 2 if self.config["DEBUG_MODE"] else self.config["TEAM_SIZE"] * 2
-        if pool_size >= game_start_size:
+        if pool_size >= self.config["TEAM_SIZE"] * 2:
             if self.pending_game_task is None or self.pending_game_task.done():
 
                 await self.update_queue_status_message(
