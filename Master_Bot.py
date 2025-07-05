@@ -345,7 +345,7 @@ class Master_Bot(commands.Bot):
                 ephemeral=True,
             )
 
-        self.execute(
+        DB.execute(
             """
             UPDATE mod_notes
             SET notes = ?, result = ?, resultMessage_id = ?
@@ -354,12 +354,12 @@ class Master_Bot(commands.Bot):
             (notes, int(result), interaction.id, mod_id, registrant_id),
         )
 
-        self.execute(
+        DB.execute(
             "UPDATE users SET assignedRegistrant = NULL WHERE discord_id = ?",
             (mod_id,),
         )
 
-        self.execute(
+        DB.execute(
             "UPDATE users SET rating = ? WHERE discord_id = ?", (rating, registrant_id)
         )
 
@@ -494,18 +494,18 @@ class Master_Bot(commands.Bot):
                     ephemeral=True,
                 )
 
-            self.execute(
+            DB.execute(
                 "UPDATE users SET modsRemaining = modsRemaining - 1 WHERE discord_id = ?",
                 (new_registrant,),
             )
-            self.execute(
+            DB.execute(
                 "UPDATE users SET assignedRegistrant = ? WHERE discord_id = ?",
                 (
                     new_registrant,
                     mod_id,
                 ),
             )
-            self.execute(
+            DB.execute(
                 "INSERT INTO mod_notes (request_id, mod_id, registrant_id) VALUES (?, ?, ?)",
                 (interaction.id, mod_id, new_registrant),
             )
@@ -594,17 +594,17 @@ class Master_Bot(commands.Bot):
                 ),
             )
             if already_vouched:
-                self.execute(
+                DB.execute(
                     f"UPDATE vouches SET notes=? WHERE voucher_id={interaction.user.id} AND vouchee_id={user.id}",
                     (note,),
                 )
                 msg = f"Updated your vouch for {user.mention}."
             else:
                 # New vouch
-                self.execute(
+                DB.execute(
                     f"UPDATE users SET timesVouched = timesVouched + 1 WHERE discord_id = {user.id}"
                 )
-                self.execute(
+                DB.execute(
                     f"INSERT INTO vouches (vouch_id, vouchee_id, voucher_id, notes) VALUES ({interaction.id}, {user.id}, {interaction.user.id}, ?)",
                     (note,),
                 )
@@ -647,7 +647,7 @@ class Master_Bot(commands.Bot):
                     f"Use <#{mod_channel}>", ephemeral=True
                 )
 
-            self.execute(f"UPDATE users SET rating={rating} WHERE discord_id={user.id}")
+            DB.execute(f"UPDATE users SET rating={rating} WHERE discord_id={user.id}")
             await interaction.response.send_message(
                 f"Set {user.display_name}'s rating to {rating}.", ephemeral=True
             )
@@ -940,14 +940,14 @@ class Master_Bot(commands.Bot):
         # Update radiant ratings
         for i, pid in enumerate(radiant):
             new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
-            self.execute(
+            DB.execute(
                 "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
             )
 
         # Update dire ratings
         for i, pid in enumerate(dire):
             new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
-            self.execute(
+            DB.execute(
                 "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
             )
 
