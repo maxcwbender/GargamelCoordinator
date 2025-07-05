@@ -74,9 +74,12 @@ class DotaTalker:
         Returns:
             str: Password of the created lobby or "-1" if no client is available.
         """
-
+        [print(f"Radiant ID: {did}") for did in radiant_discord_ids]
+        [print(f"Dire ID: {did}") for did in radiant_discord_ids]
         radiant_steam_ids = [DB.fetch_steam_id(did) for did in radiant_discord_ids]
         dire_steam_ids = [DB.fetch_steam_id(did) for did in dire_discord_ids]
+        # print(f"Radiant steam ids: {radiant_steam_ids}")
+        # print(f"Dire steam ids: {dire_steam_ids}")
 
         for i in range(self.config["numClients"]):
             client = self.dotaClients[i]
