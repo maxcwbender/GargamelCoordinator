@@ -976,6 +976,9 @@ class Master_Bot(commands.Bot):
         try:
             target_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
             all_members = radiant_channel.members + dire_channel.members
+            for member in all_members:
+                print(
+                    f"{member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
             move_tasks = [
                 member.move_to(target_channel)
                 for member in all_members
@@ -983,7 +986,10 @@ class Master_Bot(commands.Bot):
             ]
             delete_channels_tasks = [radiant_channel.delete(), dire_channel.delete()]
             await asyncio.gather(*move_tasks)
-            await asyncio.gather(*delete_channels_tasks)
+            await asyncio.gather(
+                radiant_channel.delete(),
+                dire_channel.delete()
+            )
 
         except Exception as _:
             print(f"Unexpected Exception: ")

@@ -16,11 +16,8 @@ def fetch_one(query, params=()):
     Returns:
         tuple or None: The first row of the result set, or None if no results.
     """
-    print(f"Query: {query}")
-    print(f"Params: {params}")
-    cursor = con.cursor()
-    result = cursor.execute(query, params).fetchone()
-    print(f"Result: {result}")
+
+    result = con.execute(query, params).fetchone()
     return result[0] if result else None
 
 def fetch_all(query, params=()):
@@ -33,8 +30,8 @@ def fetch_all(query, params=()):
     Returns:
         list of tuples: All rows matching the query.
     """
-    cursor = con.cursor()
-    return cursor.execute(query, params).fetchall()
+
+    return con.execute(query, params).fetchall()
 
 def execute(query, params=()):
     """Execute a SQL command (INSERT, UPDATE, DELETE).
@@ -75,8 +72,8 @@ def fetch_steam_id(discord_id: str):
     Returns:
         str: the Steam id associated with the given Discord id
     """
-    query = "SELECT steam_id FROM users WHERE discord_id = ?"
-    return fetch_one("SELECT steam_id FROM users WHERE discord_id = ?",
+    query = f"SELECT steam_id FROM users WHERE discord_id = ?"
+    return fetch_one(query,
         (discord_id,))
 
 def fetch_rating(discord_id: str):
