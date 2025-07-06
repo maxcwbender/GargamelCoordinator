@@ -16,6 +16,7 @@ def fetch_one(query, params=()):
     Returns:
         tuple or None: The first row of the result set, or None if no results.
     """
+
     result = con.execute(query, params).fetchone()
     return result[0] if result else None
 
@@ -29,6 +30,7 @@ def fetch_all(query, params=()):
     Returns:
         list of tuples: All rows matching the query.
     """
+
     return con.execute(query, params).fetchall()
 
 def execute(query, params=()):
@@ -70,7 +72,8 @@ def fetch_steam_id(discord_id: str):
     Returns:
         str: the Steam id associated with the given Discord id
     """
-    return fetch_one("SELECT steam_id FROM users WHERE discord_id = ?",
+    query = f"SELECT steam_id FROM users WHERE discord_id = ?"
+    return fetch_one(query,
         (discord_id,))
 
 def fetch_rating(discord_id: str):
@@ -83,7 +86,8 @@ def fetch_rating(discord_id: str):
     Returns:
         str: the rating associated with the given Discord id
     """
-    return fetch_one("SELECT rating FROM users WHERE discord_id = ?",
+    query = f"SELECT rating FROM users WHERE discord_id = ?"
+    return fetch_one(query,
         (discord_id,))
 
 def query_mod_results(user_id: int) -> tuple[int, int, int]:
@@ -96,8 +100,9 @@ def query_mod_results(user_id: int) -> tuple[int, int, int]:
     Returns:
         tuple(int, int, int): Counts of (approvals, disapprovals, undecided) mod votes.
     """
+    query = f"SELECT result FROM mod_notes WHERE registrant_id = ?"
     rows = fetch_all(
-        "SELECT result FROM mod_notes WHERE registrant_id = ?", (user_id,)
+        query, (user_id,)
     )
     A = sum(1 for r in rows if r[0] == 1)
     D = sum(1 for r in rows if r[0] == 0)
