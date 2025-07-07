@@ -10,16 +10,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import random
-import numpy as np
 import signal
-import traceback
+
 import DBFunctions as DB
+from logger import setup_logging
 import logging
 
-
-import logger
-
-logger.setup_logging()
 
 """
 Main bot script for Discord MasterBot managing Dota 2 community interactions.
@@ -35,6 +31,8 @@ Features:
 Author: m'bender *tips hat*
 """
 
+setup_logging()
+logger = logging.getLogger(__name__)
 
 class Master_Bot(commands.Bot):
     """
@@ -62,6 +60,7 @@ class Master_Bot(commands.Bot):
         Args:
             config_path (str): Path to JSON configuration file.
         """
+
         with open(config_path) as f:
             self.config = json.load(f)
 
@@ -106,7 +105,7 @@ class Master_Bot(commands.Bot):
         # await self.tree.sync(guild=self.the_guild)  # optional: sync for specific guild
 
     def handle_exit_signals(self, signum, frame):
-        logging.info(f"Received exit signal {signum}, cleaning up bot creations.")
+        logger.info(f"Received exit signal {signum}, cleaning up bot creations.")
 
         # Clean up Discord Voice and Text Channels, Clear the Bot Channel
         # TODO: Clean up Dota Lobbies that are empty if we bailed at the wrong time.
@@ -116,7 +115,7 @@ class Master_Bot(commands.Bot):
             try:
                 await self.clean_up_on_exit_helper()
             except Exception as e:
-                logging.exception(f"Cleanup failed with exception: {e}")
+                logger.exception(f"Cleanup failed with exception: {e}")
 
         loop.create_task(shutdown_sequence())
 
@@ -147,12 +146,13 @@ class Master_Bot(commands.Bot):
         await self.close()
 
         pending = [t for t in asyncio.all_tasks() if not t.done()]
-        logging.debug(f"🔍 Pending tasks after self.close: {len(pending)}")
+        logger.debug(f"🔍 Pending tasks after self.close: {len(pending)}")
 
         for task in pending:
-            logging.debug(f" - {task}")
+            logger.debug(f" - {task}")
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
+
         if self.coordinator.in_queue(interaction.user.id):
             await interaction.response.send_message(
                 "You're already in the queue, bozo.", ephemeral=True
@@ -161,7 +161,7 @@ class Master_Bot(commands.Bot):
 
         rating = DB.fetch_rating(interaction.user.id)
         if not rating:
-            logging.info(f"User with ID: {interaction.user.id} doesn't have a rating")
+            logger.info(f"User with ID: {interaction.user.id} doesn't have a rating")
             await interaction.response.send_message(
                 "You don't have a rating yet. Talk to an Administrator to get started.",
                 ephemeral=True,
@@ -242,13 +242,13 @@ class Master_Bot(commands.Bot):
         async def handle(reader, writer):
             addr = writer.get_extra_info("peername")
             if addr[0] != "127.0.0.1":
-                logging.debug(f"Blocked non-local request: {addr}")
+                logger.debug(f"Blocked non-local request: {addr}")
                 writer.close()
                 return
 
             data = await reader.read(1024)
             message = data.decode().strip()
-            logging.info(f"steam_id found: {message}")
+            logger.info(f"steam_id found: {message}")
             self.dispatch("steam_id_found", int(message))
             writer.close()
 
@@ -438,7 +438,7 @@ class Master_Bot(commands.Bot):
 
         All slash command handlers are defined as nested async functions here.
         """
-        logging.info(f"Logged in as {self.user}")
+        logger.info(f"Logged in as {self.user}")
         await self._start_tcp_server()
         self.the_guild = self.guilds[0]
 
@@ -863,7 +863,7 @@ class Master_Bot(commands.Bot):
                 try:
                     await new_member.move_to(radiant_channel)
                 except (discord.HTTPException, discord.ClientException):
-                    logging.exception(
+                    logger.exception(
                         f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
                     )
             else:
@@ -872,7 +872,7 @@ class Master_Bot(commands.Bot):
                 try:
                     await new_member.move_to(dire_channel)
                 except (discord.HTTPException, discord.ClientException):
-                    logging.exception(
+                    logger.exception(
                         f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
                     )
             self.game_map.pop(old_member.id, None)
@@ -986,14 +986,14 @@ class Master_Bot(commands.Bot):
             target_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
             all_members = radiant_channel.members + dire_channel.members
             for member in all_members:
-                logging.info(
+                logger.info(
                     f"{member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
             move_tasks = [
                 member.move_to(target_channel)
                 for member in all_members
                 if member.voice and member.voice.channel != target_channel
             ]
-            delete_channels_tasks = [radiant_channel.delete(), dire_channel.delete()]
+
             await asyncio.gather(*move_tasks)
             await asyncio.gather(
                 radiant_channel.delete(),
@@ -1001,7 +1001,7 @@ class Master_Bot(commands.Bot):
             )
 
         except Exception as _:
-            logging.exception(f"Unexpected Exception: ")
+            logger.exception(f"Unexpected Exception: ")
 
     async def on_steam_id_found(self, discord_id: int):
         """
@@ -1059,7 +1059,7 @@ class Master_Bot(commands.Bot):
                     f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮"
                 )
             except discord.Forbidden:
-                logging.exception(f"Tried to send a message to {m.name} but failed?")
+                logger.exception(f"Tried to send a message to {m.name} but failed?")
             self.game_map[member_id] = game_id
             self.game_map_inverse[game_id][0].add(member_id)
         for member_id in dire:
@@ -1069,7 +1069,7 @@ class Master_Bot(commands.Bot):
                     f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮"
                 )
             except discord.Forbidden:
-                logging.exception(f"Tried to send a message to {m.name} but failed?")
+                logger.exception(f"Tried to send a message to {m.name} but failed?")
             self.game_map[member_id] = game_id
             self.game_map_inverse[game_id][1].add(member_id)
 
@@ -1124,7 +1124,7 @@ class Master_Bot(commands.Bot):
             ]
             await asyncio.gather(*tasks)
         except Exception as e:
-            logging.exception(f"Unexpected Exception: {e}")
+            logger.exception(f"Unexpected Exception: {e}")
 
         self.lobby_messages[game_id] = message
 
@@ -1137,3 +1137,4 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, bot.handle_exit_signals)
     signal.signal(signal.SIGTERM, bot.handle_exit_signals)
     bot.run()
+
