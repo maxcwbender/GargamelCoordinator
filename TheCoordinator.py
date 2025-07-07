@@ -5,6 +5,7 @@ import json
 from typing import List, Tuple
 from DBFunctions import power_mean
 import logging
+logger = logging.getLogger(__name__)
 
 with open("config.json") as configFile:
     config: dict = json.load(configFile)
@@ -83,16 +84,16 @@ if __name__ == "__main__":
 
     for i in range(TEAM_SIZE * 2 * 2):
         players[str(i)] = random.randint(2000, 6000)
-        logging.info(f"added player {str(i)} with skill {players[str(i)]}")
+        logger.info(f"added player {str(i)} with skill {players[str(i)]}")
         coordinator.add_player(str(i), players[str(i)])
 
     for player, (rating, priority) in coordinator.queue.items():
-        logging.info(f"{player} : ({rating, priority})")
+        logger.info(f"{player} : ({rating, priority})")
 
     (teamA, teamB) = coordinator.make_game()
-    logging.info(teamA, teamB)
-    logging.info(f"teamA: {math.prod([players[name] for name in teamA]) ** (1/TEAM_SIZE)}")
-    logging.info(f"teamB: {math.prod([players[name] for name in teamB]) ** (1/TEAM_SIZE)}")
+    logger.info(teamA, teamB)
+    logger.info(f"teamA: {math.prod([players[name] for name in teamA]) ** (1/TEAM_SIZE)}")
+    logger.info(f"teamB: {math.prod([players[name] for name in teamB]) ** (1/TEAM_SIZE)}")
 
     for player, (rating, priority) in coordinator.queue.items():
-        logging.info(f"{player} : ({rating, priority})")
+        logger.info(f"{player} : ({rating, priority})")
