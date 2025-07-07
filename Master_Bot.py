@@ -1090,7 +1090,7 @@ class Master_Bot(commands.Bot):
                 self.game_map_inverse[game_id][1].add(member_id)
 
         await asyncio.gather(*send_tasks)
-        
+
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
         radiant_ratings = [DB.fetch_rating(id) for id in radiant]
