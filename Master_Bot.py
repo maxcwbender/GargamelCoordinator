@@ -181,7 +181,7 @@ class Master_Bot(commands.Bot):
 
                 start_game_timer = 60
                 if self.config["DEBUG_MODE"]:
-                    start_timer = 5
+                    start_game_timer = 5
 
                 self.pending_game_task = asyncio.create_task(self._start_game_loop(start_game_timer))
 
@@ -1043,36 +1043,54 @@ class Master_Bot(commands.Bot):
         """
         self.game_counter += 1
         game_id = self.game_counter
-        radiant_channel = await self.the_guild.create_voice_channel(
-            f"Game {self.game_counter} — Radiant"
-        )
-        dire_channel = await self.the_guild.create_voice_channel(
-            f"Game {self.game_counter} — Dire"
-        )
+        # radiant_channel = await self.the_guild.create_voice_channel(
+        #     f"Game {self.game_counter} — Radiant"
+        # )
+        # dire_channel = await self.the_guild.create_voice_channel(
+        #     f"Game {self.game_counter} — Dire"
+        # )
+
+        create_tasks = [
+            self.the_guild.create_voice_channel(f"Game {self.game_counter} — Radiant"),
+            self.the_guild.create_voice_channel(f"Game {self.game_counter} — Dire")
+        ]
+
+        radiant_channel, dire_channel = await asyncio.gather(*create_tasks)
 
         self.game_map_inverse[game_id] = (set(), set())
 
+        send_tasks = []
         for member_id in radiant:
             m = self.the_guild.get_member(member_id)
-            try:
-                await m.send(
-                    f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮"
-                )
-            except discord.Forbidden:
-                logger.exception(f"Tried to send a message to {m.name} but failed?")
-            self.game_map[member_id] = game_id
-            self.game_map_inverse[game_id][0].add(member_id)
+            if m:
+                async def send_message(member=m, channel_id=radiant_channel.id):
+                    try:
+                        await member.send(
+                            f"You were placed in a match! Join your channel: <#{channel_id}> Enjoy 🎮"
+                        )
+                    except Exception as e:
+                        logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
+
+                send_tasks.append(send_message())
+                self.game_map[member_id] = game_id
+                self.game_map_inverse[game_id][0].add(member_id)
         for member_id in dire:
             m = self.the_guild.get_member(member_id)
-            try:
-                await m.send(
-                    f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮"
-                )
-            except discord.Forbidden:
-                logger.exception(f"Tried to send a message to {m.name} but failed?")
-            self.game_map[member_id] = game_id
-            self.game_map_inverse[game_id][1].add(member_id)
+            if m:
+                async def send_message(member=m, channel_id=radiant_channel.id):
+                    try:
+                        await member.send(
+                            f"You were placed in a match! Join your channel: <#{channel_id}> Enjoy 🎮"
+                        )
+                    except Exception as e:
+                        logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
 
+                send_tasks.append(send_message())
+                self.game_map[member_id] = game_id
+                self.game_map_inverse[game_id][1].add(member_id)
+
+        await asyncio.gather(*send_tasks)
+        
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
         radiant_ratings = [DB.fetch_rating(id) for id in radiant]
@@ -1083,7 +1101,7 @@ class Master_Bot(commands.Bot):
         r_dire = DB.power_mean(dire_ratings, 5)
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
-
+        #todo if this is -1 cancel the game, the make game failed
         embed = discord.Embed(
             title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
             color=discord.Color.red(),
