@@ -2,6 +2,7 @@ import random
 import math
 import itertools
 import json
+import heapq
 from typing import List, Tuple
 from DBFunctions import power_mean
 import logging
@@ -43,9 +44,8 @@ class TheCoordinator:
         users, user_infos = zip(*top)
         ratings = [rating for rating, _ in user_infos]
 
-        # Try all split partitions and find the one with smallest diff in power means
-        best_partition = None
-        min_diff = float("inf")
+        
+        heap: list[Tuple[int, list[int]]] = []  # stores (-diff, team1_indices)
 
         for team1_indices in itertools.combinations(range(TEAM_SIZE * 2), TEAM_SIZE):
             team1 = [ratings[i] for i in team1_indices]
@@ -55,15 +55,19 @@ class TheCoordinator:
             team2_rating = power_mean(team2)
             diff = abs(team1_rating - team2_rating)
 
-            if diff < min_diff:
-                min_diff = diff
-                best_partition = team1_indices
+            heapq.heappush(heap, (-diff, team1_indices))
+            if len(heap) > 5:
+                heapq.heappop(heap)
 
-        # Build final team lists
-        team1_users = [users[i] for i in best_partition]
-        team2_users = [
-            users[i] for i in range(TEAM_SIZE * 2) if i not in best_partition
-        ]
+        top_partitions = [(-neg_diff, indices) for neg_diff, indices in heap]
+
+        total_weight = sum(1 / (diff + 1e-6) for diff, _ in top_partitions)
+        probs = [(1 / (diff + 1e-6)) / total_weight for diff, _ in top_partitions]
+
+        selected_partition = random.choices(top_partitions, weights=probs, k=1)[0][1]
+
+        team1_users = [users[i] for i in selected_partition]
+        team2_users = [users[i] for i in range(TEAM_SIZE * 2) if i not in selected_partition]
 
         # Remove players from the queue who were used
         for user in team1_users + team2_users:
