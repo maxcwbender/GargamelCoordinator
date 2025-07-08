@@ -120,6 +120,14 @@ class DotaTalker:
         dotaClient.create_practice_lobby(password=password, options=lobbyConfig)
         logger.info(f"[Client {clientIdx}] Created lobby for game {gameID} with password {dotaClient.password}")
 
+    def get_password(self, game_id: str) -> str:
+        for i in range(self.config["numClients"]):
+            client = self.dotaClients[i]
+            if client.gameID == game_id:
+                return client.password
+            
+        return "-1"
+    
     def swap_players_in_game(self, game_id: int, discord_id_1: int, discord_id_2: int) -> bool:
         """
         Swaps two players between teams in the lobby for the given game ID.

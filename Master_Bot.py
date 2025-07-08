@@ -181,7 +181,7 @@ class Master_Bot(commands.Bot):
 
                 start_game_timer = 60
                 if self.config["DEBUG_MODE"]:
-                    start_timer = 5
+                    start_game_timer = 5
 
                 self.pending_game_task = asyncio.create_task(self._start_game_loop(start_game_timer))
 
@@ -256,6 +256,48 @@ class Master_Bot(commands.Bot):
             handle, "127.0.0.1", self.config["pipePort"]
         )
         asyncio.create_task(self.tcp_server.serve_forever())
+
+    def build_game_embed(self, game_id: int, radiant_ids: list[int], dire_ids: list[int], password: str = None) -> discord.Embed:
+        """
+        Builds a Discord embed showing game info, teams, and ratings.
+
+        Args:
+            game_id (int): The game ID.
+            radiant_ids (list[int]): List of player Discord IDs on Radiant.
+            dire_ids (list[int]): List of player Discord IDs on Dire.
+            password (str, optional): Game password to include. Defaults to None.
+
+        Returns:
+            discord.Embed: The constructed embed message.
+        """
+        radiant_ratings = [DB.fetch_rating(pid) for pid in radiant_ids]
+        dire_ratings = [DB.fetch_rating(pid) for pid in dire_ids]
+
+        r_radiant = DB.power_mean(radiant_ratings, 5)
+        r_dire = DB.power_mean(dire_ratings, 5)
+
+        embed = discord.Embed(
+            title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
+            color=discord.Color.red(),
+        )
+
+        embed.add_field(
+            name=f"🌞 Radiant ({int(r_radiant)})",
+            value="\n".join(
+                f"`{rating}`<@{uid}>" for uid, rating in zip(radiant_ids, radiant_ratings)
+            ) or "*Empty*",
+            inline=True,
+        )
+
+        embed.add_field(
+            name=f"🌚 Dire ({int(r_dire)})",
+            value="\n".join(
+                f"`{rating}`<@{uid}>" for uid, rating in zip(dire_ids, dire_ratings)
+            ) or "*Empty*",
+            inline=True,
+        )
+
+        return embed
 
     async def update_queue_status_message(
         self, new_message: bool = False, content=None
@@ -415,7 +457,7 @@ class Master_Bot(commands.Bot):
                 random.shuffle(teams)
                 radiant, dire = teams
 
-                await self.on_game_created(radiant, dire)
+                await self.make_game(radiant, dire)
 
                 if len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
                     await self.update_queue_status_message(
@@ -516,7 +558,7 @@ class Master_Bot(commands.Bot):
                 (interaction.id, mod_id, new_registrant),
             )
             await interaction.response.send_message(
-                "<@{mod_id}>: assigned <@{new_registrant}>", ephemeral=True
+                f"<@{mod_id}>: assigned <@{new_registrant}>", ephemeral=True
             )
 
         @app_commands.command(
@@ -741,36 +783,10 @@ class Master_Bot(commands.Bot):
             # Recalculate ratings
             radiant = list(radiant_set)
             dire = list(dire_set)
-            radiant_ratings = [DB.fetch_rating(id) for id in radiant]
-            dire_ratings = [DB.fetch_rating(id) for id in dire]
-            r_radiant = DB.power_mean(radiant_ratings, 5)
-            r_dire = DB.power_mean(dire_ratings, 5)
             # Edit original lobby message
             lobby_msg = self.lobby_messages.get(game_id)
 
-            embed = discord.Embed(
-                title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
-                color=discord.Color.red(),
-            )
-
-            embed.add_field(
-                name=f"🌞 Radiant ({int(r_radiant)})",
-                value="\n".join(
-                    f"`{rating}`<@{uid}>"
-                    for uid, rating in zip(radiant, radiant_ratings)
-                )
-                or "*Empty*",
-                inline=True,
-            )
-
-            embed.add_field(
-                name=f"🌚 Dire ({int(r_dire)})",
-                value="\n".join(
-                    f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)
-                )
-                or "*Empty*",
-                inline=True,
-            )
+            embed = self.build_game_embed(game_id, radiant, dire, self.dota_talker.get_password(game_id))
 
             if lobby_msg:
                 await lobby_msg.edit(embed=embed)
@@ -1025,7 +1041,7 @@ class Master_Bot(commands.Bot):
             mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
             await mod_chan.send(f"<@{discord_id}> joined registration queue!")
 
-    async def on_game_created(self, radiant, dire):
+    async def make_game(self, radiant, dire):
         """
         Called when a new game is created.
 
@@ -1056,7 +1072,7 @@ class Master_Bot(commands.Bot):
             m = self.the_guild.get_member(member_id)
             try:
                 await m.send(
-                    f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮"
+                    f"You were placed in a match! Join your channel: <#{radiant_channel.id}> Enjoy 🎮", delete_after=1200
                 )
             except discord.Forbidden:
                 logger.exception(f"Tried to send a message to {m.name} but failed?")
@@ -1066,7 +1082,7 @@ class Master_Bot(commands.Bot):
             m = self.the_guild.get_member(member_id)
             try:
                 await m.send(
-                    f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮"
+                    f"You were placed in a match! Join your channel: <#{dire_channel.id}> Enjoy 🎮", delete_after=1200
                 )
             except discord.Forbidden:
                 logger.exception(f"Tried to send a message to {m.name} but failed?")
@@ -1075,39 +1091,9 @@ class Master_Bot(commands.Bot):
 
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
-        radiant_ratings = [DB.fetch_rating(id) for id in radiant]
-        dire_ratings = [DB.fetch_rating(id) for id in dire]
-
-        # Calculate means and form the most imbalanced teams possible
-        r_radiant = DB.power_mean(radiant_ratings, 5)
-        r_dire = DB.power_mean(dire_ratings, 5)
-
         password = self.dota_talker.make_game(game_id, radiant, dire)
 
-        embed = discord.Embed(
-            title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
-            color=discord.Color.red(),
-        )
-
-        embed.add_field(
-            name=f"🌞 Radiant `{int(r_radiant)}`",
-            value="\n".join(
-                f"`{rating}`<@{uid}>" for uid, rating in zip(radiant, radiant_ratings)
-            )
-            or "*Empty*",
-            inline=True,
-        )
-
-        embed.add_field(
-            name=f"🌚 Dire `{int(r_dire)}`",
-            value="\n".join(
-                f"`{rating}`<@{uid}>" for uid, rating in zip(dire, dire_ratings)
-            )
-            or "*Empty*",
-            inline=True,
-        )
-
-        embed.add_field(name="Password", value=f"{password}", inline=False)
+        embed = self.build_game_embed(game_id, radiant, dire, password)
 
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
         message = await channel.send(embed=embed)
