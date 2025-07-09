@@ -307,6 +307,7 @@ class Master_Bot(commands.Bot):
         """
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         full_queue = list(self.coordinator.get_queue())  # [(discord_id, rating)]
+        queued_ids = {user_id for user_id, _ in full_queue}
 
         team_size = self.config["TEAM_SIZE"]
         embed = discord.Embed(
@@ -322,6 +323,12 @@ class Master_Bot(commands.Bot):
 
             # Add list of Players in General Voice Channel who are not in Queue Here
             # Make new embed underneath the Players in Queue to help see who hasn't clicked the button.
+            voice_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
+            voice_members = voice_channel.members
+
+            not_queued_but_in_general_voice_members = [
+                member for member in voice_members if member.id not in queued_ids
+            ]
 
             embed.add_field(
                 name=f"**Players in queue ({len(full_queue)}):**",  # invisible character to avoid numbering
@@ -329,6 +336,14 @@ class Master_Bot(commands.Bot):
                 inline=False,
             )
 
+            if not_queued_but_in_general_voice_members:
+                not_queued_lines = ", ".join(f"<@{member.id}>" for member in not_queued_but_in_general_voice_members)
+                embed.add_field(
+                    name=f"**Shamefully in General Channel but not in Queue ({len(not_queued_but_in_general_voice_members)}):**",
+                    value=not_queued_lines,
+                    inline=False,
+                )
+                
         else:
 
             leftovers = full_queue[team_size * 2 :]
@@ -1059,12 +1074,6 @@ class Master_Bot(commands.Bot):
         """
         self.game_counter += 1
         game_id = self.game_counter
-        # radiant_channel = await self.the_guild.create_voice_channel(
-        #     f"Game {self.game_counter} — Radiant"
-        # )
-        # dire_channel = await self.the_guild.create_voice_channel(
-        #     f"Game {self.game_counter} — Dire"
-        # )
 
         create_tasks = [
             self.the_guild.create_voice_channel(f"Game {self.game_counter} — Radiant"),
