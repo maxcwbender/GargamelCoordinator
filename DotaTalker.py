@@ -19,8 +19,6 @@ logger = logging.getLogger(__name__)
 
 from enum import IntEnum
 
-import asyncio
-
 class LobbyState(IntEnum):
     UI = 0
     SERVERSETUP = 1
@@ -320,19 +318,8 @@ class DotaTalker:
 
                 dotaClient.leave_practice_lobby()
                 logger.info(f"Calling Dispatch")
-
-                def print_all_asyncio_tasks():
-                    loop = asyncio.get_running_loop()
-                    tasks = asyncio.all_tasks(loop)
-                    logger.info(f"Total asyncio tasks: {len(tasks)}")
-                    for task in tasks:
-                        logger.info(f"Task: {task}, State: {task._state}, Coroutine: {task.get_coro()}")
-
-                print_all_asyncio_tasks()
                 self.discordBot.dispatch("game_ended", dotaClient.gameID, message.match_outcome)
-
                 logger.info(f"Post dispatch call")
-                print_all_asyncio_tasks()
 
                 # Reset Client State
                 dotaClient.gameID = None
