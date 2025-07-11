@@ -297,6 +297,12 @@ class Master_Bot(commands.Bot):
             inline=True,
         )
 
+        embed.add_field(
+            name="Password",
+            value=f"{password}",
+            inline=False
+        )
+
         return embed
 
     async def update_queue_status_message(
