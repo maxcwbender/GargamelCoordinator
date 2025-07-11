@@ -70,7 +70,6 @@ class Master_Bot(commands.Bot):
 
         self.con = sqlite3.connect("allUsers.db")
         self.coordinator = TC.TheCoordinator()
-        self.dota_talker = DotaTalker.DotaTalker(self)
 
         self.the_guild: discord.Guild = None
         self.game_counter = 0
@@ -82,6 +81,7 @@ class Master_Bot(commands.Bot):
         self.queue_status_msg: discord.Message = None
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
+        self.dota_talker: DotaTalker.DotaTalker = None
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -297,6 +297,12 @@ class Master_Bot(commands.Bot):
             inline=True,
         )
 
+        embed.add_field(
+            name="Password",
+            value=f"{password}",
+            inline=False
+        )
+
         return embed
 
     async def update_queue_status_message(
@@ -496,6 +502,8 @@ class Master_Bot(commands.Bot):
         All slash command handlers are defined as nested async functions here.
         """
         logger.info(f"Logged in as {self.user}")
+
+        self.dota_talker = DotaTalker.DotaTalker(self, asyncio.get_event_loop())
         await self._start_tcp_server()
         self.the_guild = self.guilds[0]
 
@@ -954,7 +962,9 @@ class Master_Bot(commands.Bot):
             winner (int): The winner of the game (2 if radiant, 3 if dire)
         """
         radiant, dire = self.game_map_inverse[game_id]
+
         await self.clear_game(game_id)
+
 
         # Retrieve player ratings
         radiant_ratings = [DB.fetch_rating(id) for id in radiant]
@@ -1033,6 +1043,7 @@ class Master_Bot(commands.Bot):
 
         except Exception as _:
             logger.exception(f"Unexpected Exception: ")
+
 
     async def on_steam_id_found(self, discord_id: int):
         """
@@ -1120,6 +1131,8 @@ class Master_Bot(commands.Bot):
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
+
+        # Add game to database, results pending later.`
 
         embed = self.build_game_embed(game_id, radiant, dire, password)
 

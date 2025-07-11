@@ -16,17 +16,42 @@ from Master_Bot import Master_Bot
 import DBFunctions as DB
 import logging
 logger = logging.getLogger(__name__)
+import asyncio
+
+
+from enum import IntEnum
+
+class LobbyState(IntEnum):
+    UI = 0
+    SERVERSETUP = 1
+    RUN = 2
+    POSTGAME = 3
+
+class GameState(IntEnum):
+    INIT = 0
+    STARTING = 1
+    HERO_SELECTION = 2
+    STRATEGY_TIME = 3
+    PRE_GAME = 4
+    IN_PROGRESS = 5
+    POST_GAME = 6
+
+class MatchOutcome(IntEnum):
+    UNKNOWN = 0
+    RADIANT_WIN = 2
+    DIRE_WIN = 3
 
 
 class DotaTalker:
-    def __init__(self, discordBot: 'Master_Bot.Master_Bot'):
+    def __init__(self, discordBot: 'Master_Bot.Master_Bot', loop: asyncio.AbstractEventLoop):
         """
         Initializes the DotaTalker instance and starts client threads.
 
         Args:
             discordBot (Master_Bot.Master_Bot): The Discord bot instance to communicate with.
         """
-        self.discordBot = discordBot
+        self.discordBot: 'Master_Bot.Master_Bot' = discordBot
+        self.loop = loop
         with open("config.json") as configFile:
             self.config: dict = json.load(configFile)
 
@@ -218,6 +243,11 @@ class DotaTalker:
                     if dotaClient.gameID and steam_id in (dotaClient.radiant + dotaClient.dire):
                         dotaClient.invite_to_lobby(steam_id)
 
+        # Seemingly deprecated
+        # @dotaClient.on("match_completed")
+        # def on_match_completed(lobby):
+        #     print("Match Completed Signal Received!")
+
         @dotaClient.on("ready")
         def _():
             logger.info(f"[Client {i}] Dota 2 client ready")
@@ -260,7 +290,7 @@ class DotaTalker:
                 if member.id not in dotaClient.steam.friends:
                     dotaClient.steam.friends.add(member.id)
 
-            if message.state == 0:
+            if message.state == LobbyState.UI:
                 correct = 0
                 for member in message.all_members:
                     sid32 = SteamID(member.id).as_32
@@ -282,15 +312,29 @@ class DotaTalker:
                     dotaClient.launch_practice_lobby()
                     logger.info(f"[Client {i}] Game launched")
 
-            elif message.state == 3:
+            elif message.state == LobbyState.POSTGAME or getattr(message, 'game_state', None) == GameState.POST_GAME:
+                match_id = getattr(message, 'match_id', None)
+                match_outcome = getattr(message, 'match_outcome', MatchOutcome.UNKNOWN)
+
                 logger.info(f"[Client {i}] Game ended, match ID: {message.match_id}")
+                logger.info(f"Match ID: {match_id}, Outcome: {match_outcome}")
+
                 dotaClient.leave_practice_lobby()
-                self.discordBot.dispatch("game_ended", dotaClient.gameID, message.match_outcome)
+
+                asyncio.run_coroutine_threadsafe(
+                    self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome), self.loop
+                )
+
+                # Reset Client State
                 dotaClient.gameID = None
                 dotaClient.radiant = None
                 dotaClient.dire = None
                 dotaClient.password = None
+
                 self.set_ready(i, True)
+
+            else:
+                logger.info(f"Message State was: {message.state} ")
 
         steamClient.login(
             username=self.config.get(f"username_{i}"),
