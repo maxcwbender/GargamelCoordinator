@@ -17,6 +17,7 @@ import DBFunctions as DB
 import logging
 logger = logging.getLogger(__name__)
 import asyncio
+import inspect
 
 from enum import IntEnum
 
@@ -320,6 +321,11 @@ class DotaTalker:
 
                 dotaClient.leave_practice_lobby()
                 logger.info(f"Calling Dispatch")
+
+                if self.loop.is_running():
+                    logger.info("Event loop is running.")
+                else:
+                    logger.warning("Event loop is NOT running.")
 
                 def log_asyncio_tasks_sync(loop):
                     tasks = asyncio.all_tasks(loop=loop)
