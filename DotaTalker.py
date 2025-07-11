@@ -49,7 +49,7 @@ class DotaTalker:
         Args:
             discordBot (Master_Bot.Master_Bot): The Discord bot instance to communicate with.
         """
-        self.discordBot = discordBot
+        self.discordBot: 'Master_Bot.Master_Bot' = discordBot
         self.loop = loop
         with open("config.json") as configFile:
             self.config: dict = json.load(configFile)
@@ -320,9 +320,9 @@ class DotaTalker:
 
                 dotaClient.leave_practice_lobby()
                 logger.info(f"Calling Dispatch")
+                logger.info(f"LOOP IN DotATalker: ", self.loop)
                 asyncio.run_coroutine_threadsafe(
-                    self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome),
-                    self.loop
+                    self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome), self.loop
                 )
                 logger.info(f"Post dispatch call")
 

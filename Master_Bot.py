@@ -70,7 +70,6 @@ class Master_Bot(commands.Bot):
 
         self.con = sqlite3.connect("allUsers.db")
         self.coordinator = TC.TheCoordinator()
-        self.dota_talker = DotaTalker.DotaTalker(self, asyncio.get_event_loop())
 
         self.the_guild: discord.Guild = None
         self.game_counter = 0
@@ -82,6 +81,7 @@ class Master_Bot(commands.Bot):
         self.queue_status_msg: discord.Message = None
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
+        self.dota_talker: DotaTalker.DotaTalker = None
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -496,6 +496,8 @@ class Master_Bot(commands.Bot):
         All slash command handlers are defined as nested async functions here.
         """
         logger.info(f"Logged in as {self.user}")
+        print("LOOP IN MASTER_BOT: ", str(asyncio.get_event_loop()))
+        self.dota_talker = DotaTalker.DotaTalker(self, asyncio.get_event_loop())
         await self._start_tcp_server()
         self.the_guild = self.guilds[0]
 
