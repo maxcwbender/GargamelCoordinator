@@ -321,7 +321,7 @@ class DotaTalker:
 
                 dotaClient.leave_practice_lobby()
                 logger.info(f"Calling Dispatch")
-                logger.info(f"LOOP IN DotATalker: ", self.loop)
+                logger.info(f"LOOP IN DotATalker: ", str(self.loop))
 
                 if self.loop.is_running():
                     logger.info("Event loop is running.")
