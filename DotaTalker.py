@@ -16,6 +16,7 @@ from Master_Bot import Master_Bot
 import DBFunctions as DB
 import logging
 logger = logging.getLogger(__name__)
+import asyncio
 
 from enum import IntEnum
 
@@ -41,7 +42,7 @@ class MatchOutcome(IntEnum):
 
 
 class DotaTalker:
-    def __init__(self, discordBot: 'Master_Bot.Master_Bot'):
+    def __init__(self, discordBot: 'Master_Bot.Master_Bot', loop: AbstractEventLoop):
         """
         Initializes the DotaTalker instance and starts client threads.
 
@@ -49,6 +50,7 @@ class DotaTalker:
             discordBot (Master_Bot.Master_Bot): The Discord bot instance to communicate with.
         """
         self.discordBot = discordBot
+        self.loop = loop
         with open("config.json") as configFile:
             self.config: dict = json.load(configFile)
 
@@ -318,7 +320,10 @@ class DotaTalker:
 
                 dotaClient.leave_practice_lobby()
                 logger.info(f"Calling Dispatch")
-                self.discordBot.dispatch("game_ended", dotaClient.gameID, message.match_outcome)
+                asyncio.run_coroutine_threadsafe(
+                    self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome),
+                    self.loop
+                )
                 logger.info(f"Post dispatch call")
 
                 # Reset Client State

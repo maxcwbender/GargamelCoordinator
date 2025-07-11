@@ -70,7 +70,7 @@ class Master_Bot(commands.Bot):
 
         self.con = sqlite3.connect("allUsers.db")
         self.coordinator = TC.TheCoordinator()
-        self.dota_talker = DotaTalker.DotaTalker(self)
+        self.dota_talker = DotaTalker.DotaTalker(self, asyncio.get_event_loop())
 
         self.the_guild: discord.Guild = None
         self.game_counter = 0
