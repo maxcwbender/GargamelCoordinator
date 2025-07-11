@@ -502,7 +502,7 @@ class Master_Bot(commands.Bot):
         All slash command handlers are defined as nested async functions here.
         """
         logger.info(f"Logged in as {self.user}")
-        print("LOOP IN MASTER_BOT: ", str(asyncio.get_event_loop()))
+
         self.dota_talker = DotaTalker.DotaTalker(self, asyncio.get_event_loop())
         await self._start_tcp_server()
         self.the_guild = self.guilds[0]
@@ -961,11 +961,10 @@ class Master_Bot(commands.Bot):
             game_id (int): Identifier for the ended game.
             winner (int): The winner of the game (2 if radiant, 3 if dire)
         """
-        logger.info(f"On Game ended function entered")
         radiant, dire = self.game_map_inverse[game_id]
-        logger.info(f"Clearing game")
+
         await self.clear_game(game_id)
-        logger.info(f"Post clear game")
+
 
         # Retrieve player ratings
         radiant_ratings = [DB.fetch_rating(id) for id in radiant]
@@ -1000,7 +999,6 @@ class Master_Bot(commands.Bot):
             )
 
         # Todo: Add match results to Database here
-        logger.info(f"On Game ended function exiting")
 
     async def clear_game(self, game_id: int):
         """
@@ -1009,7 +1007,7 @@ class Master_Bot(commands.Bot):
         Args:
             game_id (int): The ID of the game to cancel.
         """
-        logger.info("Entered clear_game function")
+
         radiant, dire = self.game_map_inverse[game_id]
         del self.game_map_inverse[game_id]
 
@@ -1045,7 +1043,7 @@ class Master_Bot(commands.Bot):
 
         except Exception as _:
             logger.exception(f"Unexpected Exception: ")
-        logger.info("Exiting Clear game function")
+
 
     async def on_steam_id_found(self, discord_id: int):
         """
