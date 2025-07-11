@@ -317,14 +317,18 @@ class DotaTalker:
                 logger.info(f"Match ID: {match_id}, Outcome: {match_outcome}")
 
                 dotaClient.leave_practice_lobby()
+                logger.info(f"Calling Dispatch")
                 self.discordBot.dispatch("game_ended", dotaClient.gameID, message.match_outcome)
+                logger.info(f"Post dispatch call")
 
                 # Reset Client State
                 dotaClient.gameID = None
                 dotaClient.radiant = None
                 dotaClient.dire = None
                 dotaClient.password = None
+                logger.info(f"Setting ready")
                 self.set_ready(i, True)
+                logger.info(f"set_ready post")
 
             else:
                 logger.info(f"Message State was: {message.state} ")
