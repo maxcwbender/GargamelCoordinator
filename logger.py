@@ -8,7 +8,7 @@ def setup_logging():
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     logging.getLogger('discord.http').setLevel(logging.DEBUG)
     logging.basicConfig(
-        level=logging.DEBUG,  # Capture everything from DEBUG and up
+        level=logging.INFO,  # Capture everything from DEBUG and up
         format='[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
         handlers = [
             logging.FileHandler(f'logs/Gargamel_Log_{timestamp}.txt', encoding='utf-8'),
