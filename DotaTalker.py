@@ -17,6 +17,7 @@ import DBFunctions as DB
 import logging
 logger = logging.getLogger(__name__)
 import asyncio
+import inspect
 
 from enum import IntEnum
 
@@ -321,6 +322,23 @@ class DotaTalker:
                 dotaClient.leave_practice_lobby()
                 logger.info(f"Calling Dispatch")
                 logger.info(f"LOOP IN DotATalker: ", self.loop)
+
+                if self.loop.is_running():
+                    logger.info("Event loop is running.")
+                else:
+                    logger.warning("Event loop is NOT running.")
+
+                def log_asyncio_tasks_sync(loop):
+                    tasks = asyncio.all_tasks(loop=loop)
+
+                    logger.info(f"[SYNC] Total asyncio tasks: {len(tasks)}")
+                    for task in tasks:
+                        coro = task.get_coro()
+                        coro_name = coro.__name__ if inspect.iscoroutine(coro) else str(coro)
+                        logger.info(f"[SYNC] Task: {coro_name} | Done: {task.done()} | Task: {task}")
+
+                log_asyncio_tasks_sync(self.loop)
+
                 asyncio.run_coroutine_threadsafe(
                     self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome), self.loop
                 )
@@ -334,6 +352,7 @@ class DotaTalker:
                 logger.info(f"Setting ready")
                 self.set_ready(i, True)
                 logger.info(f"set_ready post")
+                log_asyncio_tasks_sync(self.loop)
 
             else:
                 logger.info(f"Message State was: {message.state} ")
