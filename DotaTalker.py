@@ -326,6 +326,9 @@ class DotaTalker:
                 dotaClient.password = None
                 self.set_ready(i, True)
 
+            else:
+                logger.info(f"Message State was: {message.state} ")
+
         steamClient.login(
             username=self.config.get(f"username_{i}"),
             password=self.config.get(f"password_{i}"),
