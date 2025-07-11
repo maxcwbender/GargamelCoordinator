@@ -42,7 +42,7 @@ class MatchOutcome(IntEnum):
 
 
 class DotaTalker:
-    def __init__(self, discordBot: 'Master_Bot.Master_Bot', loop: AbstractEventLoop):
+    def __init__(self, discordBot: 'Master_Bot.Master_Bot', loop: asyncio.AbstractEventLoop):
         """
         Initializes the DotaTalker instance and starts client threads.
 
