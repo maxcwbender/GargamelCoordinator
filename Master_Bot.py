@@ -1121,6 +1121,8 @@ class Master_Bot(commands.Bot):
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
 
+        # Add game to database, results pending later.`
+
         embed = self.build_game_embed(game_id, radiant, dire, password)
 
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
