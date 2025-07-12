@@ -334,7 +334,7 @@ class DotaTalker:
                 dotaClient.leave_practice_lobby()
 
                 asyncio.run_coroutine_threadsafe(
-                    self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome, LobbyState.POSTGAME), self.loop
+                    self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome, GameState.POSTGAME), self.loop
                 )
 
                 # Reset Client State
