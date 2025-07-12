@@ -951,13 +951,14 @@ class Master_Bot(commands.Bot):
         # await self.tree.sync()  # Clears global commands from Discord
         # await self.tree.sync(guild=self.the_guild)
 
-    async def on_game_started(self, game_info):
+    async def on_game_started(self, game_id, game_info):
 
+        print(f"Entering on_game_started.")
         match_id = game_info.match_id
         lobby_id = game_info.lobby_id
         state = game_info.state  # Should be LobbyState.RUN
 
-        if lobby_id not in self.pending_matches:
+        if game_id not in self.pending_matches:
             logger.debug(f"Ignoring running lobby message for  ID: {lobby_id} - not in pending matches.")
             return
 
@@ -969,8 +970,8 @@ class Master_Bot(commands.Bot):
                 VALUES (?, ?, ?)
             """, (match_id, lobby_id, state))
 
-            self.pending_matches.remove(lobby_id)
-            logger.info(f"Started game with match_id: {match_id}, lobby_id: {lobby_id}")
+            self.pending_matches.remove(game_id)
+            logger.info(f"Logged into Database game with game_id: {game_id} , match_id: {match_id}, lobby_id: {lobby_id}")
 
             # TODO Add players involved with all their details to match_players
 
