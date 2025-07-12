@@ -294,9 +294,12 @@ class DotaTalker:
             if message.state == LobbyState.RUN:
                 # Only add the coroutine if the match is pending start
                 if dotaClient.gameID in self.discordBot.pending_matches:
+                    logger.info(f"Lobby with gameId {dotaClient.gameID} found in running state that is pending creation.  Sending to Master Bot for DB Add.")
                     asyncio.run_coroutine_threadsafe(
                         self.discordBot.on_game_started(message), self.loop
                     )
+                else:
+                    print(f"Found lobby not in pending matches with gameID: {dotaClient.gameID}")
 
             if message.state == LobbyState.UI:
                 correct = 0
