@@ -954,21 +954,60 @@ class Master_Bot(commands.Bot):
     async def on_game_started(self, game_id, game_info):
 
         print(f"Entering on_game_started.")
-        match_id = game_info.match_id
-        lobby_id = game_info.lobby_id
-        state = game_info.state  # Should be LobbyState.RUN
+        match_id = getattr(game_info, "match_id", None)
+        lobby_id = getattr(game_info, "lobby_id", None)
+        state = getattr(game_info, "state", None)
+        game_mode = getattr(game_info, "game_mode", None)
+        server_region = getattr(game_info, "server_region", None)
+        lobby_type = getattr(game_info, "lobby_type", None)
+        league_id = getattr(game_info, "league_id", None)
 
         if game_id not in self.pending_matches:
             logger.debug(f"Ignoring running lobby message for  ID: {lobby_id} - not in pending matches.")
             return
 
         try:
-            # Record match
-            DB.execute("""
-                INSERT
-                OR IGNORE INTO matches (match_id, lobby_id, state)
-                VALUES (?, ?, ?)
-            """, (match_id, lobby_id, state))
+            # Insert match into DB
+            DB.execute(
+                """
+                INSERT OR IGNORE INTO matches (
+                    match_id, lobby_id, state,
+                    game_mode, server_region, lobby_type, league_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    match_id, lobby_id, state,
+                    game_mode, server_region, lobby_type, league_id
+                ),
+            )
+
+            #Adding players to player_matches
+            # Radiant = team 0, Dire = team 1
+            radiant_ids, dire_ids = self.game_map_inverse.get(game_id, (set(), set()))
+            for discord_id in radiant_ids:
+                mmr = DB.fetch_rating(discord_id)
+                logging.info(f"Adding Radiant player: discord_id {discord_id} to database for match_id: {match_id} with mmr: {mmr}")
+                DB.execute(
+                    """
+                    INSERT INTO match_players (match_id, discord_id, team, mmr)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (match_id, discord_id, 0, mmr)  # 0 = Radiant
+                )
+
+
+            for discord_id in dire_ids:
+                mmr = DB.fetch_rating(discord_id)
+                logging.info(
+                    f"Adding Dire player: discord_id {discord_id} to database for match_id: {match_id} with mmr: {mmr}")
+                DB.execute(
+                    """
+                    INSERT INTO match_players (match_id, discord_id, team, mmr)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (match_id, discord_id, 1, mmr)  # 0 = Radiant
+                )
 
             self.pending_matches.remove(game_id)
             logger.info(f"Logged into Database game with game_id: {game_id} , match_id: {match_id}, lobby_id: {lobby_id}")
