@@ -1017,7 +1017,7 @@ class Master_Bot(commands.Bot):
         except Exception as e:
             logger.exception(f"Failed to add new game to DB with error: {e}")
 
-    async def on_game_ended(self, game_id: int, winner: int):
+    async def on_game_ended(self, game_id: int, winner: int, game_state: int):
         """
         Cleanup after a game ends and update ratings.
 
@@ -1049,22 +1049,35 @@ class Master_Bot(commands.Bot):
         e_dire = 1 - e_radiant
 
         k = self.config.get("ELO_K")  # Use config or default
+        try:
+            # Update radiant ratings
+            for i, pid in enumerate(radiant):
+                new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
+                DB.execute(
+                    "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                )
 
-        # Update radiant ratings
-        for i, pid in enumerate(radiant):
-            new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
-            DB.execute(
-                "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-            )
+            # Update dire ratings
+            for i, pid in enumerate(dire):
+                new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
+                DB.execute(
+                    "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                )
+        except Exception as e:
+            logging.exception(f"Error updating users table with ratings with err: {e}")
 
-        # Update dire ratings
-        for i, pid in enumerate(dire):
-            new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
-            DB.execute(
-                "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-            )
 
-        # Todo: Add match results to Database here
+        try:
+            # Update match with game state POSTGAME and Winner details
+            logging.info(f"Logging match results in DB for game {game_id} with winner: {winner}")
+            DB.execute("""
+                UPDATE matches
+                SET winning_team = ?, state = ?
+                WHERE match_id = ?
+            """, (winner, game_state, game_id))
+        except Exception as e:
+            logger.exception(f"Error updating matches table with err: {e}")
+
 
     async def clear_game(self, game_id: int):
         """
