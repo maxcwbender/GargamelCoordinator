@@ -59,6 +59,7 @@ class DotaTalker:
         self.dotaClients: list[Dota2Client] = [None] * self.config["numClients"]
         self.client_ready: dict[int, bool] = {}
         self.gameBacklog: list[list[int]] = []
+        self.pending_matches = []
 
         for i in range(self.config["numClients"]):
             t = Thread(target=self.setupClient, args=(i,), daemon=True)
@@ -289,6 +290,13 @@ class DotaTalker:
                 logger.info(f"Member.id: {member.id}, Member.team: {member.team}, Member.name: {member.name}, Member.slot: {member.slot}, Member.channel: {member.channel}")
                 if member.id not in dotaClient.steam.friends:
                     dotaClient.steam.friends.add(member.id)
+
+            if message.state == LobbyState.RUN:
+                # Only add the coroutine if the match is pending start
+                if dotaClient.gameID in self.discordBot.pending_matches:
+                    asyncio.run_coroutine_threadsafe(
+                        self.discordBot.on_game_started(message), self.loop
+                    )
 
             if message.state == LobbyState.UI:
                 correct = 0

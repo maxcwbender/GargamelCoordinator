@@ -90,6 +90,8 @@ def fetch_rating(discord_id: str):
     return fetch_one(query,
         (discord_id,))
 
+# Use this as a temporary lobby + 1 before making the actual game when it starts
+
 def query_mod_results(user_id: int) -> tuple[int, int, int]:
     """
     Count moderation results for a user.

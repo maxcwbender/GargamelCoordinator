@@ -72,7 +72,6 @@ class Master_Bot(commands.Bot):
         self.coordinator = TC.TheCoordinator()
 
         self.the_guild: discord.Guild = None
-        self.game_counter = 0
         self.game_channels: dict[
             int, Tuple[discord.VoiceChannel, discord.VoiceChannel]
         ] = {}
@@ -82,6 +81,7 @@ class Master_Bot(commands.Bot):
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
         self.dota_talker: DotaTalker.DotaTalker = None
+        self.pending_matches = set()
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -951,6 +951,32 @@ class Master_Bot(commands.Bot):
         # await self.tree.sync()  # Clears global commands from Discord
         # await self.tree.sync(guild=self.the_guild)
 
+    async def on_game_started(self, game_info):
+
+        match_id = game_info.match_id
+        lobby_id = game_info.lobby_id
+        state = game_info.state  # Should be LobbyState.RUN
+
+        if lobby_id not in self.pending_matches:
+            logger.debug(f"Ignoring running lobby message for  ID: {lobby_id} - not in pending matches.")
+            return
+
+        try:
+            # Record match
+            DB.execute("""
+                INSERT
+                OR IGNORE INTO matches (match_id, lobby_id, state)
+                VALUES (?, ?, ?)
+            """, (match_id, lobby_id, state))
+
+            self.pending_matches.remove(lobby_id)
+            logger.info(f"Started game with match_id: {match_id}, lobby_id: {lobby_id}")
+
+            # TODO Add players involved with all their details to match_players
+
+        except Exception as e:
+            logger.exception(f"Failed to add new game to DB with error: {e}")
+
     async def on_game_ended(self, game_id: int, winner: int):
         """
         Cleanup after a game ends and update ratings.
@@ -1083,8 +1109,16 @@ class Master_Bot(commands.Bot):
             radiant (list[int]): List of Discord IDs for Radiant team players.
             dire (list[int]): List of Discord IDs for Dire team players.
         """
-        self.game_counter += 1
+        # Create a temporary game ID
+        try:
+            result = DB.fetch_one("SELECT MAX(match_id) FROM matches")
+            self.game_counter = (result or 0) + 1
+        except Exception as e:
+            logger.exception(f"Failed to count matches from DB: {e}")
+            self.game_counter += 1  # Fallback increment
+
         game_id = self.game_counter
+        self.pending_matches.add(game_id)
 
         create_tasks = [
             self.the_guild.create_voice_channel(f"Game {self.game_counter} — Radiant"),
@@ -1131,6 +1165,7 @@ class Master_Bot(commands.Bot):
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
+
 
         # Add game to database, results pending later.`
 
