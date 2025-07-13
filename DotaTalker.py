@@ -334,6 +334,8 @@ class DotaTalker:
                     self.loop
                 )
 
+                logger.info(f"Past coroutine run")
+
                 # Reset Client State
                 dotaClient.gameID = None
                 dotaClient.radiant = None

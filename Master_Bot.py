@@ -1028,7 +1028,7 @@ class Master_Bot(commands.Bot):
             game_id (int): Identifier for the ended game.
             game_info: Object containing all game information
         """
-
+        logging.info(f"Entered on game ended")
         radiant, dire = self.game_map_inverse[game_id]
 
         await self.clear_game(game_id)
@@ -1076,6 +1076,7 @@ class Master_Bot(commands.Bot):
                 SET winning_team = ?, state = ?
                 WHERE match_id = ?
             """, (game_info.winner, game_info.game_state, game_info.match_id))
+            logging.info(f"Post results add")
         except Exception as e:
             logger.exception(f"Error updating matches table with err: {e}")
 
