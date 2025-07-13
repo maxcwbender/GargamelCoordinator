@@ -1028,29 +1028,30 @@ class Master_Bot(commands.Bot):
             game_id (int): Identifier for the ended game.
             game_info: Object containing all game information
         """
-        logging.info(f"Entered on game ended")
-        radiant, dire = self.game_map_inverse[game_id]
-
-        await self.clear_game(game_id)
-
-        # Retrieve player ratings
-        radiant_ratings = [DB.fetch_rating(id) for id in radiant]
-        dire_ratings = [DB.fetch_rating(id) for id in dire]
-
-        # Calculate means
-        r_radiant = DB.power_mean(radiant_ratings, 5)
-        r_dire = DB.power_mean(dire_ratings, 5)
-
-        # Determine results
-        s_radiant = 1 if game_info.winner == 2 else 0
-        s_dire = 1 - s_radiant
-
-        # ELO expected scores
-        e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
-        e_dire = 1 - e_radiant
-
-        k = self.config.get("ELO_K")  # Use config or default
         try:
+            logging.info(f"Entered on game ended")
+            radiant, dire = self.game_map_inverse[game_id]
+
+            await self.clear_game(game_id)
+
+            # Retrieve player ratings
+            radiant_ratings = [DB.fetch_rating(id) for id in radiant]
+            dire_ratings = [DB.fetch_rating(id) for id in dire]
+
+            # Calculate means
+            r_radiant = DB.power_mean(radiant_ratings, 5)
+            r_dire = DB.power_mean(dire_ratings, 5)
+
+            # Determine results
+            s_radiant = 1 if game_info.winner == 2 else 0
+            s_dire = 1 - s_radiant
+
+            # ELO expected scores
+            e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
+            e_dire = 1 - e_radiant
+
+            k = self.config.get("ELO_K")  # Use config or default
+
             # Update radiant ratings
             for i, pid in enumerate(radiant):
                 new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
