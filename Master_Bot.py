@@ -963,6 +963,8 @@ class Master_Bot(commands.Bot):
         lobby_type = getattr(game_info, "lobby_type", None)
         league_id = getattr(game_info, "league_id", None)
 
+        logger.info(f"League id: <{league_id}>")
+
         if game_id not in self.pending_matches:
             logger.debug(f"Ignoring running lobby message for  ID: {lobby_id} - not in pending matches.")
             return
