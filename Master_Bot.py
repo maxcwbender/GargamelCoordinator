@@ -1043,7 +1043,7 @@ class Master_Bot(commands.Bot):
             r_dire = DB.power_mean(dire_ratings, 5)
 
             # Determine results
-            s_radiant = 1 if game_info.winner == 2 else 0
+            s_radiant = 1 if game_info.match_outcome == 2 else 0
             s_dire = 1 - s_radiant
 
             # ELO expected scores
@@ -1071,12 +1071,12 @@ class Master_Bot(commands.Bot):
 
         try:
             # Update match with game state POSTGAME and Winner details
-            logging.info(f"Logging match results in DB for match_id {game_info.match_id} with winner: {game_info.winner} and game_state: {game_info.game_state}")
+            logging.info(f"Logging match results in DB for match_id {game_info.match_id} with winner: {game_info.match_outcome} and game_state: {game_info.game_state}")
             DB.execute("""
                 UPDATE matches
                 SET winning_team = ?, state = ?
                 WHERE match_id = ?
-            """, (game_info.winner, game_info.game_state, game_info.match_id))
+            """, (game_info.match_outcome, game_info.game_state, game_info.match_id))
             logging.info(f"Post results add")
         except Exception as e:
             logger.exception(f"Error updating matches table with err: {e}")
