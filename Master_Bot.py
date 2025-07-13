@@ -948,8 +948,9 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(cancel_game)
         self.tree.add_command(ping)
 
-        # await self.tree.sync()  # Clears global commands from Discord
-        # await self.tree.sync(guild=self.the_guild)
+        if not self.config["DEBUG_MODE"]:
+            await self.tree.sync()  # Clears global commands from Discord
+            await self.tree.sync(guild=self.the_guild)
 
     async def on_game_started(self, game_id, game_info):
 
@@ -1017,7 +1018,7 @@ class Master_Bot(commands.Bot):
         except Exception as e:
             logger.exception(f"Failed to add new game to DB with error: {e}")
 
-    async def on_game_ended(self, game_id: int, winner: int, game_state: int):
+    async def on_game_ended(self, game_id: int, game_info):
         """
         Cleanup after a game ends and update ratings.
 
@@ -1025,12 +1026,12 @@ class Master_Bot(commands.Bot):
 
         Args:
             game_id (int): Identifier for the ended game.
-            winner (int): The winner of the game (2 if radiant, 3 if dire)
+            game_info: Object containing all game information
         """
+
         radiant, dire = self.game_map_inverse[game_id]
 
         await self.clear_game(game_id)
-
 
         # Retrieve player ratings
         radiant_ratings = [DB.fetch_rating(id) for id in radiant]
@@ -1041,7 +1042,7 @@ class Master_Bot(commands.Bot):
         r_dire = DB.power_mean(dire_ratings, 5)
 
         # Determine results
-        s_radiant = 1 if winner == 2 else 0
+        s_radiant = 1 if game_info.winner == 2 else 0
         s_dire = 1 - s_radiant
 
         # ELO expected scores
@@ -1069,12 +1070,12 @@ class Master_Bot(commands.Bot):
 
         try:
             # Update match with game state POSTGAME and Winner details
-            logging.info(f"Logging match results in DB for game {game_id} with winner: {winner}")
+            logging.info(f"Logging match results in DB for match_id {game_info.match_id} with winner: {game_info.winner} and game_state: {game_info.game_state}")
             DB.execute("""
                 UPDATE matches
                 SET winning_team = ?, state = ?
                 WHERE match_id = ?
-            """, (winner, game_state, game_id))
+            """, (game_info.winner, game_info.game_state, game_info.match_id))
         except Exception as e:
             logger.exception(f"Error updating matches table with err: {e}")
 

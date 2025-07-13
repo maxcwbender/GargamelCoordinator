@@ -244,11 +244,6 @@ class DotaTalker:
                     if dotaClient.gameID and steam_id in (dotaClient.radiant + dotaClient.dire):
                         dotaClient.invite_to_lobby(steam_id)
 
-        # Seemingly deprecated
-        # @dotaClient.on("match_completed")
-        # def on_match_completed(lobby):
-        #     print("Match Completed Signal Received!")
-
         @dotaClient.on("ready")
         def _():
             logger.info(f"[Client {i}] Dota 2 client ready")
@@ -334,7 +329,9 @@ class DotaTalker:
                 dotaClient.leave_practice_lobby()
 
                 asyncio.run_coroutine_threadsafe(
-                    self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome, GameState.POSTGAME), self.loop
+                    # self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome, GameState.POSTGAME), self.loop
+                    self.discordBot.on_game_ended(dotaClient.gameID, message),
+                    self.loop
                 )
 
                 # Reset Client State
