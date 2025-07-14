@@ -72,7 +72,6 @@ class Master_Bot(commands.Bot):
         self.coordinator = TC.TheCoordinator()
 
         self.the_guild: discord.Guild = None
-        self.game_counter = 0
         self.game_channels: dict[
             int, Tuple[discord.VoiceChannel, discord.VoiceChannel]
         ] = {}
@@ -82,6 +81,7 @@ class Master_Bot(commands.Bot):
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
         self.dota_talker: DotaTalker.DotaTalker = None
+        self.pending_matches = set()
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -945,13 +945,83 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(set_rating)
         self.tree.add_command(force_start)
         self.tree.add_command(force_swap)
+        self.tree.add_command(force_replace)
         self.tree.add_command(cancel_game)
         self.tree.add_command(ping)
 
-        # await self.tree.sync()  # Clears global commands from Discord
-        # await self.tree.sync(guild=self.the_guild)
+        if not self.config["DEBUG_MODE"]:
+            await self.tree.sync()  # Clears global commands from Discord
+            await self.tree.sync(guild=self.the_guild)
 
-    async def on_game_ended(self, game_id: int, winner: int):
+    async def on_game_started(self, game_id, game_info):
+
+        print(f"Entering on_game_started.")
+        match_id = getattr(game_info, "match_id", None)
+        lobby_id = getattr(game_info, "lobby_id", None)
+        state = getattr(game_info, "state", None)
+        game_mode = getattr(game_info, "game_mode", None)
+        server_region = getattr(game_info, "server_region", None)
+        lobby_type = getattr(game_info, "lobby_type", None)
+        league_id = getattr(game_info, "league_id", None)
+
+        logger.info(f"League id: <{league_id}>")
+
+        if game_id not in self.pending_matches:
+            logger.debug(f"Ignoring running lobby message for  ID: {lobby_id} - not in pending matches.")
+            return
+
+        try:
+            # Insert match into DB
+            DB.execute(
+                """
+                INSERT OR IGNORE INTO matches (
+                    match_id, lobby_id, state,
+                    game_mode, server_region, lobby_type, league_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    match_id, lobby_id, state,
+                    game_mode, server_region, lobby_type, league_id
+                ),
+            )
+
+            #Adding players to player_matches
+            # Radiant = team 0, Dire = team 1
+            radiant_ids, dire_ids = self.game_map_inverse.get(game_id, (set(), set()))
+            for discord_id in radiant_ids:
+                mmr = DB.fetch_rating(discord_id)
+                logging.info(f"Adding Radiant player: discord_id {discord_id} to database for match_id: {match_id} with mmr: {mmr}")
+                DB.execute(
+                    """
+                    INSERT INTO match_players (match_id, discord_id, team, mmr)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (match_id, discord_id, 0, mmr)  # 0 = Radiant
+                )
+
+
+            for discord_id in dire_ids:
+                mmr = DB.fetch_rating(discord_id)
+                logging.info(
+                    f"Adding Dire player: discord_id {discord_id} to database for match_id: {match_id} with mmr: {mmr}")
+                DB.execute(
+                    """
+                    INSERT INTO match_players (match_id, discord_id, team, mmr)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (match_id, discord_id, 1, mmr)  # 0 = Radiant
+                )
+
+            self.pending_matches.remove(game_id)
+            logger.info(f"Logged into Database game with game_id: {game_id} , match_id: {match_id}, lobby_id: {lobby_id}")
+
+            # TODO Add players involved with all their details to match_players
+
+        except Exception as e:
+            logger.exception(f"Failed to add new game to DB with error: {e}")
+
+    async def on_game_ended(self, game_id: int, game_info):
         """
         Cleanup after a game ends and update ratings.
 
@@ -959,46 +1029,61 @@ class Master_Bot(commands.Bot):
 
         Args:
             game_id (int): Identifier for the ended game.
-            winner (int): The winner of the game (2 if radiant, 3 if dire)
+            game_info: Object containing all game information
         """
-        radiant, dire = self.game_map_inverse[game_id]
+        try:
+            logging.info(f"Entered on game ended")
+            radiant, dire = self.game_map_inverse[game_id]
 
-        await self.clear_game(game_id)
+            await self.clear_game(game_id)
+
+            # Retrieve player ratings
+            radiant_ratings = [DB.fetch_rating(id) for id in radiant]
+            dire_ratings = [DB.fetch_rating(id) for id in dire]
+
+            # Calculate means
+            r_radiant = DB.power_mean(radiant_ratings, 5)
+            r_dire = DB.power_mean(dire_ratings, 5)
+
+            # Determine results
+            s_radiant = 1 if game_info.match_outcome == 2 else 0
+            s_dire = 1 - s_radiant
+
+            # ELO expected scores
+            e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
+            e_dire = 1 - e_radiant
+
+            k = self.config.get("ELO_K")  # Use config or default
+
+            # Update radiant ratings
+            for i, pid in enumerate(radiant):
+                new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
+                DB.execute(
+                    "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                )
+
+            # Update dire ratings
+            for i, pid in enumerate(dire):
+                new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
+                DB.execute(
+                    "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                )
+        except Exception as e:
+            logging.exception(f"Error updating users table with ratings with err: {e}")
 
 
-        # Retrieve player ratings
-        radiant_ratings = [DB.fetch_rating(id) for id in radiant]
-        dire_ratings = [DB.fetch_rating(id) for id in dire]
+        try:
+            # Update match with game state POSTGAME and Winner details
+            logging.info(f"Logging match results in DB for match_id {game_info.match_id} with winner: {game_info.match_outcome} and game_state: {game_info.game_state}")
+            DB.execute("""
+                UPDATE matches
+                SET winning_team = ?, state = ?
+                WHERE match_id = ?
+            """, (game_info.match_outcome, game_info.game_state, game_info.match_id))
+            logging.info(f"Post results add")
+        except Exception as e:
+            logger.exception(f"Error updating matches table with err: {e}")
 
-        # Calculate means
-        r_radiant = DB.power_mean(radiant_ratings, 5)
-        r_dire = DB.power_mean(dire_ratings, 5)
-
-        # Determine results
-        s_radiant = 1 if winner == 2 else 0
-        s_dire = 1 - s_radiant
-
-        # ELO expected scores
-        e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
-        e_dire = 1 - e_radiant
-
-        k = self.config.get("ELO_K")  # Use config or default
-
-        # Update radiant ratings
-        for i, pid in enumerate(radiant):
-            new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
-            DB.execute(
-                "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-            )
-
-        # Update dire ratings
-        for i, pid in enumerate(dire):
-            new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
-            DB.execute(
-                "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-            )
-
-        # Todo: Add match results to Database here
 
     async def clear_game(self, game_id: int):
         """
@@ -1067,6 +1152,14 @@ class Master_Bot(commands.Bot):
             mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
             await mod_chan.send(f"<@{discord_id}> joined registration queue!")
 
+    def get_next_game_id(self):
+        try:
+            DB.execute("UPDATE game_counter SET counter = counter + 1 WHERE id = 1")
+            next_game_id = DB.fetch_one("SELECT counter FROM game_counter WHERE id = 1")
+            return next_game_id
+        except Exception as e:
+            logging.exception(f"Error getting next game id: {e}")
+
     async def make_game(self, radiant, dire):
         """
         Called when a new game is created.
@@ -1083,12 +1176,14 @@ class Master_Bot(commands.Bot):
             radiant (list[int]): List of Discord IDs for Radiant team players.
             dire (list[int]): List of Discord IDs for Dire team players.
         """
-        self.game_counter += 1
-        game_id = self.game_counter
+        # Create a temporary game ID
+
+        game_id = self.get_next_game_id()
+        self.pending_matches.add(game_id)
 
         create_tasks = [
-            self.the_guild.create_voice_channel(f"Game {self.game_counter} — Radiant"),
-            self.the_guild.create_voice_channel(f"Game {self.game_counter} — Dire")
+            self.the_guild.create_voice_channel(f"Game {game_id} — Radiant"),
+            self.the_guild.create_voice_channel(f"Game {game_id} — Dire")
         ]
 
         radiant_channel, dire_channel = await asyncio.gather(*create_tasks)
@@ -1131,6 +1226,7 @@ class Master_Bot(commands.Bot):
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
+
 
         # Add game to database, results pending later.`
 

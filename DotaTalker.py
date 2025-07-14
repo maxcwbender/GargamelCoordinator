@@ -59,6 +59,7 @@ class DotaTalker:
         self.dotaClients: list[Dota2Client] = [None] * self.config["numClients"]
         self.client_ready: dict[int, bool] = {}
         self.gameBacklog: list[list[int]] = []
+        self.pending_matches = []
 
         for i in range(self.config["numClients"]):
             t = Thread(target=self.setupClient, args=(i,), daemon=True)
@@ -243,11 +244,6 @@ class DotaTalker:
                     if dotaClient.gameID and steam_id in (dotaClient.radiant + dotaClient.dire):
                         dotaClient.invite_to_lobby(steam_id)
 
-        # Seemingly deprecated
-        # @dotaClient.on("match_completed")
-        # def on_match_completed(lobby):
-        #     print("Match Completed Signal Received!")
-
         @dotaClient.on("ready")
         def _():
             logger.info(f"[Client {i}] Dota 2 client ready")
@@ -290,6 +286,17 @@ class DotaTalker:
                 if member.id not in dotaClient.steam.friends:
                     dotaClient.steam.friends.add(member.id)
 
+            if message.state == LobbyState.RUN:
+                # Only add the coroutine if the match is pending start
+                if dotaClient.gameID in self.discordBot.pending_matches:
+                    logger.info(f"Lobby with gameId {dotaClient.gameID} found in running state that is pending creation.  Sending to Master Bot for DB Add.")
+                    asyncio.run_coroutine_threadsafe(
+                        self.discordBot.on_game_started(dotaClient.gameID, message),
+                        self.loop
+                    )
+                else:
+                    print(f"Found lobby not in pending matches with gameID: {dotaClient.gameID}")
+
             if message.state == LobbyState.UI:
                 correct = 0
                 for member in message.all_members:
@@ -322,8 +329,12 @@ class DotaTalker:
                 dotaClient.leave_practice_lobby()
 
                 asyncio.run_coroutine_threadsafe(
-                    self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome), self.loop
+                    # self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome, GameState.POSTGAME), self.loop
+                    self.discordBot.on_game_ended(dotaClient.gameID, message),
+                    self.loop
                 )
+
+                logger.info(f"Past coroutine run")
 
                 # Reset Client State
                 dotaClient.gameID = None
