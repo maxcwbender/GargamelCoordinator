@@ -1152,10 +1152,12 @@ class Master_Bot(commands.Bot):
             await mod_chan.send(f"<@{discord_id}> joined registration queue!")
 
     def get_next_game_id(self):
-        result = DB.fetch_one("SELECT current FROM game_counter WHERE id = 1")
-        next_game_id = result or 1
-        DB.execute("UPDATE game_counter SET current = ? WHERE id = 1", (next_game_id + 1,))
-        return next_game_id
+        try:
+            DB.execute("UPDATE game_counter SET counter = counter + 1 WHERE id = 1")
+            next_game_id = DB.fetch_one("SELECT counter FROM game_counter WHERE id = 1")
+            return next_game_id
+        except Exception as e:
+            logging.exception(f"Error getting next game id: {e}")
 
     async def make_game(self, radiant, dire):
         """
@@ -1174,15 +1176,6 @@ class Master_Bot(commands.Bot):
             dire (list[int]): List of Discord IDs for Dire team players.
         """
         # Create a temporary game ID
-
-        # Consider replacing with a static count, stored as a simple DB single row, iterated
-        # on with each game and updated.
-        # try:
-        #     result = DB.fetch_one("SELECT MAX(match_id) FROM matches")
-        #     self.game_counter = (result or 0) + 1
-        # except Exception as e:
-        #     logger.exception(f"Failed to count matches from DB: {e}")
-        #     self.game_counter += 1  # Fallback increment
 
         game_id = self.get_next_game_id()
         self.pending_matches.add(game_id)
