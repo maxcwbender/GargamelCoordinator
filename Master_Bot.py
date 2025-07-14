@@ -945,6 +945,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(set_rating)
         self.tree.add_command(force_start)
         self.tree.add_command(force_swap)
+        self.tree.add_command(force_replace)
         self.tree.add_command(cancel_game)
         self.tree.add_command(ping)
 
