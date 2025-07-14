@@ -1181,8 +1181,8 @@ class Master_Bot(commands.Bot):
         self.pending_matches.add(game_id)
 
         create_tasks = [
-            self.the_guild.create_voice_channel(f"Game {self.game_counter} — Radiant"),
-            self.the_guild.create_voice_channel(f"Game {self.game_counter} — Dire")
+            self.the_guild.create_voice_channel(f"Game {game_id} — Radiant"),
+            self.the_guild.create_voice_channel(f"Game {game_id} — Dire")
         ]
 
         radiant_channel, dire_channel = await asyncio.gather(*create_tasks)
