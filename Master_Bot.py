@@ -171,17 +171,12 @@ class Master_Bot(commands.Bot):
         pool_size = self.coordinator.add_player(interaction.user.id, rating)
         await self.update_queue_status_message()
 
-        # Debug mode allows executing with a 2 man game without changing team size
         if pool_size >= self.config["TEAM_SIZE"] * 2:
             if self.pending_game_task is None or self.pending_game_task.done():
 
-                await self.update_queue_status_message(
-                    content="@here Enough players! Game will start in **1 minute** ⏳"
-                )
-
                 start_game_timer = 60
                 if self.config["DEBUG_MODE"]:
-                    start_game_timer = 5
+                    start_game_timer = 15
 
                 self.pending_game_task = asyncio.create_task(self._start_game_loop(start_game_timer))
 
@@ -322,9 +317,11 @@ class Master_Bot(commands.Bot):
 
         if not full_queue:
             embed.description = "*No Players are currently queueing.*"
-        elif len(full_queue) < team_size * 2:
 
-            # embed.description = f"**Players in queue ({len(full_queue)}):**"
+            if self.config["DEBUG_MODE"]:
+                embed.description += f"\n\n <:BrokenRobot:1394750222940377218>*Gargamel Bot is currently set to DEBUG mode. <:BrokenRobot:1394750222940377218>*"
+
+        else:
             player_lines = "\n".join(f"<@{user_id}>" for user_id, rating in full_queue)
 
             # Add list of Players in General Voice Channel who are not in Queue Here
@@ -349,20 +346,28 @@ class Master_Bot(commands.Bot):
                     value=not_queued_lines,
                     inline=False,
                 )
-                
-        else:
 
-            leftovers = full_queue[team_size * 2 :]
-            if leftovers:
+            # Check to see if game is about to be launched for status display
+            if len(full_queue) >= team_size * 2:
                 embed.add_field(
-                    name="🧍‍♂️ Waiting List",
-                    value="\n".join(f"`{rating}`<@{uid}>" for uid, rating in leftovers),
+                    name="\u200b",
+                    value=f"\n@here Enough players! Game will start in **1 minute** ⏳",
                     inline=False,
                 )
 
-        # Allowing custom messages to be added to the queue pane
-        if content is not None:
-            embed.add_field(name="\u200b", value=content, inline=False)
+        # Allowing custom messages to be added to the queue pane after details
+        name = "\u200b"
+        value = "\u200b"
+        inline = False
+        if content:
+            if isinstance(content, str):
+                value = content
+            elif isinstance(content, dict):
+                name = content.get("name", "\u200b")
+                value = content.get("value", "\u200b")
+                inline = content.get("inline", False)  # or whatever default you prefer
+
+            embed.add_field(name=name, value=value, inline=inline)
 
         view = self.QueueButtonView(parent=self)
 
@@ -473,12 +478,12 @@ class Master_Bot(commands.Bot):
                     )
                     break
 
-                radiant, dire = self.coordinator.make_game()
+                radiant, dire, cut_players = self.coordinator.make_game()
                 teams = [radiant, dire]
                 random.shuffle(teams)
                 radiant, dire = teams
 
-                await self.make_game(radiant, dire)
+                await self.make_game(radiant, dire, cut_players)
 
                 if len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
                     await self.update_queue_status_message(
@@ -937,6 +942,39 @@ class Master_Bot(commands.Bot):
             """
             await interaction.response.send_message("Pong!")
 
+        @app_commands.command(name="clear_queue", description="Clear out the Game Queue")
+        async def clear_queue(interaction: discord.Interaction):
+            """
+            Clear out the Coordinator's Game queue and update the GUI
+
+            """
+            self.coordinator.clear_queue()
+            await self.update_queue_status_message()
+
+            return await interaction.response.send_message(
+                f"The queue has been cleared.", ephemeral=True
+            )
+
+        @app_commands.command(name="remove_from_queue", description="Remove Specific Player from Queue")
+        @app_commands.describe(
+            user="User to remove from the Queue"
+        )
+        async def remove_from_queue(
+            interaction: discord.Interaction,
+            user: discord.User,
+        ):
+            """
+            Clear out the Coordinator's Game queue and update the GUI
+
+            """
+            removed = self.coordinator.remove_player(user.id)
+            await self.update_queue_status_message()
+
+            if removed:
+                await interaction.response.send_message(f"Removed {user.mention} from the queue.", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"{user.mention} was not in the queue.", ephemeral=True)
+
         # Add explicitly
         self.tree.add_command(poll_registration)
         self.tree.add_command(approve)
@@ -948,6 +986,8 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(force_replace)
         self.tree.add_command(cancel_game)
         self.tree.add_command(ping)
+        self.tree.add_command(clear_queue)
+        self.tree.add_command(remove_from_queue)
 
         if not self.config["DEBUG_MODE"]:
             await self.tree.sync()  # Clears global commands from Discord
@@ -1160,7 +1200,7 @@ class Master_Bot(commands.Bot):
         except Exception as e:
             logging.exception(f"Error getting next game id: {e}")
 
-    async def make_game(self, radiant, dire):
+    async def make_game(self, radiant, dire, cut_players):
         """
         Called when a new game is created.
 
@@ -1209,10 +1249,26 @@ class Master_Bot(commands.Bot):
         for member_id in dire:
             m = self.the_guild.get_member(member_id)
             if m:
-                async def send_message(member=m, channel_id=radiant_channel.id):
+                async def send_message(member=m, channel_id=dire_channel.id):
                     try:
                         await member.send(
                             f"You were placed in a match! Join your channel: <#{channel_id}> Enjoy 🎮"
+                        )
+                    except Exception as e:
+                        logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
+
+                send_tasks.append(send_message())
+                self.game_map[member_id] = game_id
+                self.game_map_inverse[game_id][1].add(member_id)
+
+        for member_id in cut_players:
+            m = self.the_guild.get_member(member_id)
+            if m:
+                async def send_message(member=m, channel_id=radiant_channel.id):
+                    try:
+                        await member.send(
+                            f"You queued for a Gargamel game, but were put in the cuck chair until next game. 🪑 Your priority has been increased, "
+                            f"and if you remain in the queue your chances of joining the next game are higher. "
                         )
                     except Exception as e:
                         logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
@@ -1226,9 +1282,6 @@ class Master_Bot(commands.Bot):
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
         password = self.dota_talker.make_game(game_id, radiant, dire)
-
-
-        # Add game to database, results pending later.`
 
         embed = self.build_game_embed(game_id, radiant, dire, password)
 
@@ -1250,8 +1303,14 @@ class Master_Bot(commands.Bot):
             logger.exception(f"Unexpected Exception: {e}")
 
         self.lobby_messages[game_id] = message
-
-        await self.update_queue_status_message()
+        if cut_players:
+            content = {
+                "name": f"** 🪑 Players who got put in the cuck chair last game (Selection Priority Increased for next game): 🪑**",
+                "value": "\n".join(f"<@{user_id}>" for user_id in cut_players),
+            }
+            await self.update_queue_status_message(content=content)
+        else:
+            await self.update_queue_status_message()
 
 
 # Run the bot

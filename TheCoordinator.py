@@ -3,7 +3,7 @@ import math
 import itertools
 import json
 import heapq
-from typing import List, Tuple
+from typing import List, Tuple, Set
 from DBFunctions import power_mean
 import logging
 logger = logging.getLogger(__name__)
@@ -35,7 +35,10 @@ class TheCoordinator:
             for user, info in sorted(self.queue.items(), key=lambda x: -x[1][1])
         ]
 
-    def make_game(self) -> Tuple[List[int], List[int]]:
+    def clear_queue(self):
+        self.queue.clear()
+
+    def make_game(self) -> Tuple[List[int], List[int], Set[int]]:
         if len(self.queue) < TEAM_SIZE * 2:
             raise ValueError("Not enough players to make a game.")
 
@@ -73,12 +76,14 @@ class TheCoordinator:
         for user in team1_users + team2_users:
             del self.queue[user]
 
+        cut_players = set()
         # Increase priority of others
         for user in self.queue:
             rating, priority = self.queue[user]
             self.queue[user] = (rating, priority + 1)
+            cut_players.add(user)
 
-        return team1_users, team2_users
+        return team1_users, team2_users, cut_players
 
 
 if __name__ == "__main__":
