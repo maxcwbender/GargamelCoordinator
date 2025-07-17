@@ -122,13 +122,26 @@ class Master_Bot(commands.Bot):
     async def clean_up_on_exit_helper(self):
         # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
         # clean them up and just assume it's fine.
-        delete_tasks = [
-            channel.delete()
-            for channel in self.the_guild.voice_channels
-            if channel.name.startswith("Game")
-        ]
+        general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
+
+        move_tasks = []
+        delete_tasks = []
+
+        for channel in self.the_guild.voice_channels:
+            if channel.name.startswith("Game"):
+                # Queue up move tasks for all members in the Game channel
+                for member in channel.members:
+                    if member.voice and member.voice.channel == channel:
+                        move_tasks.append(member.move_to(general_channel))
+
+                # Queue up deletion of the Game channel
+                delete_tasks.append(channel.delete())
 
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
+
+        if move_tasks:
+            await asyncio.gather(*move_tasks)
+
         if lobby_channel:
             purge_task = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).purge(
                 limit=100
