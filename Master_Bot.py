@@ -164,6 +164,33 @@ class Master_Bot(commands.Bot):
         for task in pending:
             logger.debug(f" - {task}")
 
+    async def play_sound(self, channel: discord.VoiceChannel, sound: str):
+        SOUNDS = {
+            "start_game": "sounds/mk64_racestart.wav",
+            "countdown": "sounds/mk64_countdown.wav",
+        }
+        if sound not in SOUNDS:
+            raise ValueError(f"Sound '{sound}' not found.")
+
+        try:
+            # Attempt to connect
+            vc = await channel.connect()
+        except discord.ClientException:
+            # Already connected — get existing voice client
+            vc = discord.utils.get(channel.guild.voice_clients, guild=channel.guild)
+            if not vc:
+                raise RuntimeError("Bot is already connected elsewhere or unable to connect.")
+
+        if vc.is_playing():
+            vc.stop()
+
+        vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]))
+
+        while vc.is_playing():
+            await asyncio.sleep(1)
+
+        await vc.disconnect()
+
     async def queue_user(self, interaction: discord.Interaction, respond=True):
 
         if self.coordinator.in_queue(interaction.user.id):
@@ -1300,6 +1327,9 @@ class Master_Bot(commands.Bot):
 
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
         message = await channel.send(embed=embed)
+
+        general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
+        await self.play_sound(general_channel, "start_game")
 
         try:
             tasks = [
