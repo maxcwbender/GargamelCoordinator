@@ -207,15 +207,25 @@ class Master_Bot(commands.Bot):
         # vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]), after=after_playing)
         # Play a known good file
         audio = discord.FFmpegPCMAudio("/root/GargamelCoordinator/sounds/mk64_racestart_fixed.wav")
+        countdown = discord.FFmpegPCMAudio("/root/GargamelCoordinator/sounds/mk64_countdown.wav")
         done = asyncio.Event()
+        done2 = asyncio.Event()
 
         def after_playing(error):
             if error:
                 print(f"Playback error: {error}")
             self.loop.call_soon_threadsafe(done.set)
 
+        def after_playing2(error):
+            if error:
+                print(f"Playback error: {error}")
+            self.loop.call_soon_threadsafe(done2.set)
+
         vc.play(audio, after=after_playing)
         await done.wait()
+
+        vc.play(countdown, after=after_playing2)
+        await done2.wait()
         await vc.disconnect()
         await interaction.followup.send(f"✅ Played `{sound}` in `{channel.name}`.")
         # Remove disconnect for now to test stability
