@@ -66,7 +66,7 @@ class Master_Bot(commands.Bot):
 
         intents = discord.Intents.default()
         intents.members = True
-        super().__init__(command_prefix="!", intents=intents)
+        super().__init__(command_prefix="!", intents=intents, reconnect=False)
 
         self.con = sqlite3.connect("allUsers.db")
         self.coordinator = TC.TheCoordinator()
@@ -302,7 +302,7 @@ class Master_Bot(commands.Bot):
     # GUI Views
     class QueueButtonView(discord.ui.View):
         def __init__(self, parent):
-            super().__init__(timeout=None, reconnect=False)
+            super().__init__(timeout=None)
             self.parent = parent
 
         @discord.ui.button(label="Join Queue", style=discord.ButtonStyle.primary)
