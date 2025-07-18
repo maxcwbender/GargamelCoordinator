@@ -16,7 +16,7 @@ import DBFunctions as DB
 from logger import setup_logging
 import logging
 
-discord.utils.setup_logging(level=logging.DEBUG)
+# discord.utils.setup_logging(level=logging.DEBUG)
 """
 Main bot script for Discord MasterBot managing Dota 2 community interactions.
 
