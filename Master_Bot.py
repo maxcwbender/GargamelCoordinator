@@ -173,26 +173,32 @@ class Master_Bot(commands.Bot):
         if sound not in SOUNDS:
             raise ValueError(f"Sound '{sound}' not found.")
 
-        try:
-            existing_vc = discord.utils.get(channel.guild.voice_clients, guild=channel.guild)
-            if existing_vc and existing_vc.channel != channel:
-                await existing_vc.disconnect(force=True)
+        vc = discord.utils.get(channel.guild.voice_clients, guild=channel.guild)
+        if not vc or not vc.is_connected():
+            try:
+                vc = await channel.connect()
+            except discord.ClientException:
+                vc = discord.utils.get(channel.guild.voice_clients, guild=channel.guild)
+                if not vc or not vc.is_connected():
+                    raise RuntimeError("Could not connect to voice channel.")
 
-            # Attempt to connect
-            vc = await channel.connect()
-        except discord.ClientException:
-            # Already connected — get existing voice client
-            vc = discord.utils.get(channel.guild.voice_clients, guild=channel.guild)
-            if not vc:
-                raise RuntimeError("Bot is already connected elsewhere or unable to connect.")
+        if vc.channel != channel:
+            await vc.move_to(channel)
 
         if vc.is_playing():
             vc.stop()
 
-        vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]))
+        # Event to wait for sound completion
+        done = asyncio.Event()
 
-        while vc.is_playing():
-            await asyncio.sleep(1)
+        def after_playing(error):
+            if error:
+                print(f"Playback error: {error}")
+            self.bot.loop.call_soon_threadsafe(done.set)
+
+        vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]), after=after_playing)
+
+        await done.wait()
 
         await vc.disconnect()
 
