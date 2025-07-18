@@ -175,7 +175,7 @@ class Master_Bot(commands.Bot):
 
     async def play_sound(self, interaction: discord.Interaction, channel: discord.VoiceChannel, sound: str):
         SOUNDS = {
-            "start_game": "/root/GargamelCoordinator/sounds/mk64_racestart.wav",
+            "start_game": "/root/GargamelCoordinator/sounds/mk64_racestart_fixed.wav",
             "countdown": "/root/GargamelCoordinator/sounds/mk64_countdown.wav",
         }
 
