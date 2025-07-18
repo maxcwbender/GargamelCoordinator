@@ -190,7 +190,11 @@ class Master_Bot(commands.Bot):
             raise RuntimeError(f"Voice connection error: {e}")
 
         # Play a known good file
-        audio = discord.FFmpegPCMAudio(available_sounds[sound])
+        audio = discord.FFmpegPCMAudio(
+            available_sounds[sound],
+            before_options="-filter:a volume=0.5"
+        )
+        #audio =  discord.FFmpegPCMAudio(available_sounds[sound])
         done = asyncio.Event()
 
         def after_playing(error):
@@ -199,6 +203,7 @@ class Master_Bot(commands.Bot):
             self.loop.call_soon_threadsafe(done.set)
 
         vc.play(audio, after=after_playing)
+
         await done.wait()
         await vc.disconnect()
 
