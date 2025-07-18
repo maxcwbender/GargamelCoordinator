@@ -179,24 +179,30 @@ class Master_Bot(commands.Bot):
             "countdown": "/root/GargamelCoordinator/sounds/mk64_countdown.wav",
         }
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(f"Connecting to {channel.name}...", ephemeral=True)
 
         if sound not in SOUNDS:
             await interaction.followup.send(f"❌ Sound `{sound}` not found.")
             return
             # raise ValueError(f"Sound '{sound}' not found.")
+
         try:
-            existing_vc = discord.utils.get(self.voice_clients, guild=channel.guild)
-            if existing_vc and existing_vc.is_connected():
-                if existing_vc.channel != channel:
-                    await existing_vc.move_to(channel)
-                vc = existing_vc
-            else:
-                vc = await channel.connect()
+            # existing_vc = discord.utils.get(self.voice_clients, guild=channel.guild)
+            # if existing_vc and existing_vc.is_connected():
+                # if existing_vc.channel != channel:
+                #     await existing_vc.move_to(channel)
+                # vc = existing_vc
+            # else:
+            vc = await channel.connect()
         except discord.ClientException as e:
             await interaction.followup.send(f"❌ Voice connection error: {e}")
             return
 
+        # done = asyncio.Event()
+
+        # vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]), after=after_playing)
+        # Play a known good file
+        audio = discord.FFmpegPCMAudio("/root/GargamelCoordinator/sounds/mk64_racestart_fixed.wav")
         done = asyncio.Event()
 
         def after_playing(error):
@@ -204,9 +210,9 @@ class Master_Bot(commands.Bot):
                 print(f"Playback error: {error}")
             self.loop.call_soon_threadsafe(done.set)
 
-        vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]), after=after_playing)
-
+        vc.play(audio, after=after_playing)
         await done.wait()
+        await vc.disconnect()
         await interaction.followup.send(f"✅ Played `{sound}` in `{channel.name}`.")
         # Remove disconnect for now to test stability
         # await vc.disconnect()
