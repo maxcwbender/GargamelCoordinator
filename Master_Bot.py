@@ -1381,9 +1381,12 @@ class Master_Bot(commands.Bot):
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
         message = await channel.send(embed=embed)
 
-        general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
-        await self.play_sound(general_channel, "start_game")
-
+        try:
+            general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
+            await self.play_sound(general_channel, "start_game")
+        except Exception as e:
+            logging.exception(f"Tried to play sound in channel: {general_channel.name} but failed with exception: {e}")
+            
         try:
             tasks = [
                 self.the_guild.get_member(member).move_to(radiant_channel)
