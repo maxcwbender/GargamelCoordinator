@@ -166,29 +166,21 @@ class Master_Bot(commands.Bot):
 
     async def play_sound(self, channel: discord.VoiceChannel, sound: str):
         SOUNDS = {
-            "start_game": "sounds/mk64_racestart.wav",
-            "countdown": "sounds/mk64_countdown.wav",
+            "start_game": "/root/GargamelCoordinator/sounds/mk64_racestart.wav",
+            "countdown": "/root/GargamelCoordinator/sounds/mk64_countdown.wav",
         }
 
         if sound not in SOUNDS:
             raise ValueError(f"Sound '{sound}' not found.")
 
-        vc = discord.utils.get(self.voice_clients, guild=channel.guild)
-        if not vc or not vc.is_connected():
-            try:
-                vc = await channel.connect()
-            except discord.ClientException:
-                vc = discord.utils.get(self.voice_clients, guild=channel.guild)
-                if not vc or not vc.is_connected():
-                    raise RuntimeError("Could not connect to voice channel.")
+        existing_vc = discord.utils.get(self.voice_clients, guild=channel.guild)
+        if existing_vc and existing_vc.is_connected():
+            if existing_vc.channel != channel:
+                await existing_vc.move_to(channel)
+            vc = existing_vc
+        else:
+            vc = await channel.connect()
 
-        if vc.channel != channel:
-            await vc.move_to(channel)
-
-        if vc.is_playing():
-            vc.stop()
-
-        # Event to wait for sound completion
         done = asyncio.Event()
 
         def after_playing(error):
@@ -199,8 +191,8 @@ class Master_Bot(commands.Bot):
         vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]), after=after_playing)
 
         await done.wait()
-
-        await vc.disconnect()
+        # Remove disconnect for now to test stability
+        # await vc.disconnect()
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
 
