@@ -82,6 +82,7 @@ class Master_Bot(commands.Bot):
         self.lobby_messages: dict[int, discord.Message] = {}
         self.dota_talker: DotaTalker.DotaTalker = None
         self.pending_matches = set()
+        self.voice_client = None
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -184,16 +185,32 @@ class Master_Bot(commands.Bot):
         if sound not in available_sounds:
             raise ValueError(f"Sound {sound} not supported.")
 
-        try:
-            vc = await channel.connect()
-            await asyncio.sleep(3.0)
-        except discord.ClientException as e:
-            raise RuntimeError(f"Voice connection error: {e}")
+        if self.voice_client and self.voice_client.is_connected():
+            if self.voice_client.channel != channel:
+                logger.info(f"Moving voice client from {self.voice_client.channel} to {channel}")
+                try:
+                    await self.voice_client.move_to(channel)
+                except discord.ClientException:
+                    logger.warning("Move failed, reconnecting...")
+                    await self.voice_client.disconnect(force=True)
+                    self.voice_client = None
+        else:
+            logger.info(f"Already connected to {channel}")
 
-        if not vc.is_connected():
-            logger.warning("VC not connected after join attempt")
-            await vc.disconnect()
-            return
+        if not self.voice_client or not self.voice_client.is_connected():
+            try:
+                self.voice_client = await channel.connect()
+                await asyncio.sleep(1.0)
+            except discord.ClientException as e:
+                self.voice_client = None
+                raise RuntimeError(f"Voice connection error: {e}")
+
+
+        # if not self.voice_client.is_connected():
+        #     logger.warning("VC not connected after join attempt")
+        #     await self.voice_client.disconnect()
+        #     self.voice_client = None
+        #     return
 
         # Play a known good file
         audio = discord.FFmpegPCMAudio(
@@ -208,10 +225,18 @@ class Master_Bot(commands.Bot):
                 logging.exception(f"Playback error: {error}")
             self.loop.call_soon_threadsafe(done.set)
 
-        vc.play(audio, after=after_playing)
-
-        await done.wait()
-        await vc.disconnect()
+        try:
+            self.voice_client.play(audio, after=after_playing)
+            await done.wait()
+        except discord.ClientException as e:
+            logger.error(f"Playback error: {e}")
+        finally:
+            if self.voice_client and self.vc.is_connected():
+                await self.voice_client.disconnect()
+                self.voice_client = None
+        # await done.wait()
+        # await self.voice_client.disconnect()
+        # self.voice_client = None
 
     async def play_sound_cmd(self, interaction: discord.Interaction, channel: discord.VoiceChannel, sound: str):
         SOUNDS = {
