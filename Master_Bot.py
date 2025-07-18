@@ -302,7 +302,7 @@ class Master_Bot(commands.Bot):
     # GUI Views
     class QueueButtonView(discord.ui.View):
         def __init__(self, parent):
-            super().__init__(timeout=None)
+            super().__init__(timeout=None, reconnect=False)
             self.parent = parent
 
         @discord.ui.button(label="Join Queue", style=discord.ButtonStyle.primary)
