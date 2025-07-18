@@ -208,8 +208,8 @@ class Master_Bot(commands.Bot):
 
         # vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]), after=after_playing)
         # Play a known good file
-        audio = discord.FFmpegPCMAudio("/root/GargamelCoordinator/sounds/mk64_racestart_fixed.wav")
-        countdown = discord.FFmpegPCMAudio("/root/GargamelCoordinator/sounds/mk64_countdown.wav")
+        audio = discord.FFmpegPCMAudio(SOUNDS["victory"])
+        countdown = discord.FFmpegPCMAudio(SOUNDS["defeat"])
         done = asyncio.Event()
         done2 = asyncio.Event()
 
