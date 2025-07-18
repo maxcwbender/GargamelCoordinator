@@ -173,12 +173,12 @@ class Master_Bot(commands.Bot):
         if sound not in SOUNDS:
             raise ValueError(f"Sound '{sound}' not found.")
 
-        vc = discord.utils.get(channel.guild.voice_clients, guild=channel.guild)
+        vc = discord.utils.get(self.bot.voice_clients, guild=channel.guild)
         if not vc or not vc.is_connected():
             try:
                 vc = await channel.connect()
             except discord.ClientException:
-                vc = discord.utils.get(channel.guild.voice_clients, guild=channel.guild)
+                vc = discord.utils.get(self.bot.voice_clients, guild=channel.guild)
                 if not vc or not vc.is_connected():
                     raise RuntimeError("Could not connect to voice channel.")
 
