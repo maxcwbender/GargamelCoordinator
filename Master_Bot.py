@@ -192,7 +192,7 @@ class Master_Bot(commands.Bot):
         # Play a known good file
         audio = discord.FFmpegPCMAudio(
             available_sounds[sound],
-            options="-filter:a volume=0.5"
+            options="-filter:a volume=0.3"
         )
         #audio =  discord.FFmpegPCMAudio(available_sounds[sound])
         done = asyncio.Event()
