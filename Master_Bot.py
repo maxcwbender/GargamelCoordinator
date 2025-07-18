@@ -169,10 +169,15 @@ class Master_Bot(commands.Bot):
             "start_game": "sounds/mk64_racestart.wav",
             "countdown": "sounds/mk64_countdown.wav",
         }
+
         if sound not in SOUNDS:
             raise ValueError(f"Sound '{sound}' not found.")
 
         try:
+            existing_vc = discord.utils.get(channel.guild.voice_clients, guild=channel.guild)
+            if existing_vc and existing_vc.channel != channel:
+                await existing_vc.disconnect(force=True)
+
             # Attempt to connect
             vc = await channel.connect()
         except discord.ClientException:
