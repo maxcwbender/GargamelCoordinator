@@ -178,8 +178,12 @@ class Master_Bot(commands.Bot):
             "start_game": "/root/GargamelCoordinator/sounds/mk64_racestart_fixed.wav",
             "countdown": "/root/GargamelCoordinator/sounds/mk64_countdown.wav",
         }
+        logger.info("Playing sound")
 
-        await interaction.response.send_message(f"Connecting to {channel.name}...", ephemeral=True)
+        try:
+            await interaction.response.send_message(f"Connecting to {channel.name}...", ephemeral=True)
+        except discord.InteractionResponded:
+            pass  # already responded
 
         if sound not in SOUNDS:
             await interaction.followup.send(f"❌ Sound `{sound}` not found.")
