@@ -4,7 +4,7 @@ import itertools
 import json
 import heapq
 from typing import List, Tuple, Set
-from DBFunctions import power_mean
+from DBFunctions import power_mean, unfun_score
 import logging
 logger = logging.getLogger(__name__)
 
@@ -53,21 +53,24 @@ class TheCoordinator:
         for team1_indices in itertools.combinations(range(TEAM_SIZE * 2), TEAM_SIZE):
             team1 = [ratings[i] for i in team1_indices]
             team2 = [ratings[i] for i in range(TEAM_SIZE * 2) if i not in team1_indices]
+            
+            team1.sort()
+            team2.sort()
 
             team1_rating = power_mean(team1)
             team2_rating = power_mean(team2)
             diff = abs(team1_rating - team2_rating)
+            
+            badness = unfun_score(team1, team2, config["UNFUN_MOD"])
 
-            heapq.heappush(heap, (-diff, team1_indices))
+            heapq.heappush(heap, (-(badness + diff), team1_indices))
             if len(heap) > 5:
                 heapq.heappop(heap)
 
-        top_partitions = [(-neg_diff, indices) for neg_diff, indices in heap]
+        total_weight = sum(1 / (-score + 1e-6) for score, _ in heap)
+        probs = [(1 / (-score + 1e-6)) / total_weight for score, _ in heap]
 
-        total_weight = sum(1 / (diff + 1e-6) for diff, _ in top_partitions)
-        probs = [(1 / (diff + 1e-6)) / total_weight for diff, _ in top_partitions]
-
-        selected_partition = random.choices(top_partitions, weights=probs, k=1)[0][1]
+        selected_partition = random.choices(heap, weights=probs, k=1)[0][1]
 
         team1_users = [users[i] for i in selected_partition]
         team2_users = [users[i] for i in range(TEAM_SIZE * 2) if i not in selected_partition]
@@ -92,17 +95,29 @@ if __name__ == "__main__":
     players = {}
 
     for i in range(TEAM_SIZE * 2 * 2):
-        players[str(i)] = random.randint(2000, 6000)
-        logger.info(f"added player {str(i)} with skill {players[str(i)]}")
+        players[str(i)] = random.randint(1000, 6000)
+        print(f"added player {str(i)} with skill {players[str(i)]}")
         coordinator.add_player(str(i), players[str(i)])
 
-    for player, (rating, priority) in coordinator.queue.items():
-        logger.info(f"{player} : ({rating, priority})")
+    # ratings = [3017, 3958, 5762, 3998, 3043, 502, 4881, 5043, 4956, 1040]
+    # for i in range(len(ratings)):
+    #     players[str(i)] = ratings[i]
+    #     print(f"added player {str(i)} with skill {players[str(i)]}")
+    #     coordinator.add_player(str(i), players[str(i)])
+        
 
-    (teamA, teamB) = coordinator.make_game()
-    logger.info(teamA, teamB)
-    logger.info(f"teamA: {math.prod([players[name] for name in teamA]) ** (1/TEAM_SIZE)}")
-    logger.info(f"teamB: {math.prod([players[name] for name in teamB]) ** (1/TEAM_SIZE)}")
-
     for player, (rating, priority) in coordinator.queue.items():
-        logger.info(f"{player} : ({rating, priority})")
+        print(f"{player} : ({rating, priority})")
+
+    (teamA, teamB, leftover) = coordinator.make_game()
+    print(teamA)
+    print(teamB)
+    teamA = [players[x] for x in teamA]
+    teamB = [players[x] for x in teamB]
+    teamA.sort()
+    teamB.sort()
+    print(teamA)
+    print(teamB)
+    print(f"teamA: {power_mean(teamA)}")
+    print(f"teamB: {power_mean(teamB)}")
+    print(f"unfun: {unfun_score(teamA, teamB, config["UNFUN_MOD"])}")

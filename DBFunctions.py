@@ -113,3 +113,19 @@ def query_mod_results(user_id: int) -> tuple[int, int, int]:
 
 def power_mean(ratings: list[int], p: int = 5) -> int:
     return int((sum(r ** p for r in ratings) / len(ratings)) ** (1 / p))
+
+def unfun_score(radiant_ratings: list[int], dire_ratings: list[int], p: int = 2) -> int:
+    """
+    Calculates the unfun score of a game according to the given (sorted) list of radiant ratings and dire ratings. 
+    
+    Assumes that the given ratings were given in sorted form. 
+    
+    Args: 
+        radiant_ratings (list[int]): The sorted list of radiant team ratings. 
+        dire_ratings (list[int]): The sorted list of dire team ratings. 
+        p (int): The power by which to raise the relative differences. 
+        
+    Returns: 
+        The unfun score between the two teams given. 
+    """ 
+    return int(sum([abs(radiant_ratings[i] - dire_ratings[i]) ** p for i in range(len(radiant_ratings))]) ** (1 / p))
