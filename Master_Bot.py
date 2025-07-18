@@ -231,7 +231,7 @@ class Master_Bot(commands.Bot):
         except discord.ClientException as e:
             logger.error(f"Playback error: {e}")
         finally:
-            if self.voice_client and self.vc.is_connected():
+            if self.voice_client and self.voice_client.is_connected():
                 await self.voice_client.disconnect()
                 self.voice_client = None
         # await done.wait()
