@@ -203,7 +203,7 @@ class Master_Bot(commands.Bot):
             return
 
         # Play a known good file
-        audio = discord.FFmpegPCMAudio(SOUNDS[sound])
+        audio = discord.FFmpegPCMAudio("/root/GargamelCoordinator/sounds/victory.wav")
         done = asyncio.Event()
 
         def after_playing(error):
