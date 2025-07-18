@@ -186,6 +186,7 @@ class Master_Bot(commands.Bot):
 
         try:
             vc = await channel.connect()
+            await asyncio.sleep(3.0)
         except discord.ClientException as e:
             raise RuntimeError(f"Voice connection error: {e}")
 
