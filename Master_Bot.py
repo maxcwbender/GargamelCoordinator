@@ -208,8 +208,8 @@ class Master_Bot(commands.Bot):
 
         # vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]), after=after_playing)
         # Play a known good file
-        audio = discord.FFmpegPCMAudio(SOUNDS["victory"])
-        countdown = discord.FFmpegPCMAudio(SOUNDS["defeat"])
+        audio = discord.FFmpegPCMAudio(SOUNDS[sound])
+        countdown = discord.FFmpegPCMAudio(SOUNDS[sound])
         done = asyncio.Event()
         done2 = asyncio.Event()
 
