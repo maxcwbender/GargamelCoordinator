@@ -96,8 +96,17 @@ class Master_Bot(commands.Bot):
         async def leave(interaction: discord.Interaction):
             await self.leave_queue(interaction)
 
+        @app_commands.command(name="play_sound", description="Play a soundboard sound")
+        @app_commands.describe(
+            channel="The voice channel to play the sound in",
+            sound="The sound to play"
+        )
+        async def play_sound(interaction: discord.Interaction, channel: discord.VoiceChannel, sound: str):
+            await self.play_sound(interaction, channel, sound)
+
         self.tree.add_command(queue)
         self.tree.add_command(leave)
+        self.tree.add_command(play_sound)
 
         # Global Sync is slow, TODO: consider conditionally doing this.
         # TODO: Sync is happening on on_ready right now, once we pull them out add it here and remove it from there.
@@ -164,22 +173,29 @@ class Master_Bot(commands.Bot):
         for task in pending:
             logger.debug(f" - {task}")
 
-    async def play_sound(self, channel: discord.VoiceChannel, sound: str):
+    async def play_sound(self, interaction: discord.Interaction, channel: discord.VoiceChannel, sound: str):
         SOUNDS = {
             "start_game": "/root/GargamelCoordinator/sounds/mk64_racestart.wav",
             "countdown": "/root/GargamelCoordinator/sounds/mk64_countdown.wav",
         }
 
-        if sound not in SOUNDS:
-            raise ValueError(f"Sound '{sound}' not found.")
+        await interaction.response.defer(ephemeral=True)
 
-        existing_vc = discord.utils.get(self.voice_clients, guild=channel.guild)
-        if existing_vc and existing_vc.is_connected():
-            if existing_vc.channel != channel:
-                await existing_vc.move_to(channel)
-            vc = existing_vc
-        else:
-            vc = await channel.connect()
+        if sound not in SOUNDS:
+            await interaction.followup.send(f"❌ Sound `{sound}` not found.")
+            return
+            # raise ValueError(f"Sound '{sound}' not found.")
+        try:
+            existing_vc = discord.utils.get(self.voice_clients, guild=channel.guild)
+            if existing_vc and existing_vc.is_connected():
+                if existing_vc.channel != channel:
+                    await existing_vc.move_to(channel)
+                vc = existing_vc
+            else:
+                vc = await channel.connect()
+        except discord.ClientException as e:
+            await interaction.followup.send(f"❌ Voice connection error: {e}")
+            return
 
         done = asyncio.Event()
 
@@ -191,6 +207,7 @@ class Master_Bot(commands.Bot):
         vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]), after=after_playing)
 
         await done.wait()
+        await interaction.followup.send(f"✅ Played `{sound}` in `{channel.name}`.")
         # Remove disconnect for now to test stability
         # await vc.disconnect()
 
@@ -1331,8 +1348,8 @@ class Master_Bot(commands.Bot):
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
         message = await channel.send(embed=embed)
 
-        general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
-        await self.play_sound(general_channel, "start_game")
+        # general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
+        # await self.play_sound(general_channel, "start_game")
 
         try:
             tasks = [
