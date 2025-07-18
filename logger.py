@@ -7,6 +7,7 @@ def setup_logging():
     #TODO: Capture Stdout/Stderr  or just use logging.info instead of prints
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     # logging.getLogger('discord.http').setLevel(logging.DEBUG)
+
     logging.basicConfig(
         level=logging.INFO,  # Capture everything from DEBUG and up
         format='[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
