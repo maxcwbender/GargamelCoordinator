@@ -189,6 +189,11 @@ class Master_Bot(commands.Bot):
         except discord.ClientException as e:
             raise RuntimeError(f"Voice connection error: {e}")
 
+        if not vc.is_connected():
+            logger.warning("VC not connected after join attempt")
+            await vc.disconnect()
+            return
+
         # Play a known good file
         audio = discord.FFmpegPCMAudio(
             available_sounds[sound],
@@ -1384,9 +1389,10 @@ class Master_Bot(commands.Bot):
         try:
             general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
             await self.play_sound(general_channel, "start_game")
+
         except Exception as e:
             logging.exception(f"Tried to play sound in channel: {general_channel.name} but failed with exception: {e}")
-            
+
         try:
             tasks = [
                 self.the_guild.get_member(member).move_to(radiant_channel)
