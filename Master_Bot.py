@@ -176,6 +176,7 @@ class Master_Bot(commands.Bot):
     async def play_sound(self, interaction: discord.Interaction, channel: discord.VoiceChannel, sound: str):
         SOUNDS = {
             "start_game": "/root/GargamelCoordinator/sounds/start_game.wav",
+            "countdown": "/root/GargamelCoordinator/sounds/mk64_countdown.wav",
             "victory" : "/root/GargamelCoordinator/sounds/victory.wav",
             "defeat" : "/root/GargamelCoordinator/sounds/defeat.wav"
         }
@@ -189,6 +190,7 @@ class Master_Bot(commands.Bot):
         if sound not in SOUNDS:
             await interaction.followup.send(f"❌ Sound `{sound}` not found.")
             return
+            # raise ValueError(f"Sound '{sound}' not found.")
 
         try:
             # existing_vc = discord.utils.get(self.voice_clients, guild=channel.guild)
@@ -202,19 +204,34 @@ class Master_Bot(commands.Bot):
             await interaction.followup.send(f"❌ Voice connection error: {e}")
             return
 
+        # done = asyncio.Event()
+
+        # vc.play(discord.FFmpegPCMAudio(SOUNDS[sound]), after=after_playing)
         # Play a known good file
-        audio = discord.FFmpegPCMAudio("/root/GargamelCoordinator/sounds/victory.wav")
+        audio = discord.FFmpegPCMAudio("/root/GargamelCoordinator/sounds/mk64_racestart_fixed.wav")
+        countdown = discord.FFmpegPCMAudio("/root/GargamelCoordinator/sounds/mk64_countdown.wav")
         done = asyncio.Event()
+        done2 = asyncio.Event()
 
         def after_playing(error):
             if error:
                 print(f"Playback error: {error}")
             self.loop.call_soon_threadsafe(done.set)
 
+        def after_playing2(error):
+            if error:
+                print(f"Playback error: {error}")
+            self.loop.call_soon_threadsafe(done2.set)
 
         vc.play(audio, after=after_playing)
         await done.wait()
+
+        vc.play(countdown, after=after_playing2)
+        await done2.wait()
         await vc.disconnect()
+        # await interaction.followup.send(f"✅ Played `{sound}` in `{channel.name}`.", ephemeral=True)
+        # Remove disconnect for now to test stability
+        # await vc.disconnect()
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
 
