@@ -227,7 +227,7 @@ class Master_Bot(commands.Bot):
         vc.play(countdown, after=after_playing2)
         await done2.wait()
         await vc.disconnect()
-        await interaction.followup.send(f"✅ Played `{sound}` in `{channel.name}`.")
+        # await interaction.followup.send(f"✅ Played `{sound}` in `{channel.name}`.", ephemeral=True)
         # Remove disconnect for now to test stability
         # await vc.disconnect()
 
