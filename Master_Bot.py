@@ -112,8 +112,8 @@ class Master_Bot(commands.Bot):
 
         # Global Sync is slow, TODO: consider conditionally doing this.
         # TODO: Sync is happening on on_ready right now, once we pull them out add it here and remove it from there.
-        # await self.tree.sync()  # global sync
-        # await self.tree.sync(guild=self.the_guild)  # optional: sync for specific guild
+        await self.tree.sync()  # global sync
+        await self.tree.sync(guild=self.the_guild)  # optional: sync for specific guild
 
     def handle_exit_signals(self, signum, frame):
         logger.info(f"Received exit signal {signum}, cleaning up bot creations.")
