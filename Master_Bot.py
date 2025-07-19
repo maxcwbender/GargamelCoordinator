@@ -108,7 +108,7 @@ class Master_Bot(commands.Bot):
 
         self.tree.add_command(queue)
         self.tree.add_command(leave)
-        self.tree.add_command(play_sound_cmd)
+        self.tree.add_command(play_sound)
 
         # Global Sync is slow, TODO: consider conditionally doing this.
         # TODO: Sync is happening on on_ready right now, once we pull them out add it here and remove it from there.
