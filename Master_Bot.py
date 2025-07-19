@@ -97,7 +97,7 @@ class Master_Bot(commands.Bot):
         async def leave(interaction: discord.Interaction):
             await self.leave_queue(interaction)
 
-        @app_commands.command(name="play_sound", description="Play a soundboard sound")
+        @app_commands.command(name="play_sound_cmd", description="Play a soundboard sound")
         @app_commands.describe(
             channel="The voice channel to play the sound in",
             sound="The sound to play"
@@ -108,7 +108,7 @@ class Master_Bot(commands.Bot):
 
         self.tree.add_command(queue)
         self.tree.add_command(leave)
-        self.tree.add_command(play_sound)
+        self.tree.add_command(play_sound_cmd)
 
         # Global Sync is slow, TODO: consider conditionally doing this.
         # TODO: Sync is happening on on_ready right now, once we pull them out add it here and remove it from there.
