@@ -238,43 +238,6 @@ class Master_Bot(commands.Bot):
         # await self.voice_client.disconnect()
         # self.voice_client = None
 
-    async def play_sound_cmd(self, interaction: discord.Interaction, channel: discord.VoiceChannel, sound: str):
-        SOUNDS = {
-            "start_game": "/root/GargamelCoordinator/sounds/start_game.wav",
-            "victory" : "/root/GargamelCoordinator/sounds/victory.wav",
-            "defeat" : "/root/GargamelCoordinator/sounds/defeat.wav"
-        }
-        logger.info("Playing sound")
-
-        try:
-            await interaction.response.send_message(f"Connecting to {channel.name}...", ephemeral=True)
-        except discord.InteractionResponded:
-            pass  # already responded
-
-        if sound not in SOUNDS:
-            await interaction.followup.send(f"❌ Sound `{sound}` not found.")
-            return
-
-        try:
-            vc = await channel.connect()
-        except discord.ClientException as e:
-            await interaction.followup.send(f"❌ Voice connection error: {e}")
-            return
-
-        # Play a known good file
-        audio = discord.FFmpegPCMAudio(SOUNDS[sound])
-
-        done = asyncio.Event()
-
-        def after_playing(error):
-            if error:
-                print(f"Playback error: {error}")
-            self.loop.call_soon_threadsafe(done.set)
-
-        vc.play(audio, after=after_playing)
-        await done.wait()
-        await vc.disconnect()
-
     async def queue_user(self, interaction: discord.Interaction, respond=True):
 
         if self.coordinator.in_queue(interaction.user.id):
