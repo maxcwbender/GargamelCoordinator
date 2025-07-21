@@ -1063,7 +1063,7 @@ class Master_Bot(commands.Bot):
                     INSERT INTO match_players (match_id, discord_id, team, mmr)
                     VALUES (?, ?, ?, ?)
                     """,
-                    (match_id, discord_id, 1, mmr)  # 0 = Radiant
+                    (match_id, discord_id, 1, mmr)  # 1 = Dire
                 )
 
             self.pending_matches.remove(game_id)
@@ -1230,8 +1230,22 @@ class Master_Bot(commands.Bot):
             dire (list[int]): List of Discord IDs for Dire team players.
         """
         # Create a temporary game ID
-
         game_id = self.get_next_game_id()
+
+        password = self.dota_talker.make_game(game_id, radiant, dire)
+        if password == "-1":
+            logger.error(f"Failed to create lobby for game {game_id}")
+            await self.update_queue_status_message(content=f"⚠️ Could not create game {game_id}: all servers busy. Players kept in queue.")
+
+            # Re-queue players
+            for member_id in radiant + dire:
+                rating = DB.fetch_rating(member_id)
+                self.coordinator.add_player(member_id, rating)
+
+            mod_channel = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
+            await mod_channel.send(f"🚨 All Dota clients are busy. Game {game_id} could not be created. Consider restarting clients.")
+            return
+
         self.pending_matches.add(game_id)
 
         create_tasks = [
@@ -1293,8 +1307,6 @@ class Master_Bot(commands.Bot):
         await asyncio.gather(*send_tasks)
 
         self.game_channels[game_id] = (radiant_channel, dire_channel)
-
-        password = self.dota_talker.make_game(game_id, radiant, dire)
 
         embed = self.build_game_embed(game_id, radiant, dire, password)
 
