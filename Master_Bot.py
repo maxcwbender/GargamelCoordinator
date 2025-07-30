@@ -16,6 +16,8 @@ import DBFunctions as DB
 from logger import setup_logging
 import logging
 
+import threading
+
 
 """
 Main bot script for Discord MasterBot managing Dota 2 community interactions.
@@ -83,6 +85,7 @@ class Master_Bot(commands.Bot):
         self.lobby_messages: dict[int, discord.Message] = {}
         self.dota_talker: DotaTalker.DotaTalker = None
         self.pending_matches = set()
+        self.pending_matches_lock = threading.Lock()
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -219,7 +222,7 @@ class Master_Bot(commands.Bot):
 
     # GUI Views
     class QueueButtonView(discord.ui.View):
-        def __init__(self, parent):
+        def __init__(self, parent: 'Master_Bot'):
             super().__init__(timeout=None)
             self.parent = parent
 
@@ -1056,12 +1059,12 @@ class Master_Bot(commands.Bot):
         league_id = getattr(game_info, "league_id", None)
 
         logger.info(f"League id: <{league_id}>")
-
-        if game_id not in self.pending_matches:
-            logger.debug(
-                f"Ignoring running lobby message for  ID: {lobby_id} - not in pending matches."
-            )
-            return
+        
+        with self.pending_matches_lock:
+            if game_id not in self.pending_matches:
+                logger.debug(f"Ignoring game {game_id}, not in pending_matches")
+                return
+            self.pending_matches.remove(game_id)
 
         try:
             # Insert match into DB
@@ -1202,17 +1205,11 @@ class Master_Bot(commands.Bot):
 
         radiant, dire = self.game_map_inverse[game_id]
         del self.game_map_inverse[game_id]
-
-        for player in radiant:
-            del self.game_map[player]
-        for player in dire:
-            del self.game_map[player]
-
-        players = self.game_map_inverse.get(game_id, set())
-        self.game_map_inverse.pop(game_id, None)
+        
+        players = radiant.union(dire)
 
         for player in players:
-            self.game_map.pop(player, None)
+            del self.game_map[player]
 
         radiant_channel, dire_channel = self.game_channels.pop(game_id)
         try:

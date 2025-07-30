@@ -366,8 +366,10 @@ class DotaTalker:
                     dotaClient.steam.friends.add(member.id)
 
             if message.state == LobbyState.RUN:
-                # Only add the coroutine if the match is pending start
-                if dotaClient.game_id in self.discordBot.pending_matches:
+                with self.discordBot.pending_matches_lock:
+                    is_pending = dotaClient.game_id in self.discordBot.pending_matches
+                    # Only add the coroutine if the match is pending start
+                if is_pending:
                     logger.info(
                         f"Lobby with game id {dotaClient.game_id} found in running state that is pending creation.  Sending to Master Bot for DB Add."
                     )
