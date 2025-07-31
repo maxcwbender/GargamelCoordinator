@@ -129,3 +129,17 @@ def unfun_score(radiant_ratings: list[int], dire_ratings: list[int], p: int = 2)
         The unfun score between the two teams given. 
     """ 
     return int(sum([abs(radiant_ratings[i] - dire_ratings[i]) ** p for i in range(len(radiant_ratings))]) ** (1 / p))
+
+mode_map = {
+    "📈": "Ranked All Pick",
+    "👑": "Captains Mode",
+    "3️⃣": "Single Draft",
+    "🎲": "All Random"
+}
+
+mode_map_enum = {
+    "📈": 22,
+    "👑": 2,
+    "3️⃣": 4,
+    "🎲": 3
+}

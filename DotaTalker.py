@@ -4,6 +4,14 @@ from dota2.protobufs.dota_shared_enums_pb2 import (
     DOTA_GC_TEAM_GOOD_GUYS,
 )
 
+DOTA_GAME_MODES = {
+    "Ranked All Pick": 22,
+    "Captains Mode": 2,
+    "Turbo": 23,
+    "Single Draft": 4,
+    "All Random": 3,  # 🎰
+}
+
 from steam.client import SteamClient
 from steam.steamid import SteamID
 from steam.enums import EFriendRelationship
@@ -46,6 +54,9 @@ class MatchOutcome(IntEnum):
     DIRE_WIN = 3
 
 
+import threading
+
+
 class DotaTalker:
     def __init__(
         self, discordBot: "Master_Bot.Master_Bot", loop: asyncio.AbstractEventLoop
@@ -61,40 +72,10 @@ class DotaTalker:
         with open("config.json") as configFile:
             self.config: dict = json.load(configFile)
 
-        self.threads: list[Thread] = []
-        self.dotaClients: list[Dota2Client] = [None] * self.config["numClients"]
-        self.client_ready: dict[int, bool] = {}
-        self.gameBacklog: list[list[int]] = []
-        self.pending_matches = []
-
-        for i in range(self.config["numClients"]):
-            t = Thread(target=self.setupClient, args=(i,), daemon=True)
-            t.start()
-            self.threads.append(t)
+        self.active_clients: dict[int, Dota2Client] = {}
+        self.client_creation_lock = threading.Lock()
 
         logger.info("DotaTalker setup done")
-
-    def is_ready(self, i: int) -> bool:
-        """
-        Checks if the client at index i is ready.
-
-        Args:
-            i (int): Index of the client.
-
-        Returns:
-            bool: True if the client is ready, False otherwise.
-        """
-        return self.client_ready.get(i, False)
-
-    def set_ready(self, i: int, value: bool):
-        """
-        Sets the readiness of the client at index i.
-
-        Args:
-            i (int): Index of the client.
-            value (bool): Readiness value to set.
-        """
-        self.client_ready[i] = value
 
     def make_game(
         self, game_id: int, radiant_discord_ids: list[int], dire_discord_ids: list[int]
@@ -111,198 +92,72 @@ class DotaTalker:
             str: Password of the created lobby or "-1" if no client is available.
         """
 
-        radiant_steam_ids = [DB.fetch_steam_id(id) for id in radiant_discord_ids]
-        dire_steam_ids = [DB.fetch_steam_id(id) for id in dire_discord_ids]
+        with self.client_creation_lock:
+            client_idx = len(self.active_clients)
+            if client_idx >= self.config["numClients"]:
+                logger.warning(
+                    f"Unable to make game {game_id}: too many clients running"
+                )
+                return "-1"
 
-        for i in range(self.config["numClients"]):
-            client = self.dotaClients[i]
-            if client.game_id is None and self.is_ready(i):
-                self.set_ready(i, False)
-                password = str(random.randint(1000, 9999))
-                self.make_lobby(i, game_id, radiant_steam_ids, dire_steam_ids, password)
-                return password
-        return "-1"
+            radiant_steam_ids = [DB.fetch_steam_id(id) for id in radiant_discord_ids]
+            dire_steam_ids = [DB.fetch_steam_id(id) for id in dire_discord_ids]
+            password = str(random.randint(1000, 9999))
 
-    def make_lobby(
+            steamClient = SteamClient()
+            dotaClient = Dota2Client(steamClient)
+
+            t = Thread(
+                target=self.create_and_launch_client,
+                args=(
+                    game_id,
+                    radiant_steam_ids,
+                    dire_steam_ids,
+                    password,
+                    dotaClient,
+                    client_idx,
+                ),
+                daemon=True,
+            )
+            t.start()
+
+        return password
+
+    def create_and_launch_client(
         self,
-        clientIdx: int,
         game_id: int,
         radiant: list[int],
         dire: list[int],
         password: str,
+        dotaClient: Dota2Client,
+        client_idx: int,
     ):
-        """
-        Creates a new Dota 2 lobby using the specified client.
+        steamClient = dotaClient.steam
+        self.active_clients[game_id] = dotaClient
 
-        Args:
-            clientIdx (int): Index of the client.
-            game_id (int): Game ID.
-            radiant (list[int]): List of Radiant team Steam IDs.
-            dire (list[int]): List of Dire team Steam IDs.
-            password (str): Lobby password.
-        """
-        logger.info(f"[Client {clientIdx}] Looking for game")
-        dotaClient = self.dotaClients[clientIdx]
         dotaClient.game_id = game_id
         dotaClient.radiant = radiant
         dotaClient.dire = dire
         dotaClient.password = password
 
-        lobbyConfig = {
-            "game_name": f"Gargamel League Game {game_id}",
-            "server_region": 2,
-            "game_mode": 22,
-            "allow_cheats": self.config["DEBUG_MODE"],
-            "allow_spectating": True,
-            "leagueid": self.config["league_id"],
-        }
-
-        dotaClient.create_practice_lobby(password=password, options=lobbyConfig)
-        logger.info(
-            f"[Client {clientIdx}] Created lobby for game {game_id} with password {dotaClient.password}"
-        )
-
-    def get_password(self, game_id: int) -> str:
-        for i in range(self.config["numClients"]):
-            client = self.dotaClients[i]
-            if client.game_id == game_id:
-                return client.password
-
-        return "-1"
-
-    def swap_players_in_game(
-        self, game_id: int, discord_id_1: int, discord_id_2: int
-    ) -> bool:
-        """
-        Swaps two players between teams in the lobby for the given game ID.
-
-        Args:
-            game_id (int): ID of the game.
-            discord_id_1 (int): Discord ID of the first player.
-            discord_id_2 (int): Discord ID of the second player.
-
-        Returns:
-            bool: True if successful, False if the swap couldn't be performed.
-        """
-
-        steam_id_1 = DB.fetch_steam_id(discord_id_1)
-        steam_id_2 = DB.fetch_steam_id(discord_id_2)
-
-        for client in self.dotaClients:
-            if client and client.game_id == game_id:
-                if steam_id_1 in client.radiant and steam_id_2 in client.dire:
-                    client.radiant.remove(steam_id_1)
-                    client.dire.remove(steam_id_2)
-                    client.radiant.append(steam_id_2)
-                    client.dire.append(steam_id_1)
-                    logger.info(
-                        f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}"
-                    )
-                    return True
-                elif steam_id_1 in client.dire and steam_id_2 in client.radiant:
-                    client.radiant.remove(steam_id_2)
-                    client.dire.remove(steam_id_1)
-                    client.radiant.append(steam_id_1)
-                    client.dire.append(steam_id_2)
-                    logger.info(
-                        f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}"
-                    )
-                    return True
-                else:
-                    logger.error(
-                        f"[Game {game_id}] One or both users not found on opposing teams"
-                    )
-                    return False
-        logger.error(f"No lobby found with game ID {game_id}")
-        return False
-
-    def update_lobby_teams(
-        self, game_id: int, radiant: list[int], dire: list[int]
-    ) -> bool:
-        """
-        Updates the Radiant and Dire teams in an existing lobby.
-
-        Args:
-            game_id (int): Game ID to match with a lobby.
-            radiant (list[int]): Updated Radiant team Steam IDs.
-            dire (list[int]): Updated Dire team Steam IDs.
-
-        Returns:
-            bool: True if updated successfully, False if no matching lobby found.
-        """
-        for client in self.dotaClients:
-            if client and client.game_id == game_id and client.lobby:
-                client.radiant = radiant
-                client.dire = dire
-                logger.info(f"[Game {game_id}] Lobby teams updated")
-                return True
-        return False
-    
-    def cancel_game(self, game_id: int) -> bool:
-        """
-        Forcefully cancels any game or lobby associated with game_id.
-
-        Args:
-            game_id (int): The game ID of the game to cancel.
-
-        Returns:
-            bool: True if action taken, False if no matching client found.
-        """
-        for client_id in range(len(self.dotaClients)):
-            client = self.dotaClients[client_id]
-            if client and client.game_id == game_id:
-                logger.info(f"Cancel game called on game id {game_id}. Forcing exit.")
-
-                try:
-                    client.destroy_lobby()
-                    logger.info(f"[{game_id}] Sent destroy_lobby()")
-                except Exception as e:
-                    logger.warning(f"[{game_id}] destroy_lobby failed: {e}")
-
-                try:
-                    client.abandon_current_game()
-                    logger.info(f"[{game_id}] Sent abandon_current_game()")
-                except Exception as e:
-                    logger.warning(f"[{game_id}] abandon_current_game failed: {e}")
-
-                try:
-                    client.leave_practice_lobby()
-                    logger.info(f"[{game_id}] Sent leave_practice_lobby()")
-                except Exception as e:
-                    logger.warning(f"[{game_id}] leave_practice_lobby failed: {e}")
-
-                client.game_id = None
-                client.radiant = None
-                client.dire = None
-                client.password = None
-                self.set_ready(client_id, True)
-
-                logger.info(f"Game {game_id} forcibly canceled. Client reset and marked ready.")
-                return True
-
-        logger.warning(f"[Cancel Game] No active client found for game ID {game_id}.")
-        return False
-
-    def setupClient(self, i: int):
-        """
-        Initializes and connects a Steam/Dota2 client.
-
-        Args:
-            i (int): Index of the client.
-        """
-        steamClient = SteamClient()
-        dotaClient = Dota2Client(steamClient)
-        dotaClient.game_id = None
-        dotaClient.radiant = None
-        dotaClient.dire = None
-        dotaClient.password = None
-        self.dotaClients[i] = dotaClient
-        self.set_ready(i, False)
-
         @steamClient.on("logged_on")
         def _():
-            logger.info(f"[Client {i}] Logged on to Steam")
+            logger.info(f"[Game {game_id}] Logged into Steam.")
             dotaClient.launch()
+
+        @dotaClient.on("ready")
+        def _():
+            logger.info(f"[Game {game_id}] Dota 2 client ready.")
+            lobby_config = {
+                "game_name": f"Gargamel League Game {game_id}",
+                "server_region": 2,
+                "game_mode": 22,
+                "allow_cheats": self.config["DEBUG_MODE"],
+                "allow_spectating": True,
+                "leagueid": self.config["league_id"],
+            }
+            dotaClient.create_practice_lobby(password=password, options=lobby_config)
+            logger.info(f"[Game {game_id}] Lobby created with password {password}")
 
         @steamClient.on("friendlist")
         def _(message):
@@ -316,13 +171,6 @@ class DotaTalker:
                         dotaClient.radiant + dotaClient.dire
                     ):
                         dotaClient.invite_to_lobby(steam_id)
-
-        @dotaClient.on("ready")
-        def _():
-            logger.info(f"[Client {i}] Dota 2 client ready")
-            dotaClient.abandon_current_game()
-            dotaClient.leave_practice_lobby()
-            self.set_ready(i, True)
 
         @dotaClient.on("lobby_new")
         def _(lobby):
@@ -340,6 +188,30 @@ class DotaTalker:
                     f"[Game {dotaClient.game_id}] Inviting {dotaClient.steam.get_user(sid).name}"
                 )
 
+        @dotaClient.on("update_lobby_mode")
+        def _(game_mode: int):
+            if not dotaClient.lobby:
+                logger.error(
+                    f"tried to update lobby of game {dotaClient.game_id} to mode {game_mode}, but associated client seemingly not in a lobby"
+                )
+            dotaClient.config_practice_lobby({"game_mode": game_mode})
+
+        @dotaClient.on("shut_down_command")
+        def _():
+            self.active_clients.pop(game_id, None)
+            try:
+                dotaClient.leave_practice_lobby()
+            except Exception:
+                pass
+            try:
+                dotaClient.abandon_current_game()
+            except Exception:
+                pass
+            try:
+                dotaClient.steam.logout()
+            except Exception:
+                pass
+
         # Allegedly we cannot access member.name until this event triggers
         # TODO here, I just want to see how long it takes to get them
         @dotaClient.steam.on("persona_state")
@@ -348,7 +220,7 @@ class DotaTalker:
 
         @dotaClient.on("lobby_changed")
         def _(message):
-            logger.info(f"[Client {i}] Lobby changed, momentary sleep")
+            logger.info(f"[Client for game {game_id}] Lobby changed, momentary sleep")
             dotaClient.sleep(1)
 
             for member in message.all_members:
@@ -392,7 +264,7 @@ class DotaTalker:
                     ):
                         dotaClient.practice_lobby_kick_from_team(sid32)
                         logger.info(
-                            f"[Client {i}] {member.name}: wrong team (should be Radiant)"
+                            f"[Client for game {game_id}] {member.name}: wrong team (should be Radiant)"
                         )
                     elif (
                         member.id in dotaClient.dire
@@ -400,7 +272,7 @@ class DotaTalker:
                     ):
                         dotaClient.practice_lobby_kick_from_team(sid32)
                         logger.info(
-                            f"[Client {i}] {member.name}: wrong team (should be Dire)"
+                            f"[Client for game {game_id}] {member.name}: wrong team (should be Dire)"
                         )
                     elif (
                         member.id in dotaClient.radiant
@@ -413,7 +285,7 @@ class DotaTalker:
                     elif member.team in [DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS]:
                         dotaClient.practice_lobby_kick_from_team(sid32)
                         logger.info(
-                            f"[Client {i}] {member.name} not part of current game"
+                            f"[Client for game {game_id}] {member.name} not part of current game"
                         )
                     logger.info(
                         f"User found on team: {member.team} (SteamID: {member.id} Member.name: {member.name})"
@@ -421,7 +293,7 @@ class DotaTalker:
 
                 if correct == len(dotaClient.radiant + dotaClient.dire):
                     dotaClient.launch_practice_lobby()
-                    logger.info(f"[Client {i}] Game launched")
+                    logger.info(f"[Client for game {game_id}] Game launched")
 
             elif (
                 message.state == LobbyState.POSTGAME
@@ -430,7 +302,9 @@ class DotaTalker:
                 match_id = getattr(message, "match_id", None)
                 match_outcome = getattr(message, "match_outcome", MatchOutcome.UNKNOWN)
 
-                logger.info(f"[Client {i}] Game ended, match ID: {message.match_id}")
+                logger.info(
+                    f"[Client for game {game_id}] Game ended, match ID: {message.match_id}"
+                )
                 logger.info(f"Match ID: {match_id}, Outcome: {match_outcome}")
 
                 dotaClient.leave_practice_lobby()
@@ -443,19 +317,119 @@ class DotaTalker:
 
                 logger.info(f"Past coroutine run")
 
-                # Reset Client State
-                dotaClient.game_id = None
-                dotaClient.radiant = None
-                dotaClient.dire = None
-                dotaClient.password = None
-
-                self.set_ready(i, True)
-
             else:
                 logger.info(f"Message State was: {message.state} ")
 
-        steamClient.login(
-            username=self.config.get(f"username_{i}"),
-            password=self.config.get(f"password_{i}"),
-        )
-        steamClient.run_forever()
+        try:
+            steamClient.login(
+                username=self.config[f"username_{client_idx}"],
+                password=self.config[f"password_{client_idx}"],
+            )
+            steamClient.run_forever()
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Client crash or login failed: {e}")
+            self.active_clients.pop(game_id, None)
+
+    def get_password(self, game_id: int) -> str:
+        if game_id in self.active_clients:
+            return self.active_clients.get(game_id).password
+        else:
+            return "-1"
+
+    def swap_players_in_game(
+        self, game_id: int, discord_id_1: int, discord_id_2: int
+    ) -> bool:
+        """
+        Swaps two players between teams in the lobby for the given game ID.
+
+        Args:
+            game_id (int): ID of the game.
+            discord_id_1 (int): Discord ID of the first player.
+            discord_id_2 (int): Discord ID of the second player.
+
+        Returns:
+            bool: True if successful, False if the swap couldn't be performed.
+        """
+        client = self.active_clients.get(game_id, None)
+        if not client:
+            logger.error(f"No lobby found with game ID {game_id}")
+            return False
+
+        steam_id_1 = DB.fetch_steam_id(discord_id_1)
+        steam_id_2 = DB.fetch_steam_id(discord_id_2)
+
+        if steam_id_1 in client.radiant and steam_id_2 in client.dire:
+            client.radiant.remove(steam_id_1)
+            client.dire.remove(steam_id_2)
+            client.radiant.append(steam_id_2)
+            client.dire.append(steam_id_1)
+            logger.info(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
+            return True
+        elif steam_id_1 in client.dire and steam_id_2 in client.radiant:
+            client.radiant.remove(steam_id_2)
+            client.dire.remove(steam_id_1)
+            client.radiant.append(steam_id_1)
+            client.dire.append(steam_id_2)
+            logger.info(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
+            return True
+        else:
+            logger.error(
+                f"[Game {game_id}] One or both users not found on opposing teams"
+            )
+            return False
+
+    def update_lobby_teams(
+        self, game_id: int, radiant: list[int], dire: list[int]
+    ) -> bool:
+        """
+        Updates the Radiant and Dire teams in an existing lobby.
+
+        Args:
+            game_id (int): Game ID to match with a lobby.
+            radiant (list[int]): Updated Radiant team Steam IDs.
+            dire (list[int]): Updated Dire team Steam IDs.
+
+        Returns:
+            bool: True if updated successfully, False if no matching lobby found.
+        """
+        client = self.active_clients.get(game_id, None)
+        if not client:
+            logger.error(f"No client found with game ID {game_id}")
+            return False
+        if client.game_id == game_id and client.lobby:
+            client.radiant = radiant
+            client.dire = dire
+            logger.info(f"[Game {game_id}] Lobby teams updated")
+            return True
+        return False
+
+    def cancel_game(self, game_id: int) -> bool:
+        """
+        Forcefully cancels any game or lobby associated with game_id.
+
+        Args:
+            game_id (int): The game ID of the game to cancel.
+
+        Returns:
+            bool: True if action taken, False if no matching client found.
+        """
+        logger.info(f"Cancel game called on game id {game_id}. Forcing exit.")
+        client = self.active_clients.get(game_id, None)
+        if not client:
+            logger.error(f"No client found with game ID {game_id}")
+            return False
+
+        client.emit("shut_down_command")
+
+        logger.info(f"Game {game_id} forcibly canceled.")
+        return True
+
+    def change_lobby_mode(self, game_id: int, game_mode: int):
+        logger.info(f"Trying to change game mode of {game_id} to {game_mode}")
+        client = self.active_clients.get(game_id, None)
+
+        if not client:
+            logger.error(f"Tried to change lobby ")
+            return
+
+        client.emit("update_lobby_mode", game_mode)

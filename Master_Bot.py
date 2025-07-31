@@ -237,6 +237,64 @@ class Master_Bot(commands.Bot):
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
             await self.parent.leave_queue(interaction)
+            
+    class GameModePoll(discord.ui.View):
+        def __init__(self, parent: 'Master_Bot', game_id: int):
+            super().__init__(timeout=None)
+            self.parent = parent
+            self.game_id = game_id
+            self.voted: bool = False  # avoid multiple clicks for same message
+
+        @discord.ui.button(label="Game Mode Poll", style=discord.ButtonStyle.primary)
+        async def start_poll(
+            self, interaction: discord.Interaction, button: discord.ui.Button
+        ):
+            if self.voted:
+                await interaction.response.send_message("Vote already initiated!", ephemeral=True)
+                return
+
+            self.voted = True
+            message = self.parent.lobby_messages.get(self.game_id)
+            if not message:
+                await interaction.response.send_message("Lobby message not found.", ephemeral=True)
+                logging.error(f"Someone tried to initiate a game mode poll, but the match listing doesn't exist")
+                return
+
+            embed = message.embeds[0]
+            embed.add_field(
+                name="🗳️ Game Mode Voting",
+                value="React below to vote:\n📈 Ranked All Pick\n👑 Captains Mode\n3️⃣ Single Draft\n🎲 All random\n\nIn **1 minute** the most voted option will be made the game mode.",
+                inline=False,
+            )
+
+            await message.edit(embed=embed)
+            await interaction.response.send_message("Voting started!", ephemeral=True)
+
+            emojis = DB.mode_map.keys()
+            tasks = [message.add_reaction(emoji) for emoji in emojis]
+            await asyncio.gather(*tasks)
+            asyncio.create_task(self.reviewPoll())
+
+        async def reviewPoll(self):
+            asyncio.sleep(60)
+            message = self.parent.lobby_messages.get(self.game_id)
+            
+            emojis = DB.mode_map.keys()
+            votes = dict()
+            for emoji in emojis: 
+                votes[emoji] = 0
+
+            for reaction in message.reactions:
+                emoji = str(reaction.emoji)
+
+                if emoji in emojis:
+                    votes[emoji] += 1
+
+            mode = max(votes.items(), key= lambda x: x[1])[0]
+
+            self.parent.dota_talker.change_lobby_mode(self.game_id, DB.mode_map_enum.get(mode))
+
+            
 
     def run(self):
         """
@@ -331,22 +389,22 @@ class Master_Bot(commands.Bot):
         Updates or creates the queue status message listing all queued users and their ratings.
         """
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-        full_queue = list(self.coordinator.get_queue())  # [(discord_id, rating)]
-        queued_ids = {user_id for user_id, _ in full_queue}
+        queue = list(self.coordinator.get_queue())  # [(discord_id, rating)]
+        queued_ids = {user_id for user_id, _ in queue}
 
         team_size = self.config["TEAM_SIZE"]
         embed = discord.Embed(
             title="🎮 Gargamel League Queue 🎮", color=discord.Color.dark_gold()
         )
 
-        if not full_queue:
+        if not queue:
             embed.description = "*No Players are currently queueing.*"
 
             if self.config["DEBUG_MODE"]:
                 embed.description += f"\n\n <:BrokenRobot:1394750222940377218>*Gargamel Bot is currently set to DEBUG mode. <:BrokenRobot:1394750222940377218>*"
 
         else:
-            player_lines = "\n".join(f"<@{user_id}>" for user_id, rating in full_queue)
+            player_lines = "\n".join(f"<@{user_id}>" for user_id, rating in queue)
 
             # Add list of Players in General Voice Channel who are not in Queue Here
             # Make new embed underneath the Players in Queue to help see who hasn't clicked the button.
@@ -358,7 +416,7 @@ class Master_Bot(commands.Bot):
             ]
 
             embed.add_field(
-                name=f"**Players in queue ({len(full_queue)}):**",  # invisible character to avoid numbering
+                name=f"**Players in queue ({len(queue)}):**",  # invisible character to avoid numbering
                 value=player_lines,
                 inline=False,
             )
@@ -375,7 +433,7 @@ class Master_Bot(commands.Bot):
                 )
 
             # Check to see if game is about to be launched for status display
-            if len(full_queue) >= team_size * 2:
+            if len(queue) >= team_size * 2:
                 embed.add_field(
                     name="\u200b",
                     value=f"\n@here Enough players! Game will start in **1 minute** ⏳",
@@ -1059,7 +1117,7 @@ class Master_Bot(commands.Bot):
         league_id = getattr(game_info, "league_id", None)
 
         logger.info(f"League id: <{league_id}>")
-        
+
         with self.pending_matches_lock:
             if game_id not in self.pending_matches:
                 logger.debug(f"Ignoring game {game_id}, not in pending_matches")
@@ -1372,7 +1430,8 @@ class Master_Bot(commands.Bot):
         embed = self.build_game_embed(game_id, radiant, dire, password)
 
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-        message = await channel.send(embed=embed)
+        view = self.GameModePoll(self, game_id)
+        message = await channel.send(embed=embed, view=view)
 
         try:
             tasks = [
