@@ -244,7 +244,7 @@ class Master_Bot(commands.Bot):
                     await inner_interaction.response.send_message("Marked ready!", ephemeral=True)
                     logger.info(f"Ready check confirmation from {inner_interaction.user.name}: ready")
                     confirmed.add(user_id)
-                    self.update_queue_status_message(content=f"Ready check in progress", readied=confirmed)
+                    await self.update_queue_status_message(content=f"Ready check in progress", readied=confirmed)
                     await inner_interaction.message.delete()
 
                 async def reject_callback(inner_interaction: discord.Interaction):
@@ -252,7 +252,7 @@ class Master_Bot(commands.Bot):
                     self.coordinator.remove_player(user_id)
                     logger.info(f"Ready check confirmation from {inner_interaction.user.name}: remove")
                     removed.add(user_id)
-                    self.update_queue_status_message(content=f"Ready check in progress", readied=confirmed)
+                    await self.update_queue_status_message(content=f"Ready check in progress", readied=confirmed)
                     await inner_interaction.message.delete()
 
                 confirm_button = discord.ui.Button(label="✅ I'm Ready!", style=discord.ButtonStyle.primary)
