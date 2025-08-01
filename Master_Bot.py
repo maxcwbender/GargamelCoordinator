@@ -232,7 +232,7 @@ class Master_Bot(commands.Bot):
             member = interaction.guild.get_member(user_id)
             if not member:
                 logger.warning(
-                    f"Tried to get ready check confirmation from {interaction.guild.get_member(user_id).name}, but it seems they're no longer in the server"
+                    f"Tried to get ready check confirmation from user {user_id}, but it seems they're no longer in the server"
                 )
                 timed_out.add(user_id)
                 continue
