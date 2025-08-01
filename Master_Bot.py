@@ -244,22 +244,38 @@ class Master_Bot(commands.Bot):
                 view = discord.ui.View(timeout=60)
 
                 async def confirm_callback(inner_interaction: discord.Interaction):
-                    await inner_interaction.response.send_message("Marked ready!", ephemeral=True)
-                    logger.info(f"Ready check confirmation from {inner_interaction.user.name}: ready")
+                    await inner_interaction.response.send_message(
+                        "Marked ready!", ephemeral=True
+                    )
+                    logger.info(
+                        f"Ready check confirmation from {inner_interaction.user.name}: ready"
+                    )
                     confirmed.add(user_id)
-                    await self.update_queue_status_message(content=f"Ready check in progress", readied=confirmed)
+                    await self.update_queue_status_message(
+                        content=f"Ready check in progress", readied=confirmed
+                    )
                     await inner_interaction.message.delete()
 
                 async def reject_callback(inner_interaction: discord.Interaction):
-                    await inner_interaction.response.send_message("Removing from queue!", ephemeral=True)
+                    await inner_interaction.response.send_message(
+                        "Removing from queue!", ephemeral=True
+                    )
                     self.coordinator.remove_player(user_id)
-                    logger.info(f"Ready check confirmation from {inner_interaction.user.name}: remove")
+                    logger.info(
+                        f"Ready check confirmation from {inner_interaction.user.name}: remove"
+                    )
                     removed.add(user_id)
-                    await self.update_queue_status_message(content=f"Ready check in progress", readied=confirmed)
+                    await self.update_queue_status_message(
+                        content=f"Ready check in progress", readied=confirmed
+                    )
                     await inner_interaction.message.delete()
 
-                confirm_button = discord.ui.Button(label="✅ I'm Ready!", style=discord.ButtonStyle.primary)
-                reject_button = discord.ui.Button(label="❌ I'm out", style=discord.ButtonStyle.danger)
+                confirm_button = discord.ui.Button(
+                    label="✅ I'm Ready!", style=discord.ButtonStyle.primary
+                )
+                reject_button = discord.ui.Button(
+                    label="❌ I'm out", style=discord.ButtonStyle.danger
+                )
 
                 confirm_button.callback = confirm_callback
                 reject_button.callback = reject_callback
@@ -268,7 +284,7 @@ class Master_Bot(commands.Bot):
                 view.add_item(reject_button)
 
                 return view
-            
+
             view = make_view(user_id)
 
             async def send_message():
@@ -280,6 +296,7 @@ class Master_Bot(commands.Bot):
                     await interaction.followup.send(
                         f"Couldn't DM <@{user_id}>. Assuming not ready."
                     )
+
             message_tasks.append(send_message())
 
         await asyncio.gather(*message_tasks)
@@ -290,11 +307,11 @@ class Master_Bot(commands.Bot):
         for user_id in to_remove:
             self.coordinator.remove_player(user_id)
 
-        await interaction.followup.send(
-            f"Ready check complete. {len(confirmed)} confirmed, {len(to_remove)} removed from queue."
-        )
+        await interaction.followup.send(f"Ready check complete.")
 
-        await self.update_queue_status_message(content="Ready check complete!")
+        await self.update_queue_status_message(
+            content=f"Ready check complete. {len(confirmed)} confirmed, {len(to_remove)} removed from queue."
+        )
         self.ready_check_status = False
 
     # GUI Views
@@ -321,10 +338,14 @@ class Master_Bot(commands.Bot):
         ):
             with self.parent.ready_check_lock:
                 if self.parent.ready_check_status:
-                    await interaction.response.send_message("Ready check already in progress!")
+                    await interaction.response.send_message(
+                        "Ready check already in progress!", ephemeral=True
+                    )
                 else:
                     self.parent.ready_check_status = True
-                    await interaction.response.send_message("Initiating ready check")
+                    await interaction.response.send_message(
+                        "Initiating ready check", ephemeral=True
+                    )
             await self.parent.start_ready_check(interaction)
 
     class GameModePoll(discord.ui.View):
@@ -499,7 +520,10 @@ class Master_Bot(commands.Bot):
                 embed.description += f"\n\n <:BrokenRobot:1394750222940377218>*Gargamel Bot is currently set to DEBUG mode. <:BrokenRobot:1394750222940377218>*"
 
         else:
-            player_lines = "\n".join(f"{"✅ " if user_id in readied else ""}<@{user_id}>" for user_id, rating in queue)
+            player_lines = "\n".join(
+                f"{"✅ " if user_id in readied else ""}<@{user_id}>"
+                for user_id, rating in queue
+            )
 
             # Add list of Players in General Voice Channel who are not in Queue Here
             # Make new embed underneath the Players in Queue to help see who hasn't clicked the button.
@@ -1152,7 +1176,9 @@ class Master_Bot(commands.Bot):
 
             """
             self.coordinator.clear_queue()
-            await self.update_queue_status_message(content=f"Queue cleared - @here requeue if desired")
+            await self.update_queue_status_message(
+                content=f"Queue cleared - @here requeue if desired"
+            )
 
             return await interaction.response.send_message(
                 f"The queue has been cleared.", ephemeral=True
