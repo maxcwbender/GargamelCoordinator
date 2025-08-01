@@ -194,6 +194,7 @@ class DotaTalker:
                 logger.error(
                     f"tried to update lobby of game {dotaClient.game_id} to mode {game_mode}, but associated client seemingly not in a lobby"
                 )
+                return
             dotaClient.config_practice_lobby({"game_mode": game_mode})
 
         @dotaClient.on("shut_down_command")
@@ -429,7 +430,7 @@ class DotaTalker:
         client = self.active_clients.get(game_id, None)
 
         if not client:
-            logger.error(f"Tried to change lobby ")
+            logger.error(f"Tried to change lobby for game id {game_id}, but no client found")
             return
 
         client.emit("update_lobby_mode", game_mode)

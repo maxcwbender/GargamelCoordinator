@@ -220,9 +220,80 @@ class Master_Bot(commands.Bot):
         )
         await self.update_queue_status_message()
 
+    async def start_ready_check(self, interaction: discord.Interaction):
+        logger.info("Initiated ready check")
+        queue_members = self.coordinator.queue.keys()
+        confirmed = set()
+        timed_out = set()
+        removed = set()
+        message_tasks = []
+
+        for user_id in queue_members:
+            member = interaction.guild.get_member(user_id)
+            if not member:
+                logger.warning(
+                    f"Tried to get ready check confirmation from {interaction.guild.get_member(user_id).name}, but it seems they're no longer in the server"
+                )
+                timed_out.add(user_id)
+                continue
+
+            def make_view(user_id):
+                view = discord.ui.View(timeout=60)
+
+                async def confirm_callback(inner_interaction: discord.Interaction):
+                    await inner_interaction.response.send_message("Marked ready!", ephemeral=True)
+                    logger.info(f"Ready check confirmation from {inner_interaction.user.name}: ready")
+                    confirmed.add(user_id)
+                    self.update_queue_status_message(content=f"Ready check in progress", readied=confirmed)
+                    await inner_interaction.message.delete()
+
+                async def reject_callback(inner_interaction: discord.Interaction):
+                    await inner_interaction.response.send_message("Removing from queue!", ephemeral=True)
+                    self.coordinator.remove_player(user_id)
+                    logger.info(f"Ready check confirmation from {inner_interaction.user.name}: remove")
+                    removed.add(user_id)
+                    self.update_queue_status_message(content=f"Ready check in progress", readied=confirmed)
+                    await inner_interaction.message.delete()
+
+                confirm_button = discord.ui.Button(label="✅ I'm Ready!", style=discord.ButtonStyle.primary)
+                reject_button = discord.ui.Button(label="❌ I'm out", style=discord.ButtonStyle.danger)
+
+                confirm_button.callback = confirm_callback
+                reject_button.callback = reject_callback
+
+                view.add_item(confirm_button)
+                view.add_item(reject_button)
+
+                return view
+            
+            view = make_view(user_id)
+
+            async def send_message():
+                try:
+                    await member.send(
+                        "Are you still ready to play? Click below:", view=view
+                    )
+                except discord.Forbidden:
+                    await interaction.followup.send(
+                        f"Couldn't DM <@{user_id}>. Assuming not ready."
+                    )
+            message_tasks.append(send_message())
+
+        await asyncio.gather(*message_tasks)
+        await asyncio.sleep(60)
+
+        to_remove = queue_members - (confirmed | removed)
+
+        for user_id in to_remove:
+            self.coordinator.remove_player(user_id)
+
+        await interaction.followup.send(
+            f"Ready check complete. {len(confirmed)} confirmed, {len(to_remove)} removed from queue."
+        )
+
     # GUI Views
     class QueueButtonView(discord.ui.View):
-        def __init__(self, parent: 'Master_Bot'):
+        def __init__(self, parent: "Master_Bot"):
             super().__init__(timeout=None)
             self.parent = parent
 
@@ -237,9 +308,15 @@ class Master_Bot(commands.Bot):
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
             await self.parent.leave_queue(interaction)
-            
+
+        @discord.ui.button(label="✅ Ready Check", style=discord.ButtonStyle.success)
+        async def ready_check(
+            self, interaction: discord.Interaction, button: discord.ui.Button
+        ):
+            await self.parent.start_ready_check(interaction)
+
     class GameModePoll(discord.ui.View):
-        def __init__(self, parent: 'Master_Bot', game_id: int):
+        def __init__(self, parent: "Master_Bot", game_id: int):
             super().__init__(timeout=None)
             self.parent = parent
             self.game_id = game_id
@@ -250,14 +327,20 @@ class Master_Bot(commands.Bot):
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
             if self.voted:
-                await interaction.response.send_message("Vote already initiated!", ephemeral=True)
+                await interaction.response.send_message(
+                    "Vote already initiated!", ephemeral=True
+                )
                 return
 
             self.voted = True
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
-                await interaction.response.send_message("Lobby message not found.", ephemeral=True)
-                logging.error(f"Someone tried to initiate a game mode poll, but the match listing doesn't exist")
+                await interaction.response.send_message(
+                    "Lobby message not found.", ephemeral=True
+                )
+                logging.error(
+                    f"Someone tried to initiate a game mode poll, but the match listing doesn't exist"
+                )
                 return
 
             embed = message.embeds[0]
@@ -278,10 +361,10 @@ class Master_Bot(commands.Bot):
         async def reviewPoll(self):
             asyncio.sleep(60)
             message = self.parent.lobby_messages.get(self.game_id)
-            
+
             emojis = DB.mode_map.keys()
             votes = dict()
-            for emoji in emojis: 
+            for emoji in emojis:
                 votes[emoji] = 0
 
             for reaction in message.reactions:
@@ -290,11 +373,11 @@ class Master_Bot(commands.Bot):
                 if emoji in emojis:
                     votes[emoji] += 1
 
-            mode = max(votes.items(), key= lambda x: x[1])[0]
+            mode = max(votes.items(), key=lambda x: x[1])[0]
 
-            self.parent.dota_talker.change_lobby_mode(self.game_id, DB.mode_map_enum.get(mode))
-
-            
+            self.parent.dota_talker.change_lobby_mode(
+                self.game_id, DB.mode_map_enum.get(mode)
+            )
 
     def run(self):
         """
@@ -383,7 +466,7 @@ class Master_Bot(commands.Bot):
         return embed
 
     async def update_queue_status_message(
-        self, new_message: bool = False, content=None
+        self, new_message: bool = False, content=None, readied: set[int] = []
     ):
         """
         Updates or creates the queue status message listing all queued users and their ratings.
@@ -404,7 +487,7 @@ class Master_Bot(commands.Bot):
                 embed.description += f"\n\n <:BrokenRobot:1394750222940377218>*Gargamel Bot is currently set to DEBUG mode. <:BrokenRobot:1394750222940377218>*"
 
         else:
-            player_lines = "\n".join(f"<@{user_id}>" for user_id, rating in queue)
+            player_lines = "\n".join(f"{"✅ " if user_id in readied else ""}<@{user_id}>" for user_id, rating in queue)
 
             # Add list of Players in General Voice Channel who are not in Queue Here
             # Make new embed underneath the Players in Queue to help see who hasn't clicked the button.
@@ -1057,7 +1140,7 @@ class Master_Bot(commands.Bot):
 
             """
             self.coordinator.clear_queue()
-            await self.update_queue_status_message()
+            await self.update_queue_status_message(content=f"Queue cleared - @here requeue if desired")
 
             return await interaction.response.send_message(
                 f"The queue has been cleared.", ephemeral=True
@@ -1263,8 +1346,8 @@ class Master_Bot(commands.Bot):
 
         radiant, dire = self.game_map_inverse[game_id]
         del self.game_map_inverse[game_id]
-        
-        players = radiant.union(dire)
+
+        players = radiant | dire
 
         for player in players:
             del self.game_map[player]
