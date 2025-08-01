@@ -86,6 +86,8 @@ class Master_Bot(commands.Bot):
         self.dota_talker: DotaTalker.DotaTalker = None
         self.pending_matches = set()
         self.pending_matches_lock = threading.Lock()
+        self.ready_check_lock = threading.Lock()
+        self.ready_check_status = False
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -222,6 +224,7 @@ class Master_Bot(commands.Bot):
 
     async def start_ready_check(self, interaction: discord.Interaction):
         logger.info("Initiated ready check")
+        await self.update_queue_status_message(content="Ready check in progress!")
         queue_members = self.coordinator.queue.keys()
         confirmed = set()
         timed_out = set()
@@ -291,6 +294,9 @@ class Master_Bot(commands.Bot):
             f"Ready check complete. {len(confirmed)} confirmed, {len(to_remove)} removed from queue."
         )
 
+        await self.update_queue_status_message(content="Ready check complete!")
+        self.ready_check_status = False
+
     # GUI Views
     class QueueButtonView(discord.ui.View):
         def __init__(self, parent: "Master_Bot"):
@@ -313,6 +319,12 @@ class Master_Bot(commands.Bot):
         async def ready_check(
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
+            with self.parent.ready_check_lock:
+                if self.parent.ready_check_status:
+                    await interaction.response.send_message("Ready check already in progress!")
+                else:
+                    self.parent.ready_check_status = True
+                    await interaction.response.send_message("Initiating ready check")
             await self.parent.start_ready_check(interaction)
 
     class GameModePoll(discord.ui.View):
