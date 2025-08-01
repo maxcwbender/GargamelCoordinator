@@ -307,7 +307,7 @@ class Master_Bot(commands.Bot):
         for user_id in to_remove:
             self.coordinator.remove_player(user_id)
 
-        await interaction.followup.send(f"Ready check complete.")
+        await interaction.followup.send(f"Ready check complete.", ephemeral=True)
 
         await self.update_queue_status_message(
             content=f"Ready check complete. {len(confirmed)} confirmed, {len(to_remove)} removed from queue."
