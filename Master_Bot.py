@@ -231,6 +231,61 @@ class Master_Bot(commands.Bot):
         removed = set()
         message_tasks = []
 
+        def make_view(user_id):
+            view = discord.ui.View(timeout=60)
+
+            async def confirm_callback(inner_interaction: discord.Interaction, user_id=user_id):
+                await inner_interaction.response.send_message(
+                    "Marked ready!", ephemeral=True
+                )
+                logger.info(
+                    f"Ready check confirmation from {inner_interaction.user.name}: ready"
+                )
+                confirmed.add(user_id)
+                await self.update_queue_status_message(
+                    content=f"Ready check in progress", readied=confirmed
+                )
+                await inner_interaction.message.delete()
+
+            async def reject_callback(inner_interaction: discord.Interaction, user_id=user_id):
+                await inner_interaction.response.send_message(
+                    "Removing from queue!", ephemeral=True
+                )
+                self.coordinator.remove_player(user_id)
+                logger.info(
+                    f"Ready check confirmation from {inner_interaction.user.name}: remove"
+                )
+                removed.add(user_id)
+                await self.update_queue_status_message(
+                    content=f"Ready check in progress", readied=confirmed
+                )
+                await inner_interaction.message.delete()
+
+            confirm_button = discord.ui.Button(
+                label="✅ I'm Ready!", style=discord.ButtonStyle.primary
+            )
+            reject_button = discord.ui.Button(
+                label="❌ I'm out", style=discord.ButtonStyle.danger
+            )
+
+            confirm_button.callback = confirm_callback
+            reject_button.callback = reject_callback
+
+            view.add_item(confirm_button)
+            view.add_item(reject_button)
+
+            return view
+
+        async def send_message(member: discord.Member, view):
+            try:
+                await member.send(
+                    "Are you still ready to play? Click below:", view=view
+                )
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    f"Couldn't DM <@{member.id}>. Assuming not ready."
+                )
+
         for user_id in queue_members:
             member = interaction.guild.get_member(user_id)
             if not member:
@@ -240,64 +295,9 @@ class Master_Bot(commands.Bot):
                 timed_out.add(user_id)
                 continue
 
-            def make_view(user_id):
-                view = discord.ui.View(timeout=60)
-
-                async def confirm_callback(inner_interaction: discord.Interaction):
-                    await inner_interaction.response.send_message(
-                        "Marked ready!", ephemeral=True
-                    )
-                    logger.info(
-                        f"Ready check confirmation from {inner_interaction.user.name}: ready"
-                    )
-                    confirmed.add(user_id)
-                    await self.update_queue_status_message(
-                        content=f"Ready check in progress", readied=confirmed
-                    )
-                    await inner_interaction.message.delete()
-
-                async def reject_callback(inner_interaction: discord.Interaction):
-                    await inner_interaction.response.send_message(
-                        "Removing from queue!", ephemeral=True
-                    )
-                    self.coordinator.remove_player(user_id)
-                    logger.info(
-                        f"Ready check confirmation from {inner_interaction.user.name}: remove"
-                    )
-                    removed.add(user_id)
-                    await self.update_queue_status_message(
-                        content=f"Ready check in progress", readied=confirmed
-                    )
-                    await inner_interaction.message.delete()
-
-                confirm_button = discord.ui.Button(
-                    label="✅ I'm Ready!", style=discord.ButtonStyle.primary
-                )
-                reject_button = discord.ui.Button(
-                    label="❌ I'm out", style=discord.ButtonStyle.danger
-                )
-
-                confirm_button.callback = confirm_callback
-                reject_button.callback = reject_callback
-
-                view.add_item(confirm_button)
-                view.add_item(reject_button)
-
-                return view
-
             view = make_view(user_id)
 
-            async def send_message():
-                try:
-                    await member.send(
-                        "Are you still ready to play? Click below:", view=view
-                    )
-                except discord.Forbidden:
-                    await interaction.followup.send(
-                        f"Couldn't DM <@{user_id}>. Assuming not ready."
-                    )
-
-            message_tasks.append(send_message())
+            message_tasks.append(send_message(member, view))
 
         await asyncio.gather(*message_tasks)
         await asyncio.sleep(60)
