@@ -222,13 +222,13 @@ class Master_Bot(commands.Bot):
         )
         await self.update_queue_status_message()
 
-    async def start_ready_check(self, interaction: discord.Interaction):
+    async def start_ready_check(self, interaction: discord.Interaction, sleep_time: int = 60):
         logger.info("Initiated ready check")
-        await self.update_queue_status_message(content="Ready check in progress!")
+        await self.update_queue_status_message(new_message=True, content="Ready check in progress!")
         queue_members = self.coordinator.queue.keys()
         confirmed = set()
-        timed_out = set()
         removed = set()
+        blocked = set()
         message_tasks = []
 
         def make_view(user_id):
@@ -242,9 +242,6 @@ class Master_Bot(commands.Bot):
                     f"Ready check confirmation from {inner_interaction.user.name}: ready"
                 )
                 confirmed.add(user_id)
-                await self.update_queue_status_message(
-                    content=f"Ready check in progress", readied=confirmed
-                )
                 await inner_interaction.message.delete()
 
             async def reject_callback(inner_interaction: discord.Interaction, user_id=user_id):
@@ -256,9 +253,6 @@ class Master_Bot(commands.Bot):
                     f"Ready check confirmation from {inner_interaction.user.name}: remove"
                 )
                 removed.add(user_id)
-                await self.update_queue_status_message(
-                    content=f"Ready check in progress", readied=confirmed
-                )
                 await inner_interaction.message.delete()
 
             confirm_button = discord.ui.Button(
@@ -282,8 +276,8 @@ class Master_Bot(commands.Bot):
                     "Are you still ready to play? Click below:", view=view
                 )
             except discord.Forbidden:
-                await interaction.followup.send(
-                    f"Couldn't DM <@{member.id}>. Assuming not ready."
+                logger.warning(
+                    f"Couldn't DM {member.name}>. Assuming not ready."
                 )
 
         for user_id in queue_members:
@@ -292,7 +286,7 @@ class Master_Bot(commands.Bot):
                 logger.warning(
                     f"Tried to get ready check confirmation from user {user_id}, but it seems they're no longer in the server"
                 )
-                timed_out.add(user_id)
+                blocked.add(member)
                 continue
 
             view = make_view(user_id)
@@ -300,7 +294,14 @@ class Master_Bot(commands.Bot):
             message_tasks.append(send_message(member, view))
 
         await asyncio.gather(*message_tasks)
-        await asyncio.sleep(60)
+        time_slept = 0
+        while time_slept < sleep_time and len(confirmed) + len(removed) + len(blocked) < len(queue_members):
+            await self.update_queue_status_message(
+                content=f"Ready check in progress", readied=confirmed
+            )
+            asyncio.sleep(2)
+            time_slept += 2
+
 
         to_remove = queue_members - (confirmed | removed)
 
@@ -310,6 +311,7 @@ class Master_Bot(commands.Bot):
         await interaction.followup.send(f"Ready check complete.", ephemeral=True)
 
         await self.update_queue_status_message(
+            new_message=True,
             content=f"Ready check complete. {len(confirmed)} confirmed, {len(to_remove)} removed from queue."
         )
         self.ready_check_status = False
@@ -578,8 +580,18 @@ class Master_Bot(commands.Bot):
         # If the message exists, try to edit it
         try:
             if self.queue_status_msg and not new_message:
-                await self.queue_status_msg.edit(embed=embed, view=view)
+                try:
+                    await self.queue_status_msg.edit(embed=embed, view=view)
+                except discord.HTTPException as e:
+                    if e.code == 30046:
+                        logger.warning("Too many edits to an old message, replacing.")
+                        await self.queue_status_msg.delete()
+                        self.queue_status_msg = await lobby_channel.send(embed=embed, view=view)
+                    else:
+                        raise
             else:
+                if self.queue_status_msg:
+                    await self.queue_status_msg.delete()
                 self.queue_status_msg = await lobby_channel.send(embed=embed, view=view)
         except discord.NotFound:
             # If message was deleted, reset and recreate
@@ -674,10 +686,12 @@ class Master_Bot(commands.Bot):
         """
         try:
             while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
+                self.start_ready_check(None, sleep_time=30)
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
                     await self.update_queue_status_message(
+                        new_message=True,
                         content="Not enough players anymore. Game cancelled. ❌"
                     )
                     break
@@ -720,7 +734,7 @@ class Master_Bot(commands.Bot):
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         await lobby_channel.purge()
 
-        await self.update_queue_status_message()
+        await self.update_queue_status_message(new_message=True)
 
         # --------------- #
         # Slash Commands  #
@@ -1177,6 +1191,7 @@ class Master_Bot(commands.Bot):
             """
             self.coordinator.clear_queue()
             await self.update_queue_status_message(
+                new_message=True,
                 content=f"Queue cleared - @here requeue if desired"
             )
 
@@ -1576,9 +1591,9 @@ class Master_Bot(commands.Bot):
                 "name": f"** 🪑 Players who got put in the cuck chair last game (Selection Priority Increased for next game): 🪑**",
                 "value": "\n".join(f"<@{user_id}>" for user_id in cut_players),
             }
-            await self.update_queue_status_message(content=content)
+            await self.update_queue_status_message(new_message=True, content=content)
         else:
-            await self.update_queue_status_message()
+            await self.update_queue_status_message(new_message=True)
 
 
 # Run the bot
