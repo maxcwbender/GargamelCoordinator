@@ -82,7 +82,7 @@ class Master_Bot(commands.Bot):
         self.lobby_messages: dict[int, discord.Message] = {}
         self.dota_talker: DotaTalker.DotaTalker = None
         self.pending_matches = set()
-        self.ready_check_lock = threading.Lock()
+        self.ready_check_lock = asyncio.Lock()
         self.ready_check_status = False
 
     async def setup_hook(self):
@@ -218,8 +218,17 @@ class Master_Bot(commands.Bot):
 
     async def start_ready_check(self, interaction: discord.Interaction, sleep_time: int = 60):
         logger.info("Initiated ready check")
+
+        if interaction and not interaction.response.is_done():
+            try:
+                await interaction.response.defer(thinking=True, ephemeral=True)
+            except Exception:
+                pass
+
+        self.ready_check_status = True
         await self.update_queue_status_message(new_message=True, content="Ready check in progress!")
-        queue_members = self.coordinator.queue.keys()
+
+        # queue_members = self.coordinator.queue.keys()
         queue_snapshot: set[int] = set(self.coordinator.queue.keys())
         confirmed = set()
         removed = set()
@@ -265,15 +274,17 @@ class Master_Bot(commands.Bot):
 
             return view
 
+        sem = asyncio.Semaphore(5)
         async def send_message(member: discord.Member, view):
-            try:
-                await member.send(
-                    "Are you still ready to play? Click below:", view=view
-                )
-            except discord.Forbidden:
-                logger.warning(
-                    f"Couldn't DM {member.name}>. Assuming not ready."
-                )
+            async with sem:
+                try:
+                    await member.send(
+                        "Are you still ready to play? Click below:", view=view
+                    )
+                except discord.Forbidden:
+                    logger.warning(
+                        f"Couldn't DM {member.name}>. Assuming not ready."
+                    )
 
         for user_id in queue_snapshot:
             member = interaction.guild.get_member(user_id)
@@ -334,7 +345,7 @@ class Master_Bot(commands.Bot):
         async def ready_check(
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
-            with self.parent.ready_check_lock:
+            async with self.parent.ready_check_lock:
                 if self.parent.ready_check_status:
                     await interaction.response.send_message(
                         "Ready check already in progress!", ephemeral=True
@@ -428,8 +439,9 @@ class Master_Bot(commands.Bot):
         return embed
 
     async def update_queue_status_message(
-            self, new_message: bool = False, content=None, readied: set[int] = []
+            self, new_message: bool = False, content=None, readied: set[int] | None = None
     ):
+        readied = readied or set()
         """
         Updates or creates the queue status message listing all queued users and their ratings.
         """
