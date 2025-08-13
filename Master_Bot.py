@@ -220,6 +220,7 @@ class Master_Bot(commands.Bot):
         logger.info("Initiated ready check")
         await self.update_queue_status_message(new_message=True, content="Ready check in progress!")
         queue_members = self.coordinator.queue.keys()
+        queue_snapshot: set[int] = set(self.coordinator.queue.keys())
         confirmed = set()
         removed = set()
         blocked = set()
@@ -274,7 +275,7 @@ class Master_Bot(commands.Bot):
                     f"Couldn't DM {member.name}>. Assuming not ready."
                 )
 
-        for user_id in queue_members:
+        for user_id in queue_snapshot:
             member = interaction.guild.get_member(user_id)
             if not member:
                 logger.warning(
@@ -289,15 +290,16 @@ class Master_Bot(commands.Bot):
 
         await asyncio.gather(*message_tasks)
         time_slept = 0
-        while time_slept < sleep_time and len(confirmed) + len(removed) + len(blocked) < len(queue_members):
+        while time_slept < sleep_time and len(confirmed) + len(removed) + len(blocked) < len(queue_snapshot):
             await self.update_queue_status_message(
                 content=f"Ready check in progress", readied=confirmed
             )
-            asyncio.sleep(2)
+            await asyncio.sleep(2)
+            print(f"time_slept: {time_slept}")
             time_slept += 2
 
 
-        to_remove = queue_members - (confirmed | removed)
+        to_remove = queue_snapshot - (confirmed | removed | blocked)
 
         for user_id in to_remove:
             self.coordinator.remove_player(user_id)
