@@ -218,6 +218,11 @@ class Master_Bot(commands.Bot):
 
     async def start_ready_check(self, interaction: discord.Interaction, sleep_time: int = 60):
         logger.info("Initiated ready check")
+        if self.ready_check_status:
+            if interaction and not interaction.response.is_done():
+                logger.info("Ready check detected as already in progress, aborting.")
+                await interaction.response.send_message("Ready check already in progress!", ephemeral=True)
+            return
 
         if interaction and not interaction.response.is_done():
             try:
@@ -226,110 +231,112 @@ class Master_Bot(commands.Bot):
                 pass
 
         self.ready_check_status = True
-        await self.update_queue_status_message(new_message=True, content="Ready check in progress!")
 
-        # queue_members = self.coordinator.queue.keys()
-        queue_snapshot: set[int] = set(self.coordinator.queue.keys())
-        confirmed = set()
-        removed = set()
-        blocked = set()
-        message_tasks = []
+        try:
+            await self.update_queue_status_message(new_message=True, content="Ready check in progress!")
 
-        def make_view(user_id):
-            view = discord.ui.View(timeout=60)
+            queue_snapshot: set[int] = set(self.coordinator.queue.keys())
+            confirmed = set()
+            removed = set()
+            blocked = set()
+            message_tasks = []
 
-            async def confirm_callback(inner_interaction: discord.Interaction, user_id=user_id):
-                await inner_interaction.response.send_message(
-                    "Marked ready!", ephemeral=True
-                )
-                logger.info(
-                    f"Ready check confirmation from {inner_interaction.user.name}: ready"
-                )
-                confirmed.add(user_id)
-                await inner_interaction.message.delete()
+            def make_view(user_id):
+                view = discord.ui.View(timeout=60)
 
-            async def reject_callback(inner_interaction: discord.Interaction, user_id=user_id):
-                await inner_interaction.response.send_message(
-                    "Removing from queue!", ephemeral=True
-                )
-                self.coordinator.remove_player(user_id)
-                logger.info(
-                    f"Ready check confirmation from {inner_interaction.user.name}: remove"
-                )
-                removed.add(user_id)
-                await inner_interaction.message.delete()
-
-            confirm_button = discord.ui.Button(
-                label="✅ I'm Ready!", style=discord.ButtonStyle.primary
-            )
-            reject_button = discord.ui.Button(
-                label="❌ I'm out", style=discord.ButtonStyle.danger
-            )
-
-            confirm_button.callback = confirm_callback
-            reject_button.callback = reject_callback
-
-            view.add_item(confirm_button)
-            view.add_item(reject_button)
-
-            return view
-
-        sem = asyncio.Semaphore(5)
-        async def send_message(member: discord.Member, view):
-            async with sem:
-                try:
-                    await member.send(
-                        "Are you still ready to play? Click below:", view=view
+                async def confirm_callback(inner_interaction: discord.Interaction, user_id=user_id):
+                    await inner_interaction.response.send_message(
+                        "Marked ready!", ephemeral=True
                     )
-                except discord.Forbidden:
+                    logger.info(
+                        f"Ready check confirmation from {inner_interaction.user.name}: ready"
+                    )
+                    confirmed.add(user_id)
+                    await inner_interaction.message.delete()
+
+                async def reject_callback(inner_interaction: discord.Interaction, user_id=user_id):
+                    await inner_interaction.response.send_message(
+                        "Removing from queue!", ephemeral=True
+                    )
+                    self.coordinator.remove_player(user_id)
+                    logger.info(
+                        f"Ready check confirmation from {inner_interaction.user.name}: remove"
+                    )
+                    removed.add(user_id)
+                    await inner_interaction.message.delete()
+
+                confirm_button = discord.ui.Button(
+                    label="✅ I'm Ready!", style=discord.ButtonStyle.primary
+                )
+                reject_button = discord.ui.Button(
+                    label="❌ I'm out", style=discord.ButtonStyle.danger
+                )
+
+                confirm_button.callback = confirm_callback
+                reject_button.callback = reject_callback
+
+                view.add_item(confirm_button)
+                view.add_item(reject_button)
+
+                return view
+
+            sem = asyncio.Semaphore(5)
+            async def send_message(member: discord.Member, view):
+                async with sem:
+                    try:
+                        await member.send(
+                            "Are you still ready to play? Click below:", view=view
+                        )
+                    except discord.Forbidden:
+                        logger.warning(
+                            f"Couldn't DM {member.name}>. Assuming not ready."
+                        )
+
+            for user_id in queue_snapshot:
+                member = interaction.guild.get_member(user_id)
+                if not member:
                     logger.warning(
-                        f"Couldn't DM {member.name}>. Assuming not ready."
+                        f"Tried to get ready check confirmation from user {user_id}, but it seems they're no longer in the server"
                     )
+                    blocked.add(member)
+                    continue
 
-        for user_id in queue_snapshot:
-            member = interaction.guild.get_member(user_id)
-            if not member:
-                logger.warning(
-                    f"Tried to get ready check confirmation from user {user_id}, but it seems they're no longer in the server"
+                view = make_view(user_id)
+
+                message_tasks.append(send_message(member, view))
+
+            await asyncio.gather(*message_tasks)
+            time_slept = 0
+            while time_slept < sleep_time and len(confirmed) + len(removed) + len(blocked) < len(queue_snapshot):
+                await self.update_queue_status_message(
+                    content=f"Ready check in progress", readied=confirmed
                 )
-                blocked.add(member)
-                continue
+                await asyncio.sleep(2)
+                print(f"time_slept: {time_slept}")
+                time_slept += 2
 
-            view = make_view(user_id)
 
-            message_tasks.append(send_message(member, view))
+            to_remove = queue_snapshot - (confirmed | removed | blocked)
 
-        await asyncio.gather(*message_tasks)
-        time_slept = 0
-        while time_slept < sleep_time and len(confirmed) + len(removed) + len(blocked) < len(queue_snapshot):
+            removed_due_to_decline = len(removed)  # clicked ❌
+            auto_removed_after_timeout = len(to_remove)  # timed out / no response
+            # couldnt_reach = len(blocked)  # DMs failed or not in guild
+
+            for user_id in to_remove:
+                self.coordinator.remove_player(user_id)
+
+            await interaction.followup.send(f"Ready check complete.", ephemeral=True)
+
             await self.update_queue_status_message(
-                content=f"Ready check in progress", readied=confirmed
+                new_message=True,
+                content=(
+                    "Ready check complete. "
+                    f"{len(confirmed)} confirmed, "
+                    f"{removed_due_to_decline + auto_removed_after_timeout} removed from queue "
+                ),
             )
-            await asyncio.sleep(2)
-            print(f"time_slept: {time_slept}")
-            time_slept += 2
-
-
-        to_remove = queue_snapshot - (confirmed | removed | blocked)
-
-        removed_due_to_decline = len(removed)  # clicked ❌
-        auto_removed_after_timeout = len(to_remove)  # timed out / no response
-        # couldnt_reach = len(blocked)  # DMs failed or not in guild
-
-        for user_id in to_remove:
-            self.coordinator.remove_player(user_id)
-
-        await interaction.followup.send(f"Ready check complete.", ephemeral=True)
-
-        await self.update_queue_status_message(
-            new_message=True,
-            content=(
-                "Ready check complete. "
-                f"{len(confirmed)} confirmed, "
-                f"{removed_due_to_decline + auto_removed_after_timeout} removed from queue "
-            ),
-        )
-        self.ready_check_status = False
+        finally:
+            self.ready_check_status = False
 
     # GUI Views
     class QueueButtonView(discord.ui.View):
@@ -359,7 +366,6 @@ class Master_Bot(commands.Bot):
                         "Ready check already in progress!", ephemeral=True
                     )
                 else:
-                    self.parent.ready_check_status = True
                     await interaction.response.send_message(
                         "Initiating ready check", ephemeral=True
                     )
