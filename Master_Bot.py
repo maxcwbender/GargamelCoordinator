@@ -312,6 +312,10 @@ class Master_Bot(commands.Bot):
 
         to_remove = queue_snapshot - (confirmed | removed | blocked)
 
+        removed_due_to_decline = len(removed)  # clicked ❌
+        auto_removed_after_timeout = len(to_remove)  # timed out / no response
+        # couldnt_reach = len(blocked)  # DMs failed or not in guild
+
         for user_id in to_remove:
             self.coordinator.remove_player(user_id)
 
@@ -319,7 +323,11 @@ class Master_Bot(commands.Bot):
 
         await self.update_queue_status_message(
             new_message=True,
-            content=f"Ready check complete. {len(confirmed)} confirmed, {len(to_remove)} removed from queue."
+            content=(
+                "Ready check complete. "
+                f"{len(confirmed)} confirmed, "
+                f"{removed_due_to_decline + auto_removed_after_timeout} removed from queue "
+            ),
         )
         self.ready_check_status = False
 
