@@ -229,6 +229,8 @@ class Master_Bot(commands.Bot):
         await self.update_queue_status_message(new_message=True, content="Ready check in progress!")
 
         # queue_members = self.coordinator.queue.keys()
+        guild = interaction.guild if interaction else self.the_guild
+
         queue_snapshot: set[int] = set(self.coordinator.queue.keys())
         confirmed = set()
         removed = set()
@@ -287,7 +289,7 @@ class Master_Bot(commands.Bot):
                     )
 
         for user_id in queue_snapshot:
-            member = interaction.guild.get_member(user_id)
+            member = guild.get_member(user_id)
             if not member:
                 logger.warning(
                     f"Tried to get ready check confirmation from user {user_id}, but it seems they're no longer in the server"
