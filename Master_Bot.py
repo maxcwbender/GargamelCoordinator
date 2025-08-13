@@ -217,7 +217,11 @@ class Master_Bot(commands.Bot):
         await self.update_queue_status_message()
 
     async def start_ready_check(self, interaction: discord.Interaction, sleep_time: int = 60):
-        logger.info("Initiated ready check")
+
+        if self.ready_check_status:
+            if interaction and not interaction.response.is_done():
+                await interaction.response.send_message("Ready check already in progress!", ephemeral=True)
+            return
 
         if interaction and not interaction.response.is_done():
             try:
