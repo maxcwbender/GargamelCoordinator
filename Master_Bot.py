@@ -218,10 +218,10 @@ class Master_Bot(commands.Bot):
 
     async def start_ready_check(self, interaction: discord.Interaction, sleep_time: int = 60):
 
-        # if self.ready_check_status:
-        #     if interaction and not interaction.response.is_done():
-        #         await interaction.response.send_message("Ready check already in progress!", ephemeral=True)
-        #     return
+        if self.ready_check_status:
+            if interaction and not interaction.response.is_done():
+                await interaction.response.send_message("Ready check already in progress!", ephemeral=True)
+            return
 
         if interaction and not interaction.response.is_done():
             try:
@@ -234,7 +234,6 @@ class Master_Bot(commands.Bot):
         try:
             await self.update_queue_status_message(new_message=True, content="Ready check in progress!")
 
-            # queue_members = self.coordinator.queue.keys()
             queue_snapshot: set[int] = set(self.coordinator.queue.keys())
             confirmed = set()
             removed = set()
