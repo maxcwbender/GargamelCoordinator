@@ -365,6 +365,70 @@ class Master_Bot(commands.Bot):
                     )
             await self.parent.start_ready_check(interaction)
 
+    class GameModePoll(discord.ui.View):
+        def __init__(self, parent: "Master_Bot", game_id: int):
+            super().__init__(timeout=None)
+            self.parent = parent
+            self.game_id = game_id
+            self.voted: bool = False  # avoid multiple clicks for same message
+
+        @discord.ui.button(label="Game Mode Poll", style=discord.ButtonStyle.primary)
+        async def start_poll(
+            self, interaction: discord.Interaction, button: discord.ui.Button
+        ):
+            if self.voted:
+                await interaction.response.send_message(
+                    "Vote already initiated!", ephemeral=True
+                )
+                return
+
+            self.voted = True
+            message = self.parent.lobby_messages.get(self.game_id)
+            if not message:
+                await interaction.response.send_message(
+                    "Lobby message not found.", ephemeral=True
+                )
+                logging.error(
+                    f"Someone tried to initiate a game mode poll, but the match listing doesn't exist"
+                )
+                return
+
+            embed = message.embeds[0]
+            embed.add_field(
+                name="🗳️ Game Mode Voting",
+                value="React below to vote:\n📈 Ranked All Pick\n👑 Captains Mode\n3️⃣ Single Draft\n🎲 All random\n\nIn **1 minute** the most voted option will be made the game mode.",
+                inline=False,
+            )
+
+            await message.edit(embed=embed)
+            await interaction.response.send_message("Voting started!", ephemeral=True)
+
+            emojis = DB.mode_map.keys()
+            tasks = [message.add_reaction(emoji) for emoji in emojis]
+            await asyncio.gather(*tasks)
+            asyncio.create_task(self.reviewPoll())
+
+        async def reviewPoll(self):
+            asyncio.sleep(60)
+            message = self.parent.lobby_messages.get(self.game_id)
+
+            emojis = DB.mode_map.keys()
+            votes = dict()
+            for emoji in emojis:
+                votes[emoji] = 0
+
+            for reaction in message.reactions:
+                emoji = str(reaction.emoji)
+
+                if emoji in emojis:
+                    votes[emoji] += 1
+
+            mode = max(votes.items(), key=lambda x: x[1])[0]
+
+            self.parent.dota_talker.change_lobby_mode(
+                self.game_id, DB.mode_map_enum.get(mode)
+            )
+
     def run(self):
         """
         Start the bot using the token loaded from config file.
@@ -1447,7 +1511,8 @@ class Master_Bot(commands.Bot):
         embed = self.build_game_embed(game_id, radiant, dire, password)
 
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-        message = await channel.send(embed=embed)
+        view = self.GameModePoll(self, game_id)
+        message = await channel.send(embed=embed, view=view)
 
         try:
             tasks = [

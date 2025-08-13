@@ -41,6 +41,51 @@ class MatchOutcome(IntEnum):
     RADIANT_WIN = 2
     DIRE_WIN = 3
 
+class DOTA_GameMode(IntEnum):
+    DOTA_GAMEMODE_NONE = 0
+    DOTA_GAMEMODE_AP = 1
+    DOTA_GAMEMODE_CM = 2
+    DOTA_GAMEMODE_RD = 3
+    DOTA_GAMEMODE_SD = 4
+    DOTA_GAMEMODE_AR = 5
+    # DOTA_GAMEMODE_INTRO = 6
+    # DOTA_GAMEMODE_HW = 7
+    DOTA_GAMEMODE_REVERSE_CM = 8
+    # DOTA_GAMEMODE_XMAS = 9
+    # DOTA_GAMEMODE_TUTORIAL = 10
+    DOTA_GAMEMODE_MO = 11
+    DOTA_GAMEMODE_LP = 12
+    # DOTA_GAMEMODE_POOL1 = 13
+    # DOTA_GAMEMODE_FH = 14
+    # DOTA_GAMEMODE_CUSTOM = 15
+    DOTA_GAMEMODE_CD = 16
+    # DOTA_GAMEMODE_BD = 17
+    DOTA_GAMEMODE_ABILITY_DRAFT = 18
+    # DOTA_GAMEMODE_EVENT = 19
+    DOTA_GAMEMODE_ARDM = 20
+    # DOTA_GAMEMODE_1V1MID = 21
+    DOTA_GAMEMODE_ALL_DRAFT = 22 # Ranked All Pick
+    DOTA_GAMEMODE_TURBO = 23
+    # DOTA_GAMEMODE_MUTATION = 24
+    # DOTA_GAMEMODE_COACHES_CHALLENGE = 25
+
+mode_map = {
+    "None" : 0,
+    "All Pick" : 1,
+    "Ranked All Pick" : 22, # Ranked All Pick
+    "Captains Mode" : 2,
+    "Random Draft" : 3,
+    "Single Draft" : 4,
+    "All Random" : 5,
+    "Reverse Captains Mode" : 8,
+    "Mid Only" : 11,
+    "Least Played" : 12,
+    "Captains Draft" : 16,
+    "Ability Draft" : 18,
+    "All Random Deathmatch" : 20,
+    "Turbo" : 23
+}
+
 
 class DotaTalker:
     def __init__(self, discordBot: 'Master_Bot.Master_Bot', loop: asyncio.AbstractEventLoop):
