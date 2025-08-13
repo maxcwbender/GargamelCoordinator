@@ -366,7 +366,6 @@ class Master_Bot(commands.Bot):
                         "Ready check already in progress!", ephemeral=True
                     )
                 else:
-                    self.parent.ready_check_status = True
                     await interaction.response.send_message(
                         "Initiating ready check", ephemeral=True
                     )
