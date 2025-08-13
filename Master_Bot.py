@@ -16,7 +16,7 @@ import DBFunctions as DB
 from logger import setup_logging
 import logging
 
-
+import threading
 """
 Main bot script for Discord MasterBot managing Dota 2 community interactions.
 
@@ -28,7 +28,7 @@ Features:
 - Uses discord.py app_commands (slash commands) for interaction
 - SQLite DB backend for persistent user and mod data
 
-Author: m'bender *tips hat*
+Author: mbender and crowedev
 """
 
 setup_logging()
@@ -82,6 +82,8 @@ class Master_Bot(commands.Bot):
         self.lobby_messages: dict[int, discord.Message] = {}
         self.dota_talker: DotaTalker.DotaTalker = None
         self.pending_matches = set()
+        self.ready_check_lock = threading.Lock()
+        self.ready_check_status = False
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -214,6 +216,100 @@ class Master_Bot(commands.Bot):
         )
         await self.update_queue_status_message()
 
+    async def start_ready_check(self, interaction: discord.Interaction, sleep_time: int = 60):
+        logger.info("Initiated ready check")
+        await self.update_queue_status_message(new_message=True, content="Ready check in progress!")
+        queue_members = self.coordinator.queue.keys()
+        confirmed = set()
+        removed = set()
+        blocked = set()
+        message_tasks = []
+
+        def make_view(user_id):
+            view = discord.ui.View(timeout=60)
+
+            async def confirm_callback(inner_interaction: discord.Interaction, user_id=user_id):
+                await inner_interaction.response.send_message(
+                    "Marked ready!", ephemeral=True
+                )
+                logger.info(
+                    f"Ready check confirmation from {inner_interaction.user.name}: ready"
+                )
+                confirmed.add(user_id)
+                await inner_interaction.message.delete()
+
+            async def reject_callback(inner_interaction: discord.Interaction, user_id=user_id):
+                await inner_interaction.response.send_message(
+                    "Removing from queue!", ephemeral=True
+                )
+                self.coordinator.remove_player(user_id)
+                logger.info(
+                    f"Ready check confirmation from {inner_interaction.user.name}: remove"
+                )
+                removed.add(user_id)
+                await inner_interaction.message.delete()
+
+            confirm_button = discord.ui.Button(
+                label="✅ I'm Ready!", style=discord.ButtonStyle.primary
+            )
+            reject_button = discord.ui.Button(
+                label="❌ I'm out", style=discord.ButtonStyle.danger
+            )
+
+            confirm_button.callback = confirm_callback
+            reject_button.callback = reject_callback
+
+            view.add_item(confirm_button)
+            view.add_item(reject_button)
+
+            return view
+
+        async def send_message(member: discord.Member, view):
+            try:
+                await member.send(
+                    "Are you still ready to play? Click below:", view=view
+                )
+            except discord.Forbidden:
+                logger.warning(
+                    f"Couldn't DM {member.name}>. Assuming not ready."
+                )
+
+        for user_id in queue_members:
+            member = interaction.guild.get_member(user_id)
+            if not member:
+                logger.warning(
+                    f"Tried to get ready check confirmation from user {user_id}, but it seems they're no longer in the server"
+                )
+                blocked.add(member)
+                continue
+
+            view = make_view(user_id)
+
+            message_tasks.append(send_message(member, view))
+
+        await asyncio.gather(*message_tasks)
+        time_slept = 0
+        while time_slept < sleep_time and len(confirmed) + len(removed) + len(blocked) < len(queue_members):
+            await self.update_queue_status_message(
+                content=f"Ready check in progress", readied=confirmed
+            )
+            asyncio.sleep(2)
+            time_slept += 2
+
+
+        to_remove = queue_members - (confirmed | removed)
+
+        for user_id in to_remove:
+            self.coordinator.remove_player(user_id)
+
+        await interaction.followup.send(f"Ready check complete.", ephemeral=True)
+
+        await self.update_queue_status_message(
+            new_message=True,
+            content=f"Ready check complete. {len(confirmed)} confirmed, {len(to_remove)} removed from queue."
+        )
+        self.ready_check_status = False
+
     # GUI Views
     class QueueButtonView(discord.ui.View):
         def __init__(self, parent):
@@ -231,6 +327,22 @@ class Master_Bot(commands.Bot):
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
             await self.parent.leave_queue(interaction)
+
+        @discord.ui.button(label="✅ Ready Check", style=discord.ButtonStyle.success)
+        async def ready_check(
+            self, interaction: discord.Interaction, button: discord.ui.Button
+        ):
+            with self.parent.ready_check_lock:
+                if self.parent.ready_check_status:
+                    await interaction.response.send_message(
+                        "Ready check already in progress!", ephemeral=True
+                    )
+                else:
+                    self.parent.ready_check_status = True
+                    await interaction.response.send_message(
+                        "Initiating ready check", ephemeral=True
+                    )
+            await self.parent.start_ready_check(interaction)
 
     def run(self):
         """
@@ -314,7 +426,7 @@ class Master_Bot(commands.Bot):
         return embed
 
     async def update_queue_status_message(
-        self, new_message: bool = False, content=None
+            self, new_message: bool = False, content=None, readied: set[int] = []
     ):
         """
         Updates or creates the queue status message listing all queued users and their ratings.
@@ -335,8 +447,10 @@ class Master_Bot(commands.Bot):
                 embed.description += f"\n\n <:BrokenRobot:1394750222940377218>*Gargamel Bot is currently set to DEBUG mode. <:BrokenRobot:1394750222940377218>*"
 
         else:
-            player_lines = "\n".join(f"<@{user_id}>" for user_id, rating in full_queue)
-
+            player_lines = "\n".join(
+                f"{"✅ " if user_id in readied else ""}<@{user_id}>"
+                for user_id, rating in full_queue
+            )
             # Add list of Players in General Voice Channel who are not in Queue Here
             # Make new embed underneath the Players in Queue to help see who hasn't clicked the button.
             voice_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
@@ -387,8 +501,18 @@ class Master_Bot(commands.Bot):
         # If the message exists, try to edit it
         try:
             if self.queue_status_msg and not new_message:
-                await self.queue_status_msg.edit(embed=embed, view=view)
+                try:
+                    await self.queue_status_msg.edit(embed=embed, view=view)
+                except discord.HTTPException as e:
+                    if e.code == 30046:
+                        logger.warning("Too many edits to an old message, replacing.")
+                        await self.queue_status_msg.delete()
+                        self.queue_status_msg = await lobby_channel.send(embed=embed, view=view)
+                    else:
+                        raise
             else:
+                if self.queue_status_msg:
+                    await self.queue_status_msg.delete()
                 self.queue_status_msg = await lobby_channel.send(embed=embed, view=view)
         except discord.NotFound:
             # If message was deleted, reset and recreate
@@ -483,10 +607,12 @@ class Master_Bot(commands.Bot):
         """
         try:
             while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
+                await self.start_ready_check(None, sleep_time=30)
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
                     await self.update_queue_status_message(
+                        new_message=True,
                         content="Not enough players anymore. Game cancelled. ❌"
                     )
                     break
@@ -529,7 +655,7 @@ class Master_Bot(commands.Bot):
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         await lobby_channel.purge()
 
-        await self.update_queue_status_message()
+        await self.update_queue_status_message(new_message=True)
 
         # --------------- #
         # Slash Commands  #
