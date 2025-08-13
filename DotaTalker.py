@@ -69,23 +69,6 @@ class DOTA_GameMode(IntEnum):
     # DOTA_GAMEMODE_MUTATION = 24
     # DOTA_GAMEMODE_COACHES_CHALLENGE = 25
 
-mode_map = {
-    "None" : 0,
-    "All Pick" : 1,
-    "Ranked All Pick" : 22, # Ranked All Pick
-    "Captains Mode" : 2,
-    "Random Draft" : 3,
-    "Single Draft" : 4,
-    "All Random" : 5,
-    "Reverse Captains Mode" : 8,
-    "Mid Only" : 11,
-    "Least Played" : 12,
-    "Captains Draft" : 16,
-    "Ability Draft" : 18,
-    "All Random Deathmatch" : 20,
-    "Turbo" : 23
-}
-
 
 class DotaTalker:
     def __init__(self, discordBot: 'Master_Bot.Master_Bot', loop: asyncio.AbstractEventLoop):
@@ -105,6 +88,21 @@ class DotaTalker:
         self.client_ready: dict[int, bool] = {}
         self.gameBacklog: list[list[int]] = []
         self.pending_matches = []
+        self.mode_map = {
+            "All Pick" : 1,
+            "Ranked All Pick" : 22, # Ranked All Pick
+            "Captains Mode" : 2,
+            "Random Draft" : 3,
+            "Single Draft" : 4,
+            "All Random" : 5,
+            "Reverse Captains Mode" : 8,
+            "Mid Only" : 11,
+            "Least Played" : 12,
+            "Captains Draft" : 16,
+            "Ability Draft" : 18,
+            "All Random Deathmatch" : 20,
+            "Turbo" : 23
+        }
 
         for i in range(self.config["numClients"]):
             t = Thread(target=self.setupClient, args=(i,), daemon=True)
