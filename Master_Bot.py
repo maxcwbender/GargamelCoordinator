@@ -635,7 +635,7 @@ class Master_Bot(commands.Bot):
         """
         try:
             while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
-                await self.start_ready_check(None, sleep_time=30)
+                # await self.start_ready_check(None, sleep_time=30)
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
