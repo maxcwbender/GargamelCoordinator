@@ -1,5 +1,5 @@
 # main_bot.py
-from typing import Tuple
+from typing import Tuple, Dict, Optional
 import DotaTalker
 import TheCoordinator as TC
 import json
@@ -371,6 +371,230 @@ class Master_Bot(commands.Bot):
                         "Initiating ready check", ephemeral=True
                     )
             await self.parent.start_ready_check(interaction)
+
+    class GameModePoll(discord.ui.View):
+        def __init__(
+                self,
+                parent: "Master_Bot",
+                *,
+                game_id: int,
+                mode_name_to_enum: dict[str, int],
+                duration_sec: int = 60,
+                allowed_role: Optional[str] = None,  # e.g. "Mod" to gate Start/End
+        ):
+            super().__init__(timeout=None)
+            self.parent = parent
+            self.game_id = game_id
+            self.duration_sec = duration_sec
+            self.mode_name_to_enum = mode_name_to_enum
+            self.allowed_role = allowed_role
+
+            # voting state
+            self.votes_by_user: Dict[int, str] = {}
+            self._closed = False
+            self._started = False
+            self._lock = asyncio.Lock()
+
+            # Build options, but keep select disabled until Start is pressed
+            options = [discord.SelectOption(label=n, value=n) for n in self.mode_name_to_enum.keys()]
+            self.select = self.GameModeSelect(self, placeholder="Choose a game mode…", options=options)
+            self.select.disabled = True
+            self.add_item(self.select)
+
+            # Controls
+            self.add_item(self.StartPollButton(self))
+            self.add_item(self.EndPollButton(self))
+
+        # Helper Functions
+        def _has_role(self, member: discord.abc.User, role_name: str) -> bool:
+            roles = getattr(member, "roles", [])
+            return any(getattr(r, "name", None) == role_name for r in roles)
+
+        def _options_in_order(self) -> list[str]:
+            return [opt.label for opt in self.select.options]
+
+        # UI Components
+        class GameModeSelect(discord.ui.Select):
+            def __init__(self, outer: "GameModePoll", placeholder: str, options: list[discord.SelectOption]):
+                super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options)
+                self.outer = outer
+
+            async def callback(self, interaction: discord.Interaction):
+                async with self.outer._lock:
+                    if self.outer._closed or not self.outer._started:
+                        if not interaction.response.is_done():
+                            await interaction.response.send_message(
+                                "Poll isn’t active.", ephemeral=True
+                            )
+                        return
+                    choice = self.values[0]
+                    self.outer.votes_by_user[interaction.user.id] = choice
+                await self.outer._update_poll_embed(interaction, transient_notice=f"You voted **{choice}**.")
+
+        class StartPollButton(discord.ui.Button):
+            def __init__(self, outer: "GameModePoll"):
+                super().__init__(label="Start Poll", style=discord.ButtonStyle.primary)
+                self.outer = outer
+
+            async def callback(self, interaction: discord.Interaction):
+                if self.outer.allowed_role and not self.outer._has_role(interaction.user, self.outer.allowed_role):
+                    return await interaction.response.send_message("Only authorized users can start the poll.",
+                                                                   ephemeral=True)
+
+                async with self.outer._lock:
+                    if self.outer._started:
+                        if not interaction.response.is_done():
+                            await interaction.response.send_message("Poll already started.", ephemeral=True)
+                        return
+                    self.outer._started = True
+                    self.outer.select.disabled = False
+
+                message = self.outer.parent.lobby_messages.get(self.outer.game_id)
+                if not message:
+                    if not interaction.response.is_done():
+                        await interaction.response.send_message("Lobby message not found.", ephemeral=True)
+                    return
+
+                embed = message.embeds[0]
+
+                idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+                voting_text = (
+                    "Select a mode from the dropdown below.\n\n"
+                    f"Poll ends in **{self.outer.duration_sec} seconds**."
+                )
+                if idx is not None:
+                    embed.set_field_at(idx, name="🗳️ Game Mode Voting", value=voting_text, inline=False)
+                else:
+                    embed.add_field(name="🗳️ Game Mode Voting", value=voting_text, inline=False)
+
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("Voting started!", ephemeral=True)
+
+                await message.edit(embed=embed, view=self.outer)
+
+                # Start the countdown now
+                asyncio.create_task(self.outer._auto_close_task(message))
+
+        class EndPollButton(discord.ui.Button):
+            def __init__(self, outer: "GameModePoll"):
+                super().__init__(label="End Poll", style=discord.ButtonStyle.danger)
+                self.outer = outer
+
+            async def callback(self, interaction: discord.Interaction):
+                if self.outer.allowed_role and not self.outer._has_role(interaction.user, self.outer.allowed_role):
+                    return await interaction.response.send_message("Only authorized users can end the poll.",
+                                                                   ephemeral=True)
+                await self.outer._end_poll(interaction, manual=True)
+
+        # Polling Lifecycle
+        async def _auto_close_task(self, message: discord.Message):
+            try:
+                await asyncio.sleep(self.duration_sec)
+                await self._end_poll(None)
+            except Exception as e:
+                logging.exception(f"Poll auto-close error: {e}")
+
+        async def _end_poll(self, interaction: Optional[discord.Interaction], manual: bool = False):
+            async with self._lock:
+                if self._closed:
+                    if interaction and not interaction.response.is_done():
+                        await interaction.response.send_message("Poll already closed.", ephemeral=True)
+                    return
+                self._closed = True
+
+                # Freeze UI
+                for item in self.children:
+                    if isinstance(item, (discord.ui.Select, discord.ui.Button)):
+                        item.disabled = True
+
+            # Tally votes
+            tally: Dict[str, int] = {}
+            for choice in self.votes_by_user.values():
+                tally[choice] = tally.get(choice, 0) + 1
+
+            options_in_order = self._options_in_order()
+
+            # Decide winner (No votes: keep Ranked AP / Prior. Tie is randomized.)
+            winner: Optional[str] = None
+            reason = ""
+            if not tally:
+                reason = "No votes — keeping current mode."
+            else:
+                max_votes = max(tally.values())
+                winners = [name for name, v in tally.items() if v == max_votes]
+                if len(winners) == 1:
+                    winner = winners[0]
+                    reason = f"Winner by {max_votes} vote{'s' if max_votes != 1 else ''}."
+                else:
+                    winner = random.choice(winners)
+                    reason = f"Tie resolved randomly among {', '.join(winners)}."
+
+            # Apply mode only if we have a winner
+            if winner:
+                try:
+                    mode_enum = self.mode_name_to_enum[winner]
+                    await self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
+                except Exception as e:
+                    logging.exception(f"Failed to apply mode {winner}={mode_enum}: {e}")
+
+            # Only showing results for options that got >0 votes
+            summary_lines = [f"- {name}: **{tally[name]}**"
+                             for name in options_in_order if tally.get(name, 0) > 0]
+            summary = "\n".join(summary_lines) or "*No votes*"
+
+            # Update embed
+            message = self.parent.lobby_messages.get(self.game_id)
+            if message:
+                embed = message.embeds[0]
+                idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+                result_text = (
+                    f"**Poll closed ({'manually' if manual else 'automatically'}).**\n"
+                    f"{('Winner: **' + winner + '**' if winner else 'Mode unchanged.')}"
+                    f"{' — ' + reason if reason else ''}\n\n"
+                    f"**Results:**\n{summary}"
+                )
+                if idx is not None:
+                    embed.set_field_at(idx, name="🗳️ Game Mode Voting — Results", value=result_text, inline=False)
+                else:
+                    embed.add_field(name="🗳️ Game Mode Voting — Results", value=result_text, inline=False)
+                await message.edit(embed=embed, view=self)
+
+            if interaction and not interaction.response.is_done():
+                await interaction.response.send_message("Poll closed.", ephemeral=True)
+
+        async def _update_poll_embed(self, interaction: discord.Interaction, transient_notice: str = ""):
+            message = self.parent.lobby_messages.get(self.game_id)
+            if not message:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("Lobby message not found.", ephemeral=True)
+                return
+            if not self._started or self._closed:
+                # Don’t live-update if not active
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(transient_notice, ephemeral=True)
+                return
+
+            tally: Dict[str, int] = {}
+            for choice in self.votes_by_user.values():
+                tally[choice] = tally.get(choice, 0) + 1
+
+            # Only show top among options with >0 votes
+            options_in_order = self._options_in_order()
+            voted = [n for n in options_in_order if tally.get(n, 0) > 0]
+            top = sorted(voted, key=lambda n: (-tally[n], options_in_order.index(n)))[:3]
+            status = ", ".join(f"{n} ({tally[n]})" for n in top) or "No votes yet"
+
+            embed = message.embeds[0]
+            idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+            if idx is not None:
+                base = embed.fields[idx].value.split("\n\n")[0]  # original instructions
+                new_val = f"{base}\n\n_Current top:_ {status}"
+                embed.set_field_at(idx, name=embed.fields[idx].name, value=new_val, inline=False)
+
+            await message.edit(embed=embed, view=self)
+
+            if not interaction.response.is_done():
+                await interaction.response.send_message(transient_notice, ephemeral=True)
 
     def run(self):
         """
@@ -1454,7 +1678,15 @@ class Master_Bot(commands.Bot):
         embed = self.build_game_embed(game_id, radiant, dire, password)
 
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-        message = await channel.send(embed=embed)
+
+        view = self.GameModePoll(
+            parent=self,
+            game_id=game_id,
+            mode_name_to_enum=self.dota_talker.mode_map,
+            duration_sec=60,
+            allowed_role="Mod",
+        )
+        message = await channel.send(embed=embed, view=view)
 
         try:
             tasks = [
