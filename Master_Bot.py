@@ -293,7 +293,7 @@ class Master_Bot(commands.Bot):
                         )
 
             for user_id in queue_snapshot:
-                member = interaction.guild.get_member(user_id)
+                member = self.the_guild.get_member(user_id)
                 if not member:
                     logger.warning(
                         f"Tried to get ready check confirmation from user {user_id}, but it seems they're no longer in the server"
@@ -325,7 +325,8 @@ class Master_Bot(commands.Bot):
             for user_id in to_remove:
                 self.coordinator.remove_player(user_id)
 
-            await interaction.followup.send(f"Ready check complete.", ephemeral=True)
+            if interaction:
+                await interaction.followup.send(f"Ready check complete.", ephemeral=True)
 
             await self.update_queue_status_message(
                 new_message=True,
@@ -635,7 +636,7 @@ class Master_Bot(commands.Bot):
         """
         try:
             while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
-                # await self.start_ready_check(None, sleep_time=30)
+                await self.start_ready_check(None, sleep_time=30)
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
