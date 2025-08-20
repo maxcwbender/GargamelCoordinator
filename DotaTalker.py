@@ -18,6 +18,8 @@ import logging
 logger = logging.getLogger(__name__)
 import asyncio
 
+from typing import Any, Dict
+from google.protobuf.json_format import MessageToDict
 
 from enum import IntEnum
 
@@ -104,12 +106,72 @@ class DotaTalker:
             "Turbo" : 23
         }
 
+        self.ALLOWED_LOBBY_KEYS = {
+            # core
+            "game_name",
+            "server_region",
+            "game_mode",
+            "visibility",          # public/friends/passworded
+            "pass_key",            # lobby password
+            # captains/series/tv
+            "cm_pick",
+            "series_type",
+            "dota_tv_delay",
+            # toggles
+            "allow_cheats",
+            "fill_with_bots",
+            "intro_mode",
+            "start_game_setup",
+            "pause_setting",
+            # optional/extras (include only if you use them)
+            "league_id",
+            "leagueid",
+            "bot_difficulty",
+            "allow_spectating",
+            "allchat",             # sometimes exposed as a toggle
+        }
+
         for i in range(self.config["numClients"]):
             t = Thread(target=self.setupClient, args=(i,), daemon=True)
             t.start()
             self.threads.append(t)
 
         logger.info("DotaTalker setup done")
+
+    def _safe_lobby_snapshot(self, client) -> Dict[str, Any]:
+        """
+        Take the current lobby proto, convert to dict, then filter out fields that
+        config_practice_lobby doesn't accept (like 'state', team rosters, ids, etc.).
+        """
+        lob = getattr(client, "lobby", None)
+        if lob is None:
+            raise RuntimeError("Not currently in a lobby")
+
+        snap = MessageToDict(
+            lob,
+            preserving_proto_field_name=True,
+            including_default_value_fields=True,
+            use_integers_for_enums=True,
+        )
+
+        # Keep only keys we know config_practice_lobby will accept:
+        filtered = {k: v for k, v in snap.items() if k in self.ALLOWED_LOBBY_KEYS}
+
+        # Optional: coerce some values to int/bool if they came back as strings
+        for key in ("server_region", "game_mode", "cm_pick", "series_type",
+                    "dota_tv_delay", "start_game_setup", "pause_setting", "visibility",
+                    "league_id", "bot_difficulty"):
+            if key in filtered:
+                try:
+                    filtered[key] = int(filtered[key])
+                except Exception:
+                    pass
+        for key in ("allow_cheats", "fill_with_bots", "intro_mode",
+                    "allow_spectating", "allchat"):
+            if key in filtered:
+                filtered[key] = bool(filtered[key])
+
+        return filtered
 
     def is_ready(self, i: int) -> bool:
         """
@@ -234,6 +296,16 @@ class DotaTalker:
                     return False
         logger.error(f"No lobby found with game ID {game_id}")
         return False
+
+    async def change_lobby_mode(self, game_id, game_mode):
+        try:
+            for client in self.dotaClients:
+                if client and client.gameID == game_id and client.lobby:
+                    opts = self._safe_lobby_snapshot(client)
+                    opts["game_mode"] = game_mode
+                    await client.config_practice_lobby(opts)
+        except Exception as e:
+            print(f"Failed to apply mode {game_mode}: {e}")
 
     def update_lobby_teams(self, gameID: int, radiant: list[int], dire: list[int]) -> bool:
         """

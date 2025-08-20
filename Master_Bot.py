@@ -372,101 +372,48 @@ class Master_Bot(commands.Bot):
                     )
             await self.parent.start_ready_check(interaction)
 
-    # class GameModePoll(discord.ui.View):
-    #     def __init__(self, parent: "Master_Bot", game_id: int):
-    #         super().__init__(timeout=None)
-    #         self.parent = parent
-    #         self.game_id = game_id
-    #         self.voted: bool = False  # avoid multiple clicks for same message
-    #
-    #     @discord.ui.button(label="Game Mode Poll", style=discord.ButtonStyle.primary)
-    #     async def start_poll(
-    #         self, interaction: discord.Interaction, button: discord.ui.Button
-    #     ):
-    #         if self.voted:
-    #             await interaction.response.send_message(
-    #                 "Vote already initiated!", ephemeral=True
-    #             )
-    #             return
-    #
-    #         self.voted = True
-    #         message = self.parent.lobby_messages.get(self.game_id)
-    #         if not message:
-    #             await interaction.response.send_message(
-    #                 "Lobby message not found.", ephemeral=True
-    #             )
-    #             logging.error(
-    #                 f"Someone tried to initiate a game mode poll, but the match listing doesn't exist"
-    #             )
-    #             return
-    #
-    #         embed = message.embeds[0]
-    #         embed.add_field(
-    #             name="🗳️ Game Mode Voting",
-    #             value="React below to vote:\n📈 Ranked All Pick\n👑 Captains Mode\n3️⃣ Single Draft\n🎲 All random\n\nIn **1 minute** the most voted option will be made the game mode.",
-    #             inline=False,
-    #         )
-    #
-    #         await message.edit(embed=embed)
-    #         await interaction.response.send_message("Voting started!", ephemeral=True)
-    #
-    #         emojis = DB.mode_map.keys()
-    #         tasks = [message.add_reaction(emoji) for emoji in emojis]
-    #         await asyncio.gather(*tasks)
-    #         asyncio.create_task(self.reviewPoll())
-    #
-    #     async def reviewPoll(self):
-    #         asyncio.sleep(60)
-    #         message = self.parent.lobby_messages.get(self.game_id)
-    #
-    #         emojis = DB.mode_map.keys()
-    #         votes = dict()
-    #         for emoji in emojis:
-    #             votes[emoji] = 0
-    #
-    #         for reaction in message.reactions:
-    #             emoji = str(reaction.emoji)
-    #
-    #             if emoji in emojis:
-    #                 votes[emoji] += 1
-    #
-    #         mode = max(votes.items(), key=lambda x: x[1])[0]
-    #
-    #         self.parent.dota_talker.change_lobby_mode(
-    #             self.game_id, DB.mode_map_enum.get(mode)
-    #         )
-
     class GameModePoll(discord.ui.View):
         def __init__(
                 self,
                 parent: "Master_Bot",
+                *,
                 game_id: int,
-                mode_name_to_enum: dict[str, int],  # e.g., {"Ranked All Pick": 22, "Captains Mode": 2, ...}
+                mode_name_to_enum: dict[str, int],
                 duration_sec: int = 60,
+                allowed_role: Optional[str] = None,  # e.g. "Mod" to gate Start/End
         ):
             super().__init__(timeout=None)
             self.parent = parent
             self.game_id = game_id
             self.duration_sec = duration_sec
             self.mode_name_to_enum = mode_name_to_enum
+            self.allowed_role = allowed_role
 
             # voting state
-            self.votes_by_user: Dict[int, str] = {}  # user_id -> mode_name
+            self.votes_by_user: Dict[int, str] = {}
             self._closed = False
+            self._started = False
             self._lock = asyncio.Lock()
 
-            # you can disable "start" button if you wire this class differently
-            # here we add the Select immediately
-            options = [
-                discord.SelectOption(label=name, value=name)
-                for name in self.mode_name_to_enum.keys()
-            ]
+            # Build options, but keep select disabled until Start is pressed
+            options = [discord.SelectOption(label=n, value=n) for n in self.mode_name_to_enum.keys()]
             self.select = self.GameModeSelect(self, placeholder="Choose a game mode…", options=options)
+            self.select.disabled = True
             self.add_item(self.select)
 
-            # Optional: add a manual "End Poll" button for mods/admins
+            # Controls
+            self.add_item(self.StartPollButton(self))
             self.add_item(self.EndPollButton(self))
 
+        # Helper Functions
+        def _has_role(self, member: discord.abc.User, role_name: str) -> bool:
+            roles = getattr(member, "roles", [])
+            return any(getattr(r, "name", None) == role_name for r in roles)
+
+        def _options_in_order(self) -> list[str]:
+            return [opt.label for opt in self.select.options]
+
+        # UI Components
         class GameModeSelect(discord.ui.Select):
             def __init__(self, outer: "GameModePoll", placeholder: str, options: list[discord.SelectOption]):
                 super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options)
@@ -474,15 +421,59 @@ class Master_Bot(commands.Bot):
 
             async def callback(self, interaction: discord.Interaction):
                 async with self.outer._lock:
-                    if self.outer._closed:
-                        await interaction.response.send_message("Poll is closed.", ephemeral=True)
+                    if self.outer._closed or not self.outer._started:
+                        if not interaction.response.is_done():
+                            await interaction.response.send_message(
+                                "Poll isn’t active.", ephemeral=True
+                            )
                         return
-
                     choice = self.values[0]
                     self.outer.votes_by_user[interaction.user.id] = choice
+                await self.outer._update_poll_embed(interaction, transient_notice=f"You voted **{choice}**.")
 
-                    # Update the message embed with a quick tally (optional, but nice)
-                    await self.outer._update_poll_embed(interaction, transient_notice=f"You voted **{choice}**.")
+        class StartPollButton(discord.ui.Button):
+            def __init__(self, outer: "GameModePoll"):
+                super().__init__(label="Start Poll", style=discord.ButtonStyle.primary)
+                self.outer = outer
+
+            async def callback(self, interaction: discord.Interaction):
+                if self.outer.allowed_role and not self.outer._has_role(interaction.user, self.outer.allowed_role):
+                    return await interaction.response.send_message("Only authorized users can start the poll.",
+                                                                   ephemeral=True)
+
+                async with self.outer._lock:
+                    if self.outer._started:
+                        if not interaction.response.is_done():
+                            await interaction.response.send_message("Poll already started.", ephemeral=True)
+                        return
+                    self.outer._started = True
+                    self.outer.select.disabled = False
+
+                message = self.outer.parent.lobby_messages.get(self.outer.game_id)
+                if not message:
+                    if not interaction.response.is_done():
+                        await interaction.response.send_message("Lobby message not found.", ephemeral=True)
+                    return
+
+                embed = message.embeds[0]
+
+                idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+                voting_text = (
+                    "Select a mode from the dropdown below.\n\n"
+                    f"Poll ends in **{self.outer.duration_sec} seconds**."
+                )
+                if idx is not None:
+                    embed.set_field_at(idx, name="🗳️ Game Mode Voting", value=voting_text, inline=False)
+                else:
+                    embed.add_field(name="🗳️ Game Mode Voting", value=voting_text, inline=False)
+
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("Voting started!", ephemeral=True)
+
+                await message.edit(embed=embed, view=self.outer)
+
+                # Start the countdown now
+                asyncio.create_task(self.outer._auto_close_task(message))
 
         class EndPollButton(discord.ui.Button):
             def __init__(self, outer: "GameModePoll"):
@@ -490,46 +481,17 @@ class Master_Bot(commands.Bot):
                 self.outer = outer
 
             async def callback(self, interaction: discord.Interaction):
-                # You can gate this to mods if desired
+                if self.outer.allowed_role and not self.outer._has_role(interaction.user, self.outer.allowed_role):
+                    return await interaction.response.send_message("Only authorized users can end the poll.",
+                                                                   ephemeral=True)
                 await self.outer._end_poll(interaction, manual=True)
 
-        async def start(self, interaction: discord.Interaction) -> None:
-            """
-            Kicks off the poll by editing the lobby embed and scheduling auto-close.
-            Call this once, after constructing the view.
-            """
-            message = self.parent.lobby_messages.get(self.game_id)
-            if not message:
-                await interaction.response.send_message("Lobby message not found.", ephemeral=True)
-                return
-
-            # Add/modify the embed with poll info
-            embed = message.embeds[0]
-            embed.add_field(
-                name="🗳️ Game Mode Voting",
-                value=(
-                    "Select a mode from the dropdown below.\n\n"
-                    f"Poll ends in **{self.duration_sec} seconds**.\n"
-                ),
-                inline=False,
-            )
-
-            # If responding to slash/button, acknowledge
-            if not interaction.response.is_done():
-                await interaction.response.send_message("Voting started!", ephemeral=True)
-
-            await message.edit(embed=embed, view=self)
-
-            # Schedule auto-close
-            asyncio.create_task(self._auto_close_task(message))
-
+        # Polling Lifecycle
         async def _auto_close_task(self, message: discord.Message):
             try:
-                await asyncio.sleep(self.duration_sec)  # NOTE: you forgot `await` in your original code
+                await asyncio.sleep(self.duration_sec)
                 await self._end_poll(None)
             except Exception as e:
-                # Don’t let background exceptions crash the bot
-                import logging
                 logging.exception(f"Poll auto-close error: {e}")
 
         async def _end_poll(self, interaction: Optional[discord.Interaction], manual: bool = False):
@@ -540,93 +502,90 @@ class Master_Bot(commands.Bot):
                     return
                 self._closed = True
 
-            # Freeze UI
-            for item in self.children:
-                if isinstance(item, (discord.ui.Select, discord.ui.Button)):
-                    item.disabled = True
+                # Freeze UI
+                for item in self.children:
+                    if isinstance(item, (discord.ui.Select, discord.ui.Button)):
+                        item.disabled = True
 
-            # Tally
+            # Tally votes
             tally: Dict[str, int] = {}
             for choice in self.votes_by_user.values():
                 tally[choice] = tally.get(choice, 0) + 1
 
-            # Pick winner (tie-break by order in the options list)
-            options_in_order = [opt.label for opt in self.select.options]
+            options_in_order = self._options_in_order()
 
-            def winner_key(name: str):
-                # sort by (-votes, index in options)
-                return (-tally.get(name, 0), options_in_order.index(name))
+            # Decide winner (No votes: keep Ranked AP / Prior. Tie is randomized.)
+            winner: Optional[str] = None
+            reason = ""
+            if not tally:
+                reason = "No votes — keeping current mode."
+            else:
+                max_votes = max(tally.values())
+                winners = [name for name, v in tally.items() if v == max_votes]
+                if len(winners) == 1:
+                    winner = winners[0]
+                    reason = f"Winner by {max_votes} vote{'s' if max_votes != 1 else ''}."
+                else:
+                    winner = random.choice(winners)
+                    reason = f"Tie resolved randomly among {', '.join(winners)}."
 
-            winner = min(options_in_order, key=winner_key) if options_in_order else None
-            winner_votes = tally.get(winner, 0) if winner else 0
-
-            # Apply mode if we have one
-            if winner and winner in self.mode_name_to_enum:
-                mode_enum = self.mode_name_to_enum[winner]
+            # Apply mode only if we have a winner
+            if winner:
                 try:
-                    self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
+                    mode_enum = self.mode_name_to_enum[winner]
+                    await self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
                 except Exception as e:
-                    import logging
                     logging.exception(f"Failed to apply mode {winner}={mode_enum}: {e}")
 
-            # Update embed with final results
+            # Only showing results for options that got >0 votes
+            summary_lines = [f"- {name}: **{tally[name]}**"
+                             for name in options_in_order if tally.get(name, 0) > 0]
+            summary = "\n".join(summary_lines) or "*No votes*"
+
+            # Update embed
             message = self.parent.lobby_messages.get(self.game_id)
             if message:
                 embed = message.embeds[0]
-                # Replace/append a summary field
-                summary_lines = []
-                for name in options_in_order:
-                    summary_lines.append(f"- {name}: **{tally.get(name, 0)}**")
-                ended_by = "manually" if manual else "automatically"
-                summary = "\n".join(summary_lines) or "*No votes*"
-
-                # Try to edit the last field if it’s the voting one; otherwise append
-                idx = None
-                for i, f in enumerate(embed.fields):
-                    if f.name.startswith("🗳️ Game Mode Voting"):
-                        idx = i
-                        break
+                idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
                 result_text = (
-                    f"**Poll closed ({ended_by}).**\n"
-                    f"Winner: **{winner}** ({winner_votes} vote{'s' if winner_votes != 1 else ''})\n\n"
+                    f"**Poll closed ({'manually' if manual else 'automatically'}).**\n"
+                    f"{('Winner: **' + winner + '**' if winner else 'Mode unchanged.')}"
+                    f"{' — ' + reason if reason else ''}\n\n"
                     f"**Results:**\n{summary}"
                 )
                 if idx is not None:
                     embed.set_field_at(idx, name="🗳️ Game Mode Voting — Results", value=result_text, inline=False)
                 else:
                     embed.add_field(name="🗳️ Game Mode Voting — Results", value=result_text, inline=False)
-
                 await message.edit(embed=embed, view=self)
 
             if interaction and not interaction.response.is_done():
                 await interaction.response.send_message("Poll closed.", ephemeral=True)
 
         async def _update_poll_embed(self, interaction: discord.Interaction, transient_notice: str = ""):
-            """
-            Optional: live tally updates on vote. Keep this lightweight to avoid rate limits.
-            """
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
                 if not interaction.response.is_done():
                     await interaction.response.send_message("Lobby message not found.", ephemeral=True)
                 return
+            if not self._started or self._closed:
+                # Don’t live-update if not active
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(transient_notice, ephemeral=True)
+                return
 
-            # Make a tiny live tally (don’t spam edits too often in production)
             tally: Dict[str, int] = {}
             for choice in self.votes_by_user.values():
                 tally[choice] = tally.get(choice, 0) + 1
 
-            # Build a brief line: Top 3 modes by votes
-            top = sorted(self.mode_name_to_enum.keys(), key=lambda n: (-tally.get(n, 0), n))[:3]
-            status = ", ".join(f"{n} ({tally.get(n, 0)})" for n in top) or "No votes yet"
+            # Only show top among options with >0 votes
+            options_in_order = self._options_in_order()
+            voted = [n for n in options_in_order if tally.get(n, 0) > 0]
+            top = sorted(voted, key=lambda n: (-tally[n], options_in_order.index(n)))[:3]
+            status = ", ".join(f"{n} ({tally[n]})" for n in top) or "No votes yet"
 
             embed = message.embeds[0]
-            # Find the voting field and append a status line at the end
-            idx = None
-            for i, f in enumerate(embed.fields):
-                if f.name.startswith("🗳️ Game Mode Voting"):
-                    idx = i
-                    break
+            idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
             if idx is not None:
                 base = embed.fields[idx].value.split("\n\n")[0]  # original instructions
                 new_val = f"{base}\n\n_Current top:_ {status}"
@@ -901,7 +860,7 @@ class Master_Bot(commands.Bot):
         """
         try:
             while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
-                # await self.start_ready_check(None, sleep_time=30)
+                await self.start_ready_check(None, sleep_time=30)
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
@@ -1719,7 +1678,14 @@ class Master_Bot(commands.Bot):
         embed = self.build_game_embed(game_id, radiant, dire, password)
 
         channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-        view = self.GameModePoll(self, self.dota_talker.mode_map, game_id)
+
+        view = self.GameModePoll(
+            parent=self,
+            game_id=game_id,
+            mode_name_to_enum=self.dota_talker.mode_map,
+            duration_sec=60,
+            allowed_role="Mod",
+        )
         message = await channel.send(embed=embed, view=view)
 
         try:
