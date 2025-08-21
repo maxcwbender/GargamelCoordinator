@@ -454,7 +454,8 @@ class DotaTalker:
         def _on_gc_conn_status(status):
             if status == GCConnectionStatus.HAVE_SESSION:
                 logger.info(f"[Client {i}] Connection status HAVE_SESSION detected: {status}")
-                self._touch_gc()
+                if hasattr(dotaClient, "_gc_touch") and callable(dotaClient._gc_touch):
+                    dotaClient._gc_touch()
             else:
                 logger.error(f"[Client {i}] Connection status HAVE_SESION not detected: {status}")
             # status is an int enum from GC; log it verbosely
@@ -518,7 +519,6 @@ class DotaTalker:
 
         @dotaClient.on("lobby_changed")
         def _(message):
-            self._touch_gc()
             logger.info(f"[Client {i}] Lobby changed")
 
             # Touch watchdog (every GC diff proves life)
