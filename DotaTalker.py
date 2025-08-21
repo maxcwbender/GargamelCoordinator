@@ -359,11 +359,44 @@ class DotaTalker:
                     if dotaClient.gameID and steam_id in (dotaClient.radiant + dotaClient.dire):
                         dotaClient.invite_to_lobby(steam_id)
 
+        @steamClient.on("disconnected")
+        def _disconnected():
+            logger.warning(f"[Client {i}] Steam disconnected; attempting reconnect…")
+
+        @steamClient.on("reconnect")
+        def _reconnect(delay):
+            logger.warning(f"[Client {i}] Steam scheduling reconnect in {delay}s")
+
+        @steamClient.on("connected")
+        def _connected():
+            logger.info(f"[Client {i}] Steam TCP connected")
+
+        @dotaClient.on("notready")
+        def _gc_notready():
+            # GC session lost (this happens on CM rotation); relaunch it
+            logger.warning(f"[Client {i}] Dota Game Coordinator not ready; relaunching GC")
+            try:
+                dotaClient.launch()
+            except Exception:
+                logger.exception(f"[Client {i}] Failed to relaunch GC")
+
         @dotaClient.on("ready")
         def _():
             logger.info(f"[Client {i}] Dota 2 client ready")
-            dotaClient.abandon_current_game()
-            dotaClient.leave_practice_lobby()
+            if dotaClient.gameID is None:
+                try:
+                    dotaClient.abandon_current_game()
+                    dotaClient.leave_practice_lobby()
+                except Exception:
+                    pass
+            else:
+                logger.info(f"[Client {i}] Game Coordinator ready during active game {dotaClient.gameID}, preserving state")
+                # Instead, re-request snapshot to re-sync
+                try:
+                    dotaClient.request_lobby_info()
+                except Exception:
+                    pass
+
             self.set_ready(i, True)
 
 
