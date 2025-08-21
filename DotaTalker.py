@@ -17,9 +17,9 @@ from Master_Bot import Master_Bot
 import DBFunctions as DB
 import logging
 logger = logging.getLogger(__name__)
-def _log_ctx(i: int, client, level: int, msg: str):
-    gid = getattr(client, "gameID", None)
-    logger.log(level, f"[Client {i}][Game {gid if gid is not None else '-'}] {msg}")
+# def _log_ctx(i: int, client, level: int, msg: str):
+#     gid = getattr(client, "gameID", None)
+#     logger.log(level, f"[Client {i}][Game {gid if gid is not None else '-'}] {msg}")
 import asyncio
 
 from typing import Any, Dict
@@ -184,7 +184,7 @@ class DotaTalker:
         max_game = 3 * 3600  # 3h absolute cutoff to avoid zombies (tune as needed)
         max_no_lobby = 6  # ~90s (6 * 15s) of "can't find our lobby" before synth end
 
-        logger = logging.getLogger(__name__)
+        # logger = logging.getLogger(__name__)
 
         # Which client index is this? (for readable logs)
         try:
@@ -206,7 +206,7 @@ class DotaTalker:
             nonlocal last_seen, no_lobby_streak
             last_seen = time.monotonic()
             no_lobby_streak = 0
-            logger.debug(f"{prefix} Game Coordinator touch from {origin}")
+            logger.info(f"{prefix} Game Coordinator touch from {origin}")
 
         # Export the toucher so handlers like lobby_changed can call it:
         client._gc_touch = _touch
@@ -239,7 +239,7 @@ class DotaTalker:
                 if lid is None:
                     lid = getattr(entry, "id", None)
                 if lid == my_id:
-                    logger.debug(f"{prefix} Refreshed lobby list: found={lid}, my_lobby_id={my_id}")
+                    logger.info(f"{prefix} Refreshed lobby list: found={lid}, my_lobby_id={my_id}")
                     return True
             return False
 
