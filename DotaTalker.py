@@ -660,7 +660,7 @@ class DotaTalker:
 
                 # Stop watchdog for this game
                 try:
-                    self._stop_gc_watchdog(dotaClient.gameID)
+                    self._stop_gc_watchdog(dotaClient, dotaClient.gameID)
                 except Exception as e:
                     logger.exception(f"Failed to stop GC watchdog for gameID: {dotaClient.gameID} with exception: {e}")
 
