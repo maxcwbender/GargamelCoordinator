@@ -146,57 +146,134 @@ class DotaTalker:
 
     # def _touch_gc(self):
     #     self._gc_last_msg = time.monotonic()
+    def _current_practice_lobby_exists(self, client) -> bool:
+        """
+        Returns True if our current lobby_id is present in GC's practice lobby list.
+        Uses the lobby password (unique per game for you) to narrow the search.
+        """
+        try:
+            my_lobby = getattr(client, "lobby", None)
+            my_lobby_id = getattr(my_lobby, "lobby_id", None)
+            if not my_lobby_id:
+                return False
+
+            pw = getattr(client, "password", "") or ""
+            entries = client.get_practice_lobby_list(password=pw)  # <- correct API
+            if not entries:
+                return False
+
+            return any(getattr(e, "lobby_id", None) == my_lobby_id for e in entries)
+        except Exception:
+            return False
 
     def _start_gc_watchdog(self, client, game_id: int):
         """
-        Starts a background task that nudges/re-handshakes the GC if it goes quiet.
-        Safe during live games: it never abandons, only re-hello + snapshot.
-        """
-        import time
-        soft = 120  # seconds of silence → request snapshot
-        hard = 300  # seconds of silence → re-launch GC
+        Watchdog that keeps long games alive by nudging/re-handshaking the GC if it goes quiet.
+        Uses client.get_practice_lobby_list(...) to "refresh" instead of any request_* APIs.
+        Exports client._gc_touch() so your GC event handlers can bump liveness.
 
-        # Cancel any prior watchdog for this game
+        Start this when the lobby transitions to RUN. Stop it on POSTGAME or any manual clear.
+        """
+        import time, asyncio, logging
+        soft = 120  # 2 min of silence -> light nudge (refresh lobby list)
+        hard = 300  # 5 min of silence -> relaunch GC + refresh
+        tick = 15  # watchdog tick cadence
+        max_game = 3 * 3600  # 3h absolute cutoff to avoid zombies (tune as needed)
+        max_no_lobby = 6  # ~90s (6 * 15s) of "can't find our lobby" before synth end
+
+        logger = logging.getLogger(__name__)
+
+        # Cancel any prior watchdog for this game_id
         old = self._gc_watchdogs.pop(game_id, None)
         if old and not old.done():
             old.cancel()
 
         last_seen = time.monotonic()
+        no_lobby_streak = 0
 
-        # Touch function: call this from your GC event handlers too if you like
         def _touch():
-            nonlocal last_seen
+            nonlocal last_seen, no_lobby_streak
             last_seen = time.monotonic()
+            no_lobby_streak = 0
 
-        # Lightly “export” it so handlers can bump it
+        # Export the toucher so handlers like lobby_changed can call it:
         client._gc_touch = _touch
+
+        def _lobby_still_exists() -> bool:
+            """
+            Returns True if our current practice lobby is visible in GC's list.
+            Uses the lobby password (unique per game for you) to narrow the search.
+            """
+            try:
+                my = getattr(client, "lobby", None)
+                my_id = getattr(my, "lobby_id", None)
+            except Exception:
+                my_id = None
+
+            pw = getattr(client, "password", "") or ""
+            try:
+                entries = client.get_practice_lobby_list(password=pw) or []
+            except Exception as e:
+                logger.error(f"[Game {game_id}] Error requesting lobby list: {e}")
+                return False
+
+            if not my_id:
+                # If we don't have a lobby_id locally, treat as missing.
+                return False
+
+            for entry in entries:
+                # Be tolerant of structure differences
+                lid = getattr(entry, "lobby_id", None)
+                if lid is None:
+                    lid = getattr(entry, "id", None)
+                if lid == my_id:
+                    return True
+            return False
 
         async def _watch():
             try:
+                started_at = self._game_started_at.get(game_id, time.monotonic())
                 while client.gameID == game_id:
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(tick)
                     idle = time.monotonic() - last_seen
 
+                    # 1) Hard cutoff on max game duration to avoid zombies
+                    if (time.monotonic() - started_at) >= max_game:
+                        logger.warning(f"[Game {game_id}] Max runtime reached; synthesizing POSTGAME")
+                        await self._synthesize_game_end(client, game_id)
+                        return
+
+                    # 2) Quiet GC handling
                     if idle >= hard:
-                        # Re-hello GC and pull a fresh snapshot.
+                        logger.warning(f"[Game {game_id}] GC silent {int(idle)}s — relaunching GC")
                         try:
-                            logger.info("Idle was >= hard, launching client")
-                            client.launch()  # non-destructive
-                            try:
-                                logger.info("Requesting lobby info and requesting practice lobby list for client")
-                                client.request_lobby_info()
-                                client.request_practice_lobby_list()
-                            except Exception as e:
-                                logger.exception(f"Error requesting lobby list: {e}")
-                        except Exception as e:
-                            logger.exception(f"[GC] relaunch failed with error: {e}")
-                        _touch()  # reset timer so we don't spam
+                            client.launch()  # non-destructive GC re-handshake
+                        except Exception:
+                            logger.exception("[GC] relaunch failed")
+
+                        exists = _lobby_still_exists()
+                        if not exists:
+                            no_lobby_streak += 1
+                            logger.info(f"[Game {game_id}] no_lobby_streak={no_lobby_streak}")
+                            if no_lobby_streak >= max_no_lobby:
+                                logger.warning(f"[Game {game_id}] Lobby absent repeatedly; synthesizing POSTGAME")
+                                await self._synthesize_game_end(client, game_id)
+                                return
+                        else:
+                            no_lobby_streak = 0
+
+                        _touch()  # reset timer after hard action
                     elif idle >= soft:
-                        try:
-                            logger.info(f"Idle was >= soft, requesting lobby information from Client")
-                            client.request_lobby_info()
-                        except Exception as e:
-                            logger.exception(f"Error requesting lobby list: {e}")
+                        exists = _lobby_still_exists()
+                        if not exists:
+                            no_lobby_streak += 1
+                            logger.info(f"[Game {game_id}] no_lobby_streak={no_lobby_streak}")
+                            if no_lobby_streak >= max_no_lobby:
+                                logger.warning(f"[Game {game_id}] Lobby absent repeatedly; synthesizing POSTGAME")
+                                await self._synthesize_game_end(client, game_id)
+                                return
+                        else:
+                            no_lobby_streak = 0
             except asyncio.CancelledError:
                 return
 
