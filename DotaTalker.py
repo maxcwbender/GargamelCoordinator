@@ -17,6 +17,9 @@ from Master_Bot import Master_Bot
 import DBFunctions as DB
 import logging
 logger = logging.getLogger(__name__)
+def _log_ctx(i: int, client, level: int, msg: str):
+    gid = getattr(client, "gameID", None)
+    logger.log(level, f"[Client {i}][Game {gid if gid is not None else '-'}] {msg}")
 import asyncio
 
 from typing import Any, Dict
@@ -183,6 +186,14 @@ class DotaTalker:
 
         logger = logging.getLogger(__name__)
 
+        # Which client index is this? (for readable logs)
+        try:
+            i = self.dotaClients.index(client)
+        except ValueError:
+            i = -1
+        prefix = f"[Client {i}][Game {game_id}]"
+
+        logger.info(f"{prefix} Beginning to start watchdog thread")
         # Cancel any prior watchdog for this game_id
         old = self._gc_watchdogs.pop(game_id, None)
         if old and not old.done():
@@ -191,10 +202,11 @@ class DotaTalker:
         last_seen = time.monotonic()
         no_lobby_streak = 0
 
-        def _touch():
+        def _touch(origin="(unknown)"):
             nonlocal last_seen, no_lobby_streak
             last_seen = time.monotonic()
             no_lobby_streak = 0
+            logger.debug(f"{prefix} Game Coordinator touch from {origin}")
 
         # Export the toucher so handlers like lobby_changed can call it:
         client._gc_touch = _touch
@@ -227,12 +239,14 @@ class DotaTalker:
                 if lid is None:
                     lid = getattr(entry, "id", None)
                 if lid == my_id:
+                    logger.debug(f"{prefix} Refreshed lobby list: found={lid}, my_lobby_id={my_id}")
                     return True
             return False
 
         async def _watch():
             try:
                 started_at = self._game_started_at.get(game_id, time.monotonic())
+                logger.info(f"{prefix} GC watchdog started")
                 while client.gameID == game_id:
                     await asyncio.sleep(tick)
                     idle = time.monotonic() - last_seen
@@ -248,6 +262,7 @@ class DotaTalker:
                         logger.warning(f"[Game {game_id}] GC silent {int(idle)}s — relaunching GC")
                         try:
                             client.launch()  # non-destructive GC re-handshake
+                            logger.info(f"{prefix} client.launch() invoked (hard path)")
                         except Exception:
                             logger.exception("[GC] relaunch failed")
 
@@ -275,6 +290,7 @@ class DotaTalker:
                         else:
                             no_lobby_streak = 0
             except asyncio.CancelledError:
+                logger.info(f"{prefix} GC watchdog cancelled")
                 return
 
         fut = asyncio.run_coroutine_threadsafe(_watch(), self.loop)
@@ -532,7 +548,7 @@ class DotaTalker:
             if status == GCConnectionStatus.HAVE_SESSION:
                 logger.info(f"[Client {i}] Connection status HAVE_SESSION detected: {status}")
                 if hasattr(dotaClient, "_gc_touch") and callable(dotaClient._gc_touch):
-                    dotaClient._gc_touch()
+                    dotaClient._gc_touch("(Connection_Status)")
             else:
                 logger.error(f"[Client {i}] Connection status HAVE_SESION not detected: {status}")
             # status is an int enum from GC; log it verbosely
@@ -542,7 +558,7 @@ class DotaTalker:
         def _():
             # Count this as GC activity for the watchdog (if exported)
             if hasattr(dotaClient, "_gc_touch") and callable(dotaClient._gc_touch):
-                dotaClient._gc_touch()
+                dotaClient._gc_touch("(Ready)")
 
             logger.info(f"[Client {i}] Dota 2 client ready")
             if dotaClient.gameID is None:
@@ -574,7 +590,7 @@ class DotaTalker:
         def _(lobby):
             # Touch watchdog (proof GC is talking)
             if hasattr(dotaClient, "_gc_touch") and callable(dotaClient._gc_touch):
-                dotaClient._gc_touch()
+                dotaClient._gc_touch("(Lobby_New)")
 
             if dotaClient.gameID is None:
                 return
@@ -600,7 +616,7 @@ class DotaTalker:
 
             # Touch watchdog (every GC diff proves life)
             if hasattr(dotaClient, "_gc_touch") and callable(dotaClient._gc_touch):
-                dotaClient._gc_touch()
+                dotaClient._gc_touch("(Lobby_Changed)")
 
             for member in message.all_members:
                 try:
