@@ -216,7 +216,20 @@ class Master_Bot(commands.Bot):
         )
         await self.update_queue_status_message()
 
+    def _has_role(self, member: discord.abc.User, role_name: str) -> bool:
+        roles = getattr(member, "roles", [])
+        return any(getattr(r, "name", None) == role_name for r in roles)
+
     async def start_ready_check(self, interaction: discord.Interaction, sleep_time: int = 60):
+        # Only Mods are allowed to start ready checks
+        if not self._has_role(interaction.user, "Mod"):
+            logger.warning(f"User {interaction.user.id} has no mod role and tried to start a ready check.")
+            return await interaction.response.send_message("Only authorized users can start a ready check.",
+                                                           ephemeral=True)
+        else:
+            await interaction.response.send_message(
+                "Initiating ready check", ephemeral=True
+            )
         logger.info("Initiated ready check")
         if self.ready_check_status:
             if interaction and not interaction.response.is_done():
@@ -357,7 +370,7 @@ class Master_Bot(commands.Bot):
         ):
             await self.parent.leave_queue(interaction)
 
-        @discord.ui.button(label="✅ Ready Check", style=discord.ButtonStyle.success)
+        @discord.ui.button(label="Initiate Ready Check✅ ", style=discord.ButtonStyle.success)
         async def ready_check(
             self, interaction: discord.Interaction, button: discord.ui.Button
         ):
@@ -365,10 +378,6 @@ class Master_Bot(commands.Bot):
                 if self.parent.ready_check_status:
                     await interaction.response.send_message(
                         "Ready check already in progress!", ephemeral=True
-                    )
-                else:
-                    await interaction.response.send_message(
-                        "Initiating ready check", ephemeral=True
                     )
             await self.parent.start_ready_check(interaction)
 
@@ -860,7 +869,6 @@ class Master_Bot(commands.Bot):
         """
         try:
             while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
-                await self.start_ready_check(None, sleep_time=30)
                 await asyncio.sleep(seconds)
 
                 if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
