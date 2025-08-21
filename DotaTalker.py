@@ -3,6 +3,7 @@ from dota2.protobufs.dota_shared_enums_pb2 import (
     DOTA_GC_TEAM_BAD_GUYS,
     DOTA_GC_TEAM_GOOD_GUYS,
 )
+from dota2.proto_enums import GCConnectionStatus
 
 from steam.client import SteamClient
 from steam.steamid import SteamID
@@ -22,6 +23,8 @@ from typing import Any, Dict
 from google.protobuf.json_format import MessageToDict
 
 from enum import IntEnum
+
+import time
 
 class LobbyState(IntEnum):
     UI = 0
@@ -131,12 +134,88 @@ class DotaTalker:
             "allchat",             # sometimes exposed as a toggle
         }
 
+        # self._gc_last_msg = time.monotonic()
+        self._gc_watchdogs: dict[int, asyncio.Future] = {}  # game_id -> Future/Task
+
         for i in range(self.config["numClients"]):
             t = Thread(target=self.setupClient, args=(i,), daemon=True)
             t.start()
             self.threads.append(t)
 
         logger.info("DotaTalker setup done")
+
+    # def _touch_gc(self):
+    #     self._gc_last_msg = time.monotonic()
+
+    def _start_gc_watchdog(self, client, game_id: int):
+        """
+        Starts a background task that nudges/re-handshakes the GC if it goes quiet.
+        Safe during live games: it never abandons, only re-hello + snapshot.
+        """
+        import time
+        soft = 120  # seconds of silence → request snapshot
+        hard = 300  # seconds of silence → re-launch GC
+
+        # Cancel any prior watchdog for this game
+        old = self._gc_watchdogs.pop(game_id, None)
+        if old and not old.done():
+            old.cancel()
+
+        last_seen = time.monotonic()
+
+        # Touch function: call this from your GC event handlers too if you like
+        def _touch():
+            nonlocal last_seen
+            last_seen = time.monotonic()
+
+        # Lightly “export” it so handlers can bump it
+        client._gc_touch = _touch
+
+        async def _watch():
+            try:
+                while client.gameID == game_id:
+                    await asyncio.sleep(15)
+                    idle = time.monotonic() - last_seen
+
+                    if idle >= hard:
+                        # Re-hello GC and pull a fresh snapshot.
+                        try:
+                            logger.info("Idle was >= hard, launching client")
+                            client.launch()  # non-destructive
+                            try:
+                                logger.info("Requesting lobby info and requesting practice lobby list for client")
+                                client.request_lobby_info()
+                                client.request_practice_lobby_list()
+                            except Exception as e:
+                                logger.exception(f"Error requesting lobby list: {e}")
+                        except Exception as e:
+                            logger.exception(f"[GC] relaunch failed with error: {e}")
+                        _touch()  # reset timer so we don't spam
+                    elif idle >= soft:
+                        try:
+                            logger.info(f"Idle was >= soft, requesting lobby information from Client")
+                            client.request_lobby_info()
+                        except Exception as e:
+                            logger.exception(f"Error requesting lobby list: {e}")
+            except asyncio.CancelledError:
+                return
+
+        fut = asyncio.run_coroutine_threadsafe(_watch(), self.loop)
+        self._gc_watchdogs[game_id] = fut
+
+    def _stop_gc_watchdog(self, client, game_id: int):
+        fut = self._gc_watchdogs.pop(game_id, None)
+        if fut and not fut.done():
+            try:
+                fut.cancel()
+            except:
+                pass
+        # Remove the exported toucher hook if present
+        if hasattr(client, "_gc_touch"):
+            try:
+                delattr(client, "_gc_touch")
+            except:
+                pass
 
     def _safe_lobby_snapshot(self, client) -> Dict[str, Any]:
         """
@@ -371,17 +450,22 @@ class DotaTalker:
         def _connected():
             logger.info(f"[Client {i}] Steam TCP connected")
 
-        @dotaClient.on("notready")
-        def _gc_notready():
-            # GC session lost (this happens on CM rotation); relaunch it
-            logger.warning(f"[Client {i}] Dota Game Coordinator not ready; relaunching GC")
-            try:
-                dotaClient.launch()
-            except Exception:
-                logger.exception(f"[Client {i}] Failed to relaunch GC")
+        @dotaClient.on("connection_status")
+        def _on_gc_conn_status(status):
+            if status == GCConnectionStatus.HAVE_SESSION:
+                logger.info(f"[Client {i}] Connection status HAVE_SESSION detected: {status}")
+                self._touch_gc()
+            else:
+                logger.error(f"[Client {i}] Connection status HAVE_SESION not detected: {status}")
+            # status is an int enum from GC; log it verbosely
+            logger.warning(f"[GC] connection_status={status}")
 
         @dotaClient.on("ready")
         def _():
+            # Count this as GC activity for the watchdog (if exported)
+            if hasattr(dotaClient, "_gc_touch") and callable(dotaClient._gc_touch):
+                dotaClient._gc_touch()
+
             logger.info(f"[Client {i}] Dota 2 client ready")
             if dotaClient.gameID is None:
                 try:
@@ -399,9 +483,21 @@ class DotaTalker:
 
             self.set_ready(i, True)
 
+        @dotaClient.on("notready")
+        def _gc_notready():
+            # GC session lost (this happens on CM rotation); relaunch it
+            logger.warning(f"[Client {i}] Dota Game Coordinator not ready; relaunching GC")
+            try:
+                dotaClient.launch()
+            except Exception:
+                logger.exception(f"[Client {i}] Failed to relaunch GC")
 
         @dotaClient.on("lobby_new")
         def _(lobby):
+            # Touch watchdog (proof GC is talking)
+            if hasattr(dotaClient, "_gc_touch") and callable(dotaClient._gc_touch):
+                dotaClient._gc_touch()
+
             if dotaClient.gameID is None:
                 return
 
@@ -422,7 +518,12 @@ class DotaTalker:
 
         @dotaClient.on("lobby_changed")
         def _(message):
+            self._touch_gc()
             logger.info(f"[Client {i}] Lobby changed")
+
+            # Touch watchdog (every GC diff proves life)
+            if hasattr(dotaClient, "_gc_touch") and callable(dotaClient._gc_touch):
+                dotaClient._gc_touch()
 
             for member in message.all_members:
                 try:
@@ -444,6 +545,12 @@ class DotaTalker:
                     )
                 else:
                     print(f"Found lobby not in pending matches with gameID: {dotaClient.gameID}")
+
+                # Start the GC watchdog now that the game is live
+                try:
+                    self._start_gc_watchdog(dotaClient, dotaClient.gameID)
+                except Exception:
+                    logger.exception("Failed to start GC watchdog")
 
             if message.state == LobbyState.UI:
                 correct = 0
@@ -474,10 +581,18 @@ class DotaTalker:
                 logger.info(f"[Client {i}] Game ended, match ID: {message.match_id}")
                 logger.info(f"Match ID: {match_id}, Outcome: {match_outcome}")
 
-                dotaClient.leave_practice_lobby()
+                # Stop watchdog for this game
+                try:
+                    self._stop_gc_watchdog(dotaClient.gameID)
+                except Exception as e:
+                    logger.exception(f"Failed to stop GC watchdog for gameID: {dotaClient.gameID} with exception: {e}")
+
+                try:
+                    dotaClient.leave_practice_lobby()
+                except Exception as e:
+                    logger.exception(f"Error leaving practice lobby: {e}")
 
                 asyncio.run_coroutine_threadsafe(
-                    # self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome, GameState.POSTGAME), self.loop
                     self.discordBot.on_game_ended(dotaClient.gameID, message),
                     self.loop
                 )
