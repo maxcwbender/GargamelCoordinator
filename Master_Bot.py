@@ -11,6 +11,9 @@ from discord import app_commands
 from discord.ext import commands
 import random
 import signal
+import csv
+import re
+from pathlib import Path
 
 import DBFunctions as DB
 from logger import setup_logging
@@ -66,6 +69,7 @@ class Master_Bot(commands.Bot):
 
         intents = discord.Intents.default()
         intents.members = True
+        intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
 
         self.con = sqlite3.connect("allUsers.db")
@@ -84,6 +88,32 @@ class Master_Bot(commands.Bot):
         self.pending_matches = set()
         self.ready_check_lock = asyncio.Lock()
         self.ready_check_status = False
+
+        self.deadleague_channel_id = int(self.config.get("DEV_CHANNEL_ID", 0))
+        self.deadleague_cooldown = int(self.config.get("DEAD_LEAGUE_COOLDOWN", 15))
+        self.deadleague_csv_path = self.config.get("DEAD_LEAGUE_CSV_PATH", "dead_league_responses.csv")
+        self._deadleague_last_ts: float = 0.0
+        self._deadleague_trigger = re.compile(r"\bdead\s*league\b", re.IGNORECASE)
+
+        def _load_deadleague_responses(csv_path: str) -> list[str]:
+            p = Path(csv_path)
+            if p.exists():
+                with p.open(newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    out = [row.get("response", "").strip() for row in reader if row.get("response", "").strip()]
+                    if out:
+                        logger.info(f"Loaded {len(out)} Dead League responses from CSV.")
+                        return out
+            logger.warning("Dead League CSV not found or empty. Falling back to a small built-in list.")
+            return [
+                "Ah yes, spoken like a true spectator.",
+                "Bold words from someone not even on the scoreboard.",
+                "League’s alive — unlike your MMR.",
+                "You’re right, it’s dead… just like you in most games.",
+                "Thanks for the league prediction, Oracle."
+            ]
+
+        self._deadleague_responses = _load_deadleague_responses(self.deadleague_csv_path)
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -896,6 +926,26 @@ class Master_Bot(commands.Bot):
             pass
         finally:
             self.pending_game_task = None
+
+    async def on_message(self, message: discord.Message):
+        # ignore DMs & self
+        if message.author == self.user or message.guild is None:
+            return
+
+        # keep other channels untouched
+        if self.deadleague_channel_id and message.channel.id == self.deadleague_channel_id:
+            if self._deadleague_trigger.search(message.content or ""):
+                now = discord.utils.utcnow().timestamp()
+                if now - self._deadleague_last_ts >= self.deadleague_cooldown:
+                    self._deadleague_last_ts = now
+                    try:
+                        await message.reply(random.choice(self._deadleague_responses), mention_author=False,
+                                            suppress_embeds=True)
+                    except Exception as e:
+                        logger.exception(f"Failed to send Dead League reply: {e}")
+
+        # ensure normal command processing continues
+        await self.process_commands(message)
 
     async def on_ready(self):
         """
