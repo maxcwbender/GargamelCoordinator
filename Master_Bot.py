@@ -89,7 +89,7 @@ class Master_Bot(commands.Bot):
         self.ready_check_lock = asyncio.Lock()
         self.ready_check_status = False
 
-        self.deadleague_channel_id = int(self.config.get("DEV_CHANNEL_ID", 0))
+        self.deadleague_channel_id = int(self.config.get("GENERAL_CHANNEL_ID", 0))
         self.deadleague_cooldown = int(self.config.get("DEAD_LEAGUE_COOLDOWN", 15))
         self.deadleague_csv_path = self.config.get("DEAD_LEAGUE_CSV_PATH", "dead_league_responses.csv")
         self._deadleague_last_ts: float = 0.0
