@@ -24,7 +24,9 @@ from dota2.protobufs.dota_shared_enums_pb2 import (
 )
 
 import DBFunctions as DB
-
+from threading import Thread
+from Master_Bot import Master_Bot
+from enum import IntEnum
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +74,7 @@ class DOTA_GameMode(IntEnum):
     DOTA_GAMEMODE_TURBO = 23
 
 
-# ----------------------------- #
-#    Per-Lobby Client Wrapper   #
-# ----------------------------- #
+
 @dataclass
 class ClientAccounts:
     """Allocates one username/password per active lobby."""
@@ -153,6 +153,76 @@ class ClientWrapper:
                 pass
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=10.0)
+
+    def swap_players(self, discord_id_1: int, discord_id_2: int) -> bool:
+        """Swap two players between radiant/dire lists. Kicks them so they re-seat correctly."""
+        s1 = DB.fetch_steam_id(discord_id_1)
+        s2 = DB.fetch_steam_id(discord_id_2)
+        if not s1 or not s2:
+            self.logger.error(f"[Game {self.game_id}] swap failed: missing steam ids")
+            return False
+
+        # must be on opposite teams
+        if s1 in self.radiant and s2 in self.dire:
+            self.radiant.remove(s1)
+            self.dire.remove(s2)
+            self.radiant.append(s2)
+            self.dire.append(s1)
+        elif s2 in self.radiant and s1 in self.dire:
+            self.radiant.remove(s2)
+            self.dire.remove(s1)
+            self.radiant.append(s1)
+            self.dire.append(s2)
+        else:
+            self.logger.error(f"[Game {self.game_id}] swap failed: not on opposite teams")
+            return False
+
+        # If a lobby exists, kick both so they can seat on the new sides
+        if self.dota and getattr(self.dota, "lobby", None):
+            try:
+                self.dota.practice_lobby_kick_from_team(SteamID(s1).as_32)
+            except Exception:
+                pass
+            try:
+                self.dota.practice_lobby_kick_from_team(SteamID(s2).as_32)
+            except Exception:
+                pass
+
+        self.logger.info(f"[Game {self.game_id}] swapped {s1} <-> {s2}")
+        return True
+
+    async def change_lobby_mode(self, game_mode: int) -> None:
+        """Change lobby game mode without blocking the asyncio loop."""
+        if not self.dota:
+            return
+
+        def _do_change():
+            try:
+                # minimal config patch; dota2 library accepts partial opts
+                self.dota.config_practice_lobby({"game_mode": int(game_mode)})
+                self.logger.info(f"[Game {self.game_id}] lobby mode set to {game_mode}")
+            except Exception:
+                self.logger.exception(f"[Game {self.game_id}] failed to set mode {game_mode}")
+
+        await asyncio.to_thread(_do_change)
+
+    def update_lobby_teams(self, radiant: list[int], dire: list[int]) -> bool:
+        """Replace the intended team lists; if a lobby exists, kick mis-seated players to re-seat."""
+        self.radiant = list(radiant)
+        self.dire = list(dire)
+
+        if self.dota and getattr(self.dota, "lobby", None):
+            try:
+                # kick anyone currently in teams but not in our intended lists to force re-seat
+                for m in getattr(self.dota.lobby, "all_members", []):
+                    sid64 = m.id
+                    on_team = m.team in (DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS)
+                    should_be = (sid64 in self.radiant) or (sid64 in self.dire)
+                    if on_team and not should_be:
+                        self.dota.practice_lobby_kick_from_team(SteamID(sid64).as_32)
+            except Exception:
+                self.logger.exception(f"[Game {self.game_id}] update_lobby_teams kick failed")
+        return True
 
     # ---------------- Async entrypoints ----------------
 
@@ -366,16 +436,14 @@ class ClientWrapper:
         self.dota.password = self.password
         self.dota.create_practice_lobby(password=self.password, options=options)
         self.logger.info(f"[Game {self.game_id}] Created lobby with password {self.password}")
-# --- END ClientWrapper --------------------------------------------------------
 
-# ----------------------------- #
-#         DotaTalker            #
-# ----------------------------- #
+
 class DotaTalker:
     """
     On-demand lobby manager.
     - Spawns a ClientWrapper (Steam+Dota) per active lobby.
     - Tears down wrapper when the game ends/cancels.
+    - Also should tear down in the signal interruptions to close the bot.
     """
 
     def __init__(self, discordBot: "Master_Bot.Master_Bot", loop: asyncio.AbstractEventLoop):
@@ -411,6 +479,15 @@ class DotaTalker:
         }
 
         logger.info("DotaTalker ready — on-demand client per lobby")
+
+    def _allocate_account(self) -> int:
+        idx = self.accounts.next_free()
+        if idx is None:
+            raise RuntimeError("No free Steam accounts")
+        return idx
+
+    def _release_account(self, idx: int) -> None:
+        self.accounts.release(idx)
 
     # -------------- Public API ---------------- #
     async def make_game(self, gameID: int, radiant_discord_ids: list[int], dire_discord_ids: list[int]) -> str:
@@ -468,7 +545,7 @@ class DotaTalker:
 
     def get_password(self, game_id: int) -> str:
         wrapper = self.lobby_clients.get(game_id)
-        return wrapper.get_password() if wrapper else "-1"
+        return wrapper.password if wrapper and wrapper.password else "-1"
 
     def swap_players_in_game(self, game_id: int, discord_id_1: int, discord_id_2: int) -> bool:
         wrapper = self.lobby_clients.get(game_id)
