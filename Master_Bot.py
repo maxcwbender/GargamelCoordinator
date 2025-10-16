@@ -109,6 +109,16 @@ class Master_Bot(commands.Bot):
     def handle_exit_signals(self, signum, frame):
         logger.info(f"Received exit signal {signum}, cleaning up bot creations.")
 
+
+        # Clean up all remaining Steam/Dota clients for games
+        if hasattr(self, "dota_talker") and self.dota_talker:
+            try:
+                for gid in list(self.dota_talker.lobby_clients.keys()):
+                    self.dota_talker.teardown_lobby(gid)
+                logger.info("[handle_exit_signals] All Dota clients torn down.")
+            except Exception:
+                logger.exception("[handle_exit_signals] Error tearing down Dota clients")
+
         # Clean up Discord Voice and Text Channels, Clear the Bot Channel
         # TODO: Clean up Dota Lobbies that are empty if we bailed at the wrong time.
         loop = asyncio.get_event_loop()
@@ -1252,6 +1262,14 @@ class Master_Bot(commands.Bot):
                 )
 
             await self.clear_game(game_id)
+
+            # Tearing down steam/dota client for game
+            try:
+                self.dota_talker.teardown_lobby(game_id)
+                logger.info(f"[cancel_game] Torn down Dota client for canceled game {game_id}")
+            except Exception:
+                logger.exception(f"[cancel_game] Failed to teardown Dota client for game {game_id}")
+
             await interaction.response.send_message(
                 f"Game {game_id} has been cancelled. ❌", ephemeral=True
             )
@@ -1523,6 +1541,13 @@ class Master_Bot(commands.Bot):
             logging.info(f"Post results add")
         except Exception as e:
             logger.exception(f"Error updating matches table with err: {e}")
+
+        # Teardown Steam/Dota client for this match
+        try:
+            self.dota_talker.teardown_lobby(game_id)
+            logger.info(f"[on_game_ended] Torn down Dota client for game {game_id}")
+        except Exception:
+            logger.exception(f"[on_game_ended] Failed to teardown Dota client for game {game_id}")
 
 
     async def clear_game(self, game_id: int):
