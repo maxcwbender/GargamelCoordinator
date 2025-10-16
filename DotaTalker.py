@@ -1,4 +1,6 @@
 # DotaTalker.py
+import gevent.monkey
+gevent.monkey.patch_all()
 from __future__ import annotations
 
 import asyncio
@@ -22,8 +24,6 @@ from dota2.protobufs.dota_shared_enums_pb2 import (
 
 import DBFunctions as DB
 
-import gevent.monkey
-gevent.monkey.patch_all()  # make gevent cooperate with sockets/threads
 
 logger = logging.getLogger(__name__)
 
