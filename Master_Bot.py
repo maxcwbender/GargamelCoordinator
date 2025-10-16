@@ -88,7 +88,7 @@ class Master_Bot(commands.Bot):
         self.pending_matches = set()
         self.ready_check_lock = asyncio.Lock()
         self.ready_check_status = False
-        
+
         self.deadleague_channel_id = int(self.config.get("GENERAL_CHANNEL_ID", 0))
         self.deadleague_cooldown = int(self.config.get("DEAD_LEAGUE_COOLDOWN", 15))
         self.deadleague_csv_path = self.config.get("DEAD_LEAGUE_CSV_PATH", "dead_league_responses.csv")
@@ -956,7 +956,7 @@ class Master_Bot(commands.Bot):
 
         # ensure normal command processing continues
         await self.process_commands(message)
-        
+
     async def on_ready(self):
         """
         Called when the bot is ready and connected.
@@ -1756,7 +1756,7 @@ class Master_Bot(commands.Bot):
 
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
-        password = self.dota_talker.make_game(game_id, radiant, dire)
+        password = await self.dota_talker.make_game(game_id, radiant, dire)
 
         embed = self.build_game_embed(game_id, radiant, dire, password)
 
