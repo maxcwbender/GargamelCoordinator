@@ -1,7 +1,8 @@
 # DotaTalker.py
+from __future__ import annotations
+
 import gevent.monkey
 gevent.monkey.patch_all()
-from __future__ import annotations
 
 import asyncio
 import json
