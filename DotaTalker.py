@@ -314,6 +314,17 @@ class ClientWrapper:
 
         await asyncio.to_thread(_do_change)
 
+    async def alert_game_polling_started(self):
+        if not self.dota:
+            logger.exception(f"Game {self.game_id} has no dota client available")
+
+        def _send_message():
+            try:
+                self.dota.send_message("Game Polling has Started! Check #match_listings on Discord to Vote!", "Lobby")
+            except Exception as e:
+                self.logger.exception(f"[Game {self.game_id}] failed to send game polling message: {e}")
+
+        await asyncio.to_thread(_send_message)
 
     def update_lobby_teams(self, radiant: list[int], dire: list[int]) -> bool:
         """Replace the intended team lists; if a lobby exists, kick mis-seated players to re-seat."""
@@ -674,6 +685,12 @@ class DotaTalker:
         if not wrapper:
             return
         await wrapper.change_lobby_mode(game_mode)
+
+    async def alert_game_polling_started(self, game_id: int):
+        wrapper = self.lobby_clients.get(game_id)
+        if not wrapper:
+            return
+        await wrapper.alert_game_polling_started()
 
     def update_lobby_teams(self, gameID: int, radiant: list[int], dire: list[int]) -> bool:
         wrapper = self.lobby_clients.get(gameID)
