@@ -22,7 +22,7 @@ from dota2.protobufs.dota_shared_enums_pb2 import (
     DOTA_GC_TEAM_BAD_GUYS,
     DOTA_GC_TEAM_GOOD_GUYS,
 )
-from dota2.features import chat
+from dota2.features.chat import ChannelManager
 
 import DBFunctions as DB
 from threading import Thread
@@ -322,7 +322,10 @@ class ClientWrapper:
         def _send_message():
             try:
                 self.dota.chat.join_lobby_channel()
-                self.dota.chat.lobby.send("Game Polling has Started! Check #match_listings on Discord to Vote!")
+                lobby = self.dota.chat.lobby
+                if lobby:
+                    lobby.send("Test")
+                # self.dota.chat.lobby.send("Game Polling has Started! Check #match_listings on Discord to Vote!")
             except Exception as e:
                 self.logger.exception(f"[Game {self.game_id}] failed to send game polling message: {e}")
 
@@ -383,7 +386,7 @@ class ClientWrapper:
 
             self.steam = SteamClient()
             self.dota = Dota2Client(self.steam)
-            self.dota.chat = chat(self.dota)
+            self.dota.chat = ChannelManager(self.dota, logger_name="DotaChat")
             dota = self.dota
             steam = self.steam
 
