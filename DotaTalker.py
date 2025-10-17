@@ -267,8 +267,8 @@ class ClientWrapper:
 
             # track lobby ownership
             dota.gameID = self.game_id
-            dota.radiant = []
-            dota.dire = []
+            # dota.radiant = []
+            # dota.dire = []
             dota.password = None
 
             # event handlers (thread context!)
@@ -283,7 +283,7 @@ class ClientWrapper:
                     if rel == EFriendRelationship.RequestRecipient:
                         steam.friends.add(sid)
                         # If lobby exists, auto-invite
-                        if dota.gameID and sid in (set(dota.radiant) | set(dota.dire)):
+                        if dota.gameID and sid in (set(self.radiant) | set(self.dire)):
                             dota.invite_to_lobby(sid)
 
             @dota.on("ready")
@@ -305,7 +305,7 @@ class ClientWrapper:
             @dota.on("lobby_new")
             def _on_lobby_new(lobby):
                 # Invite all designated players
-                for sid in (dota.radiant + dota.dire):
+                for sid in (self.radiant + self.dire):
                     try:
                         if sid not in steam.friends:
                             steam.friends.add(sid)
@@ -364,17 +364,17 @@ class ClientWrapper:
                                 steam_id_64 = member.id
                                 team = member.team
                                 sid32 = SteamID(steam_id_64).as_32
-                                if (steam_id_64 in dota.radiant and team != DOTA_GC_TEAM_GOOD_GUYS) or \
-                                   (steam_id_64 in dota.dire    and team != DOTA_GC_TEAM_BAD_GUYS) or \
-                                   (steam_id_64 not in (dota.radiant + dota.dire) and team in (DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS)):
+                                if (steam_id_64 in self.radiant and team != DOTA_GC_TEAM_GOOD_GUYS) or \
+                                   (steam_id_64 in self.dire    and team != DOTA_GC_TEAM_BAD_GUYS) or \
+                                   (steam_id_64 not in (self.radiant + self.dire) and team in (DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS)):
                                     dota.practice_lobby_kick_from_team(sid32)
                                 else:
-                                    if (steam_id_64 in dota.radiant and team == DOTA_GC_TEAM_GOOD_GUYS) or \
-                                       (steam_id_64 in dota.dire    and team == DOTA_GC_TEAM_BAD_GUYS):
+                                    if (steam_id_64 in self.radiant and team == DOTA_GC_TEAM_GOOD_GUYS) or \
+                                       (steam_id_64 in self.dire    and team == DOTA_GC_TEAM_BAD_GUYS):
                                         correct += 1
                             except Exception:
                                 pass
-                        if correct == len(dota.radiant + dota.dire):
+                        if correct == len(self.radiant + self.dire):
                             dota.launch_practice_lobby()
                     elif (state == LobbyState.POSTGAME) or (getattr(message, "game_state", None) == GameState.POST_GAME):
                         try:
@@ -432,8 +432,8 @@ class ClientWrapper:
             "allow_spectating": True,
             "leagueid": self.config.get("league_id", 0),
         }
-        self.dota.radiant = list(self.radiant)
-        self.dota.dire = list(self.dire)
+        # self.dota.radiant = list(self.radiant)
+        # self.dota.dire = list(self.dire)
         self.dota.password = self.password
         self.dota.create_practice_lobby(password=self.password, options=options)
         self.logger.info(f"[Game {self.game_id}] Created lobby with password {self.password}")
