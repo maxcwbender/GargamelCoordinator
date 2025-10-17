@@ -59,19 +59,31 @@ class MatchOutcome(IntEnum):
 
 class DOTA_GameMode(IntEnum):
     DOTA_GAMEMODE_NONE = 0
-    DOTA_GAMEMODE_AP = 1
+    # DOTA_GAMEMODE_AP = 1
     DOTA_GAMEMODE_CM = 2
     DOTA_GAMEMODE_RD = 3
     DOTA_GAMEMODE_SD = 4
     DOTA_GAMEMODE_AR = 5
+    # DOTA_GAMEMODE_INTRO = 6
+    # DOTA_GAMEMODE_HW = 7
     DOTA_GAMEMODE_REVERSE_CM = 8
+    # DOTA_GAMEMODE_XMAS = 9
+    # DOTA_GAMEMODE_TUTORIAL = 10
     DOTA_GAMEMODE_MO = 11
     DOTA_GAMEMODE_LP = 12
+    # DOTA_GAMEMODE_POOL1 = 13
+    # DOTA_GAMEMODE_FH = 14
+    # DOTA_GAMEMODE_CUSTOM = 15
     DOTA_GAMEMODE_CD = 16
+    # DOTA_GAMEMODE_BD = 17
     DOTA_GAMEMODE_ABILITY_DRAFT = 18
+    # DOTA_GAMEMODE_EVENT = 19
     DOTA_GAMEMODE_ARDM = 20
-    DOTA_GAMEMODE_ALL_DRAFT = 22  # Ranked All Pick
+    # DOTA_GAMEMODE_1V1MID = 21
+    DOTA_GAMEMODE_ALL_DRAFT = 22 # Ranked All Pick
     DOTA_GAMEMODE_TURBO = 23
+    # DOTA_GAMEMODE_MUTATION = 24
+    # DOTA_GAMEMODE_COACHES_CHALLENGE = 25
 
 
 
@@ -129,6 +141,31 @@ class ClientWrapper:
         self.password: Optional[str] = None
         self.radiant: list[int] = []
         self.dire: list[int] = []
+
+        self.ALLOWED_LOBBY_KEYS = {
+            # core
+            "game_name",
+            "server_region",
+            "game_mode",
+            "visibility",          # public/friends/passworded
+            "pass_key",            # lobby password
+            # captains/series/tv
+            "cm_pick",
+            "series_type",
+            "dota_tv_delay",
+            # toggles
+            "allow_cheats",
+            "fill_with_bots",
+            "intro_mode",
+            "start_game_setup",
+            "pause_setting",
+            # optional/extras (include only if you use them)
+            "league_id",
+            "leagueid",
+            "bot_difficulty",
+            "allow_spectating",
+            "allchat",             # sometimes exposed as a toggle
+        }
 
     # ---------------- Thread lifecycle ----------------
 
@@ -222,20 +259,70 @@ class ClientWrapper:
         self.logger.info(f"[Game {self.game_id}] Replaced Player {old_player_sid} with {new_player_sid}")
         return True
 
+    def _safe_lobby_snapshot(self) -> Dict[str, Any]:
+        """
+        Take the current lobby proto, convert to dict, then filter out fields that
+        config_practice_lobby doesn't accept (like 'state', team rosters, ids, etc.).
+        """
+        # if self.dota and getattr(self.dota, "lobby", None):
+        lob = getattr(self.dota, "lobby", None)
+        if lob is None:
+            # raise RuntimeError("Not currently in a lobby")
+            logger.exception(f"[Game {self.game_id}] currently has no lobby")
+
+        snap = MessageToDict(
+            lob,
+            preserving_proto_field_name=True,
+            including_default_value_fields=True,
+            use_integers_for_enums=True,
+        )
+
+        # Keep only keys we know config_practice_lobby will accept:
+        filtered = {k: v for k, v in snap.items() if k in self.ALLOWED_LOBBY_KEYS}
+
+        # Optional: coerce some values to int/bool if they came back as strings
+        for key in ("server_region", "game_mode", "cm_pick", "series_type",
+                    "dota_tv_delay", "start_game_setup", "pause_setting", "visibility",
+                    "league_id", "bot_difficulty"):
+            if key in filtered:
+                try:
+                    filtered[key] = int(filtered[key])
+                except Exception:
+                    logger.exception(f"[Game {self.game_id}] {key} was not an integer")
+        for key in ("allow_cheats", "fill_with_bots", "intro_mode",
+                    "allow_spectating", "allchat"):
+            if key in filtered:
+                filtered[key] = bool(filtered[key])
+
+        return filtered
+
     async def change_lobby_mode(self, game_mode: int) -> None:
         """Change lobby game mode without blocking the asyncio loop."""
         if not self.dota:
+            logger.exception(f"Game {self.game_id} has no dota client available")
             return
 
         def _do_change():
             try:
                 # minimal config patch; dota2 library accepts partial opts
-                self.dota.config_practice_lobby({"game_mode": int(game_mode)})
+                opts = self._safe_lobby_snapshot()
+                opts["game_mode"] = game_mode
+                self.dota.config_practice_lobby(opts)
                 self.logger.info(f"[Game {self.game_id}] lobby mode set to {game_mode}")
             except Exception:
                 self.logger.exception(f"[Game {self.game_id}] failed to set mode {game_mode}")
 
         await asyncio.to_thread(_do_change)
+
+    async def change_lobby_mode(self, game_id, game_mode):
+        try:
+            for client in self.dotaClients:
+                if client and client.gameID == game_id and client.lobby:
+                    opts = self._safe_lobby_snapshot(client)
+                    opts["game_mode"] = game_mode
+                    await client.config_practice_lobby(opts)
+        except Exception as e:
+            print(f"Failed to apply mode {game_mode}: {e}")
 
     def update_lobby_teams(self, radiant: list[int], dire: list[int]) -> bool:
         """Replace the intended team lists; if a lobby exists, kick mis-seated players to re-seat."""
@@ -392,10 +479,10 @@ class ClientWrapper:
                             sid32 = SteamID(member.id).as_32
                             if member.id not in self.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS:
                                 dota.practice_lobby_kick_from_team(sid32)
-                                logger.info(f"[Client {i}] {member.name}: wrong team (should not be Radiant)")
+                                logger.info(f"[Game ID {self.game_id}] {member.name}: wrong team (should not be Radiant)")
                             if member.id not in self.dire and member.team == DOTA_GC_TEAM_BAD_GUYS:
                                 dota.practice_lobby_kick_from_team(sid32)
-                                logger.info(f"[Client {i}] {member.name}: wrong team (should not be Dire)")
+                                logger.info(f"[Game ID {self.game_id}] {member.name}: wrong team (should not be Dire)")
                             if (member.id in self.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS) or \
                                     (member.id in self.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
                                 correct += 1
@@ -404,27 +491,8 @@ class ClientWrapper:
 
                         if correct == len(self.radiant + self.dire):
                             dota.launch_practice_lobby()
-                            logger.info(f"[Client {i}] Game launched")
-                    # elif state == LobbyState.UI:
-                    #     # keep only assigned players on correct teams; kick others to let them rejoin properly
-                    #     correct = 0
-                    #     for member in message.all_members:
-                    #         try:
-                    #             steam_id_64 = member.id
-                    #             team = member.team
-                    #             sid32 = SteamID(steam_id_64).as_32
-                    #             if (steam_id_64 in self.radiant and team != DOTA_GC_TEAM_GOOD_GUYS) or \
-                    #                (steam_id_64 in self.dire    and team != DOTA_GC_TEAM_BAD_GUYS) or \
-                    #                (steam_id_64 not in (self.radiant + self.dire) and team in (DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS)):
-                    #                 dota.practice_lobby_kick_from_team(sid32)
-                    #             else:
-                    #                 if (steam_id_64 in self.radiant and team == DOTA_GC_TEAM_GOOD_GUYS) or \
-                    #                    (steam_id_64 in self.dire    and team == DOTA_GC_TEAM_BAD_GUYS):
-                    #                     correct += 1
-                    #         except Exception:
-                    #             pass
-                    #     if correct == len(self.radiant + self.dire):
-                    #         dota.launch_practice_lobby()
+                            logger.info(f"[Game ID {self.game_id}] Game launched")
+
                     elif (state == LobbyState.POSTGAME) or (getattr(message, "game_state", None) == GameState.POST_GAME):
                         try:
                             asyncio.run_coroutine_threadsafe(
@@ -481,8 +549,7 @@ class ClientWrapper:
             "allow_spectating": True,
             "leagueid": self.config.get("league_id", 0),
         }
-        # self.dota.radiant = list(self.radiant)
-        # self.dota.dire = list(self.dire)
+
         self.dota.password = self.password
         self.dota.create_practice_lobby(password=self.password, options=options)
         self.logger.info(f"[Game {self.game_id}] Created lobby with password {self.password}")
@@ -519,7 +586,7 @@ class DotaTalker:
             "Random Draft": int(DOTA_GameMode.DOTA_GAMEMODE_RD),
             "Single Draft": int(DOTA_GameMode.DOTA_GAMEMODE_SD),
             "All Random": int(DOTA_GameMode.DOTA_GAMEMODE_AR),
-            "Reverse Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_REVERSE_CM),
+            # "Reverse Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_REVERSE_CM),
             # "Mid Only": int(DOTA_GameMode.DOTA_GAMEMODE_MO),
             "Least Played": int(DOTA_GameMode.DOTA_GAMEMODE_LP),
             "Captains Draft": int(DOTA_GameMode.DOTA_GAMEMODE_CD),

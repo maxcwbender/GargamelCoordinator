@@ -519,6 +519,7 @@ class Master_Bot(commands.Bot):
                 if not interaction.response.is_done():
                     await interaction.response.send_message("Voting started!", ephemeral=True)
 
+                # await self.parent.dota_talker.alert_game_polling_started(self.game_id)
                 await message.edit(embed=embed, view=self.outer)
 
                 # Start the countdown now
