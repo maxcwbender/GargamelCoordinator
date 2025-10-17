@@ -435,7 +435,7 @@ class ClientWrapper:
                             steam.friends.add(sid)
                         dota.invite_to_lobby(sid)
                         user = steam.get_user(sid)
-                        if user:
+                        if user and dota.password is not None:
                             user.send_message(
                                 f"Invited to 'Gargamel League Game {self.game_id}'. Password: {dota.password}"
                             )
