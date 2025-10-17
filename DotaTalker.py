@@ -324,8 +324,7 @@ class ClientWrapper:
                 self.dota.chat.join_lobby_channel()
                 lobby = self.dota.chat.lobby
                 if lobby:
-                    lobby.send("Test")
-                # self.dota.chat.lobby.send("Game Polling has Started! Check #match_listings on Discord to Vote!")
+                    lobby.send("Game Polling has Started! Check #match-listings on Discord to Vote!!")
             except Exception as e:
                 self.logger.exception(f"[Game {self.game_id}] failed to send game polling message: {e}")
 
@@ -392,8 +391,6 @@ class ClientWrapper:
 
             # track lobby ownership
             dota.gameID = self.game_id
-            # dota.radiant = []
-            # dota.dire = []
             dota.password = None
 
             # event handlers (thread context!)
