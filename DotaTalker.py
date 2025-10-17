@@ -314,15 +314,6 @@ class ClientWrapper:
 
         await asyncio.to_thread(_do_change)
 
-    async def change_lobby_mode(self, game_id, game_mode):
-        try:
-            for client in self.dotaClients:
-                if client and client.gameID == game_id and client.lobby:
-                    opts = self._safe_lobby_snapshot(client)
-                    opts["game_mode"] = game_mode
-                    await client.config_practice_lobby(opts)
-        except Exception as e:
-            print(f"Failed to apply mode {game_mode}: {e}")
 
     def update_lobby_teams(self, radiant: list[int], dire: list[int]) -> bool:
         """Replace the intended team lists; if a lobby exists, kick mis-seated players to re-seat."""
