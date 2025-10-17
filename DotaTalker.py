@@ -182,14 +182,14 @@ class ClientWrapper:
             try:
                 self.dota.practice_lobby_kick_from_team(SteamID(s1).as_32)
             except Exception:
-                pass
+                self.logger.exception(f"Error kicking player from Team")
             try:
                 self.dota.practice_lobby_kick_from_team(SteamID(s2).as_32)
             except Exception:
-                pass
+                self.logger.exception(f"Error kicking player from Team")
 
         self.logger.info(f"[Game {self.game_id}] swapped {s1} <-> {s2}")
-        self.update_lobby_teams(self.radiant, self.dire)
+        # self.update_lobby_teams(self.radiant, self.dire)
         return True
 
     async def change_lobby_mode(self, game_mode: int) -> None:
