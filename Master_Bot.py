@@ -1300,20 +1300,25 @@ class Master_Bot(commands.Bot):
                 interaction (discord.Interaction): The slash command context.
                 game_id (int, optional): ID of the game to cancel. Defaults to most recent.
             """
+
+            await interaction.response.defer(thinking=True, ephemeral=True)
             # Find the most recent game if no ID provided
             if game_id is None:
                 if not self.game_map_inverse:
-                    return await interaction.response.send_message(
+                    return await interaction.followup.send(
                         "No active games to cancel.", ephemeral=True
                     )
                 game_id = max(self.game_map_inverse.keys())
 
             if game_id not in self.game_map_inverse:
-                return await interaction.response.send_message(
+                return await interaction.followup.send(
                     f"No active game with ID {game_id}.", ephemeral=True
                 )
 
-            await self.clear_game(game_id)
+            try:
+                await self.clear_game(game_id)
+            except Exception as e:
+                logger.exception(f"[cancel_game] Failed to clear internal game {game_id}")
 
             # Tearing down steam/dota client for game
             try:
@@ -1322,7 +1327,7 @@ class Master_Bot(commands.Bot):
             except Exception:
                 logger.exception(f"[cancel_game] Failed to teardown Dota client for game {game_id}")
 
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Game {game_id} has been cancelled. ❌", ephemeral=True
             )
 
