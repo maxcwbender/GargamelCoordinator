@@ -1352,67 +1352,63 @@ class Master_Bot(commands.Bot):
             success = self.dota_talker.replace_player_in_game(game_id, old_member.id, new_member.id)
 
             if not success:
-                # await interaction.followup.send(
-                #     f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>."
-                # )
-                # return
                 await interaction.followup.send(
                     f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>.",
                     ephemeral=True,
                 )
                 return
 
-            # if game_id not in self.game_map_inverse:
-            #     return await interaction.response.send_message(
-            #         f"No active game with ID {game_id}.", ephemeral=True
-            #     )
-            #
-            # radiant, dire = self.game_map_inverse[game_id]
-            #
-            # if old_member.id not in radiant and old_member.id not in dire:
-            #     return await interaction.response.send_message(
-            #         f"{old_member.display_name} is not in game {game_id}.",
-            #         ephemeral=True,
-            #     )
-            # if new_member.id in radiant or new_member.id in dire:
-            #     return await interaction.response.send_message(
-            #         f"{new_member.display_name} is already in game {game_id}.",
-            #         ephemeral=True,
-            #     )
-            #
-            # radiant_channel, dire_channel = self.game_channels.get(game_id)
-            #
-            # # Update game map structures
-            # if old_member.id in radiant:
-            #     radiant.remove(old_member.id)
-            #     radiant.add(new_member.id)
-            #     try:
-            #         await new_member.move_to(radiant_channel)
-            #     except (discord.HTTPException, discord.ClientException):
-            #         logger.exception(
-            #             f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
-            #         )
-            # else:
-            #     dire.remove(old_member.id)
-            #     dire.add(new_member.id)
-            #     try:
-            #         await new_member.move_to(dire_channel)
-            #     except (discord.HTTPException, discord.ClientException):
-            #         logger.exception(
-            #             f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
-            #         )
-            # self.game_map.pop(old_member.id, None)
-            # self.game_map[new_member.id] = game_id
-            #
+            if game_id not in self.game_map_inverse:
+                return await interaction.followup.send(
+                    f"No active game with ID {game_id}.", ephemeral=True
+                )
+
+            radiant, dire = self.game_map_inverse[game_id]
+
+            if old_member.id not in radiant and old_member.id not in dire:
+                return await interaction.followup.send(
+                    f"{old_member.display_name} is not in game {game_id}.",
+                    ephemeral=True,
+                )
+            if new_member.id in radiant or new_member.id in dire:
+                return await interaction.followup.send(
+                    f"{new_member.display_name} is already in game {game_id}.",
+                    ephemeral=True,
+                )
+
+            radiant_channel, dire_channel = self.game_channels.get(game_id)
+
+            # Update game map structures
+            if old_member.id in radiant:
+                radiant.remove(old_member.id)
+                radiant.add(new_member.id)
+                try:
+                    await new_member.move_to(radiant_channel)
+                except (discord.HTTPException, discord.ClientException):
+                    logger.exception(
+                        f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
+                    )
+            else:
+                dire.remove(old_member.id)
+                dire.add(new_member.id)
+                try:
+                    await new_member.move_to(dire_channel)
+                except (discord.HTTPException, discord.ClientException):
+                    logger.exception(
+                        f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
+                    )
+            self.game_map.pop(old_member.id, None)
+            self.game_map[new_member.id] = game_id
+
             await interaction.followup.send(
                 f"Replaced {old_member.mention} with {new_member.mention} in game {game_id}.",
                 ephemeral=True,
             )
-            #
-            # try:
-            #     await old_member.send(f"You've been removed from game {game_id}.")
-            # except discord.Forbidden:
-            #     pass
+
+            try:
+                await old_member.send(f"You've been removed from game {game_id}.")
+            except discord.Forbidden:
+                pass
 
         @app_commands.command(name="ping", description="Ping the bot")
         async def ping(interaction: discord.Interaction):
