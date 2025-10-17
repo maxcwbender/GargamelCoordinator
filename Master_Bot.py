@@ -584,7 +584,7 @@ class Master_Bot(commands.Bot):
             if winner:
                 try:
                     mode_enum = self.mode_name_to_enum[winner]
-                    await self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
+                    await self.parent.dota_talker.change_lobby_mode(self.outer.game_id, mode_enum)
                 except Exception as e:
                     logging.exception(f"Failed to apply mode {winner}={mode_enum}: {e}")
 
