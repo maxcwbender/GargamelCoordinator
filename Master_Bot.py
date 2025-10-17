@@ -1348,6 +1348,15 @@ class Master_Bot(commands.Bot):
                 old_member (discord.Member): Player to remove.
                 new_member (discord.Member): Player to add.
             """
+            await interaction.response.defer(thinking=True)
+            success = self.dota_talker.replace_player_in_game(game_id, old_member.id, new_member.id)
+
+            if not success:
+                await interaction.followup.send(
+                    f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>."
+                )
+                return
+
             if game_id not in self.game_map_inverse:
                 return await interaction.response.send_message(
                     f"No active game with ID {game_id}.", ephemeral=True

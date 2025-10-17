@@ -192,6 +192,35 @@ class ClientWrapper:
         # self.update_lobby_teams(self.radiant, self.dire)
         return True
 
+    def replace_player(self, old_player_id : int, new_player_id : int) -> bool:
+        old_player_sid = DB.fetch_steam_id(str(old_player_id))
+        new_player_sid = DB.fetch_steam_id(str(new_player_id))
+        if not old_player_sid or not new_player_sid:
+            self.logger.error(f"[Game {self.game_id}] swap failed: missing steam ids")
+            return False
+        # New Player cannot be in the game
+        if new_player_sid in self.radiant or new_player_sid in self.dire:
+            self.logger.error(f"[Game {self.game_id}] Replace Player failed: Replacement is already in game.")
+            return False
+        elif old_player_sid in self.radiant:
+            self.radiant.remove(old_player_sid)
+            self.radiant.append(new_player_sid)
+        elif old_player_sid in self.dire:
+            self.dire.remove(old_player_sid)
+            self.dire.append(new_player_sid)
+        else:
+            self.logger.error(f"[Game {self.game_id}] Replace Player failed: Old Player wasn't on either team.")
+
+        # If a lobby exists, kick both so they can seat on the new sides
+        if self.dota and getattr(self.dota, "lobby", None):
+            try:
+                self.dota.practice_lobby_kick_from_team(SteamID(old_player_sid).as_32)
+            except Exception:
+                self.logger.exception(f"Error kicking player from Team")
+
+        self.logger.info(f"[Game {self.game_id}] Replaced Player {old_player_sid} with {new_player_sid}")
+        return True
+
     async def change_lobby_mode(self, game_mode: int) -> None:
         """Change lobby game mode without blocking the asyncio loop."""
         if not self.dota:
@@ -554,6 +583,13 @@ class DotaTalker:
             logger.error(f"No lobby wrapper for game {game_id}")
             return False
         return wrapper.swap_players(discord_id_1, discord_id_2)
+
+    def replace_player_in_game(self, game_id:int, discord_id_1: int, discord_id_2: int) -> bool:
+        wrapper = self.lobby_clients.get(game_id)
+        if not wrapper:
+            logger.error(f"No lobby wrapper for game {game_id}")
+            return False
+        return wrapper.replace_player(discord_id_1, discord_id_2)
 
     async def change_lobby_mode(self, game_id: int, game_mode: int):
         wrapper = self.lobby_clients.get(game_id)
