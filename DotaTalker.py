@@ -156,8 +156,8 @@ class ClientWrapper:
 
     def swap_players(self, discord_id_1: int, discord_id_2: int) -> bool:
         """Swap two players between radiant/dire lists. Kicks them so they re-seat correctly."""
-        s1 = DB.fetch_steam_id(discord_id_1)
-        s2 = DB.fetch_steam_id(discord_id_2)
+        s1 = DB.fetch_steam_id(str(discord_id_1))
+        s2 = DB.fetch_steam_id(str(discord_id_2))
         if not s1 or not s2:
             self.logger.error(f"[Game {self.game_id}] swap failed: missing steam ids")
             return False
