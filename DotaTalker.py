@@ -416,15 +416,24 @@ class DotaTalker:
                 correct = 0
                 for member in message.all_members:
                     sid32 = SteamID(member.id).as_32
-                    if member.id in dotaClient.radiant and member.team != DOTA_GC_TEAM_GOOD_GUYS:
+                    if member.id not in dotaClient.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS:
                         dotaClient.practice_lobby_kick_from_team(sid32)
-                        logger.info(f"[Client {i}] {member.name}: wrong team (should be Radiant)")
-                    elif member.id in dotaClient.dire and member.team != DOTA_GC_TEAM_BAD_GUYS:
+                        logger.info(f"[Client {i}] {member.name}: wrong team (should not be Radiant)")
+                    if member.id not in dotaClient.dire and member.team == DOTA_GC_TEAM_BAD_GUYS:
                         dotaClient.practice_lobby_kick_from_team(sid32)
-                        logger.info(f"[Client {i}] {member.name}: wrong team (should be Dire)")
-                    elif (member.id in dotaClient.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS) or \
-                         (member.id in dotaClient.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
+                        logger.info(f"[Client {i}] {member.name}: wrong team (should not be Dire)")
+                    if (member.id in dotaClient.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS) or \
+                            (member.id in dotaClient.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
                         correct += 1
+                    # # if member.id in dotaClient.radiant and member.team != DOTA_GC_TEAM_GOOD_GUYS:
+                    # #     dotaClient.practice_lobby_kick_from_team(sid32)
+                    # #     logger.info(f"[Client {i}] {member.name}: wrong team (should be Radiant)")
+                    # # elif member.id in dotaClient.dire and member.team != DOTA_GC_TEAM_BAD_GUYS:
+                    # #     dotaClient.practice_lobby_kick_from_team(sid32)
+                    # #     logger.info(f"[Client {i}] {member.name}: wrong team (should be Dire)")
+                    # # elif (member.id in dotaClient.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS) or \
+                    # #      (member.id in dotaClient.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
+                    #     correct += 1
                     elif member.team in [DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS]:
                         dotaClient.practice_lobby_kick_from_team(sid32)
                         logger.info(f"[Client {i}] {member.name} not part of current game")
