@@ -1400,6 +1400,14 @@ class Master_Bot(commands.Bot):
             self.game_map.pop(old_member.id, None)
             self.game_map[new_member.id] = game_id
 
+            # Edit original lobby message
+            lobby_msg = self.lobby_messages.get(game_id)
+
+            embed = self.build_game_embed(game_id, radiant, dire, self.dota_talker.get_password(game_id))
+
+            if lobby_msg:
+                await lobby_msg.edit(embed=embed)
+
             await interaction.followup.send(
                 f"Replaced {old_member.mention} with {new_member.mention} in game {game_id}.",
                 ephemeral=True,
