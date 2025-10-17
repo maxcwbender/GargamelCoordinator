@@ -425,6 +425,9 @@ class DotaTalker:
                     if (member.id in dotaClient.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS) or \
                             (member.id in dotaClient.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
                         correct += 1
+                    # elif member.team in [DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS]:
+                    #     dotaClient.practice_lobby_kick_from_team(sid32)
+                    #     logger.info(f"[Client {i}] {member.name} not part of current game")
                     logger.info(f"User found on team: {member.team} (SteamID: {member.id} Member.name: {member.name})")
 
                 if correct == len(dotaClient.radiant + dotaClient.dire):
