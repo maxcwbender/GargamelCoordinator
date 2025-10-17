@@ -91,19 +91,19 @@ class DotaTalker:
         self.gameBacklog: list[list[int]] = []
         self.pending_matches = []
         self.mode_map = {
-            "All Pick" : 1,
+            # "All Pick" : 1,
             "Ranked All Pick" : 22, # Ranked All Pick
             "Captains Mode" : 2,
             "Random Draft" : 3,
             "Single Draft" : 4,
             "All Random" : 5,
-            "Reverse Captains Mode" : 8,
-            "Mid Only" : 11,
+            # "Reverse Captains Mode" : 8,
+            # "Mid Only" : 11,
             "Least Played" : 12,
             "Captains Draft" : 16,
-            "Ability Draft" : 18,
-            "All Random Deathmatch" : 20,
-            "Turbo" : 23
+            # "Ability Draft" : 18,
+            # "All Random Deathmatch" : 20,
+            # "Turbo" : 23
         }
 
         self.ALLOWED_LOBBY_KEYS = {
