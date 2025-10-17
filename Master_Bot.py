@@ -1356,7 +1356,7 @@ class Master_Bot(commands.Bot):
                 #     f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>."
                 # )
                 # return
-                await interaction.followup.send_message(
+                await interaction.followup.send(
                     f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>.",
                     ephemeral=True,
                 )
@@ -1404,7 +1404,7 @@ class Master_Bot(commands.Bot):
             # self.game_map.pop(old_member.id, None)
             # self.game_map[new_member.id] = game_id
             #
-            await interaction.followup.send_message(
+            await interaction.followup.send(
                 f"Replaced {old_member.mention} with {new_member.mention} in game {game_id}.",
                 ephemeral=True,
             )
