@@ -385,26 +385,45 @@ class ClientWrapper:
                                 self.discord_bot.on_game_started(self.game_id, message),
                                 self.loop,
                             )
-                    elif state == LobbyState.UI:
-                        # keep only assigned players on correct teams; kick others to let them rejoin properly
+                    if message.state == LobbyState.UI:
                         correct = 0
                         for member in message.all_members:
-                            try:
-                                steam_id_64 = member.id
-                                team = member.team
-                                sid32 = SteamID(steam_id_64).as_32
-                                if (steam_id_64 in self.radiant and team != DOTA_GC_TEAM_GOOD_GUYS) or \
-                                   (steam_id_64 in self.dire    and team != DOTA_GC_TEAM_BAD_GUYS) or \
-                                   (steam_id_64 not in (self.radiant + self.dire) and team in (DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS)):
-                                    dota.practice_lobby_kick_from_team(sid32)
-                                else:
-                                    if (steam_id_64 in self.radiant and team == DOTA_GC_TEAM_GOOD_GUYS) or \
-                                       (steam_id_64 in self.dire    and team == DOTA_GC_TEAM_BAD_GUYS):
-                                        correct += 1
-                            except Exception:
-                                pass
+                            sid32 = SteamID(member.id).as_32
+                            if member.id not in self.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS:
+                                dota.practice_lobby_kick_from_team(sid32)
+                                logger.info(f"[Client {i}] {member.name}: wrong team (should not be Radiant)")
+                            if member.id not in self.dire and member.team == DOTA_GC_TEAM_BAD_GUYS:
+                                dota.practice_lobby_kick_from_team(sid32)
+                                logger.info(f"[Client {i}] {member.name}: wrong team (should not be Dire)")
+                            if (member.id in self.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS) or \
+                                    (member.id in self.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
+                                correct += 1
+                            logger.info(
+                                f"User found on team: {member.team} (SteamID: {member.id} Member.name: {member.name})")
+
                         if correct == len(self.radiant + self.dire):
                             dota.launch_practice_lobby()
+                            logger.info(f"[Client {i}] Game launched")
+                    # elif state == LobbyState.UI:
+                    #     # keep only assigned players on correct teams; kick others to let them rejoin properly
+                    #     correct = 0
+                    #     for member in message.all_members:
+                    #         try:
+                    #             steam_id_64 = member.id
+                    #             team = member.team
+                    #             sid32 = SteamID(steam_id_64).as_32
+                    #             if (steam_id_64 in self.radiant and team != DOTA_GC_TEAM_GOOD_GUYS) or \
+                    #                (steam_id_64 in self.dire    and team != DOTA_GC_TEAM_BAD_GUYS) or \
+                    #                (steam_id_64 not in (self.radiant + self.dire) and team in (DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS)):
+                    #                 dota.practice_lobby_kick_from_team(sid32)
+                    #             else:
+                    #                 if (steam_id_64 in self.radiant and team == DOTA_GC_TEAM_GOOD_GUYS) or \
+                    #                    (steam_id_64 in self.dire    and team == DOTA_GC_TEAM_BAD_GUYS):
+                    #                     correct += 1
+                    #         except Exception:
+                    #             pass
+                    #     if correct == len(self.radiant + self.dire):
+                    #         dota.launch_practice_lobby()
                     elif (state == LobbyState.POSTGAME) or (getattr(message, "game_state", None) == GameState.POST_GAME):
                         try:
                             asyncio.run_coroutine_threadsafe(
