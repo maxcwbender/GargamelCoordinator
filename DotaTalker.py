@@ -22,7 +22,7 @@ from dota2.protobufs.dota_shared_enums_pb2 import (
     DOTA_GC_TEAM_BAD_GUYS,
     DOTA_GC_TEAM_GOOD_GUYS,
 )
-from dota2.features import Chat
+from dota2.features import chat
 
 import DBFunctions as DB
 from threading import Thread
@@ -383,7 +383,7 @@ class ClientWrapper:
 
             self.steam = SteamClient()
             self.dota = Dota2Client(self.steam)
-            self.dota.chat = Chat(self.dota)
+            self.dota.chat = chat(self.dota)
             dota = self.dota
             steam = self.steam
 
