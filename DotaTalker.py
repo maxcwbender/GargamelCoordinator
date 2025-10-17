@@ -259,6 +259,13 @@ class ClientWrapper:
         self.logger.info(f"[Game {self.game_id}] Replaced Player {old_player_sid} with {new_player_sid}")
         return True
 
+    def _setup_chat(self):
+        """Join the lobby chat so that send is allowed."""
+        try:
+            self.dota.join_lobby_channel()
+        except Exception:
+            self.logger.exception(f"[Game {self.game_id}] failed to join lobby chat channel")
+
     def _safe_lobby_snapshot(self) -> Dict[str, Any]:
         """
         Take the current lobby proto, convert to dict, then filter out fields that
@@ -320,7 +327,13 @@ class ClientWrapper:
 
         def _send_message():
             try:
-                self.dota.send_message("Game Polling has Started! Check #match_listings on Discord to Vote!", "Lobby")
+                ch = self.dota.chat.lobby
+                if ch:
+                    try:
+                        ch.send("Game Polling has Started! Check #match_listings on Discord to Vote!")
+                    except Exception as e:
+                        self.logger.exception(f"Game {self.game_id} failed to send message to Lobby Chat: {e}")
+                # self.dota.send_message("Game Polling has Started! Check #match_listings on Discord to Vote!", "Lobby")
             except Exception as e:
                 self.logger.exception(f"[Game {self.game_id}] failed to send game polling message: {e}")
 
@@ -424,6 +437,8 @@ class ClientWrapper:
             @dota.on("lobby_new")
             def _on_lobby_new(lobby):
                 # Invite all designated players
+                self._setup_chat()
+
                 for sid in (self.radiant + self.dire):
                     try:
                         if sid not in steam.friends:
