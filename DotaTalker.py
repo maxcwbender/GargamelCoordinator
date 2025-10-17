@@ -189,6 +189,7 @@ class ClientWrapper:
                 pass
 
         self.logger.info(f"[Game {self.game_id}] swapped {s1} <-> {s2}")
+        self.update_lobby_teams(self.radiant, self.dire)
         return True
 
     async def change_lobby_mode(self, game_mode: int) -> None:
