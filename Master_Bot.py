@@ -1468,6 +1468,28 @@ class Master_Bot(commands.Bot):
             else:
                 await interaction.response.send_message(f"{user.mention} was not in the queue.", ephemeral=True)
 
+        @app_commands.command(name="mmr", description="Check the MMR of a specific player")
+        async def check_mmr(
+            interaction: discord.Interaction,
+            user: discord.User,
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error with interaction response for mmr check for user with error: {e}")
+            try:
+                mmr = DB.fetch_rating(user)
+                await interaction.response.send_message(
+                    f"User: {user} currently has a rating of: {mmr}", ephemeral=True
+                )
+            except Exception as e:
+                logger.exception(f"Error retrieving MMR from database for user: {e}")
+                await interaction.response.send_message(
+                    f"Error retrieving MMR for User: {user}", ephemeral=True
+                )
+
+
         # Add explicitly
         self.tree.add_command(poll_registration)
         self.tree.add_command(approve)
@@ -1481,6 +1503,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(ping)
         self.tree.add_command(clear_queue)
         self.tree.add_command(remove_from_queue)
+        self.tree.add_command(check_mmr)
 
         if not self.config["DEBUG_MODE"]:
             await self.tree.sync()  # Clears global commands from Discord
