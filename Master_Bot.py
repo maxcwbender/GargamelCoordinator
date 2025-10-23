@@ -585,6 +585,11 @@ class Master_Bot(commands.Bot):
                 try:
                     mode_enum = self.mode_name_to_enum[winner]
                     await self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
+
+                    # Alerting the game lobby that the poll has finished so it can stop blocking game launch
+                    wrapper = self.parent.dota_talker.lobby_clients.get(self.game_id)
+                    await wrapper.notify_polling_complete()
+
                 except Exception as e:
                     logging.exception(f"Failed to apply mode {winner}={mode_enum}: {e}")
 
@@ -612,6 +617,29 @@ class Master_Bot(commands.Bot):
 
             if interaction and not interaction.response.is_done():
                 await interaction.response.send_message("Poll closed.", ephemeral=True)
+
+            # Allow a new poll to start
+            self._started = False
+            self._closed = False
+            self.votes_by_user.clear()
+
+            # Re-enable components for next poll
+            for item in self.children:
+                if isinstance(item, discord.ui.Select):
+                    item.disabled = True  # keep dropdown disabled until Start pressed again
+                elif isinstance(item, discord.ui.Button):
+                    item.disabled = False  # re-enable Start and End buttons
+
+            # Update button labels if you want clearer UI
+            for item in self.children:
+                if isinstance(item, type(self).GameModePoll.StartPollButton):
+                    item.label = "Start Poll"
+                elif isinstance(item, type(self).GameModePoll.EndPollButton):
+                    item.label = "End Poll"
+
+            # Edit the message to reflect re-enabled buttons
+            if message:
+                await message.edit(view=self)
 
         async def _update_poll_embed(self, interaction: discord.Interaction, transient_notice: str = ""):
             message = self.parent.lobby_messages.get(self.game_id)

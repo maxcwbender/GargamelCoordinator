@@ -142,6 +142,7 @@ class ClientWrapper:
         self.password: Optional[str] = None
         self.radiant: list[int] = []
         self.dire: list[int] = []
+        self.polling_active = False
 
         self.ALLOWED_LOBBY_KEYS = {
             # core
@@ -322,13 +323,39 @@ class ClientWrapper:
         def _send_message():
             try:
                 self.dota.chat.join_lobby_channel()
-                lobby = self.dota.chat.lobby
-                if lobby:
-                    lobby.send("Game Polling has Started! Check #match-listings on Discord to Vote!!")
+                self.lobby = self.dota.chat.lobby
+                if self.lobby:
+                    self.lobby.send("Game Polling has Started! Check #match-listings on Discord to Vote!!")
             except Exception as e:
                 self.logger.exception(f"[Game {self.game_id}] failed to send game polling message: {e}")
 
         await asyncio.to_thread(_send_message)
+
+    async def notify_polling_complete(self, delay: int = 5, retries: int = 6):
+        """Safely attempt to launch after a game mode poll finishes."""
+        self.polling_active = False
+        self.logger.info(f"[Game ID {self.game_id}] Game Mode Poll ended — scheduling launch checks...")
+
+        for i in range(retries):
+            await asyncio.sleep(delay)
+            members = self.dota.get_lobby_members()
+            correct = len(self.radiant + self.dire)
+            member_count = len(members) if members else 0
+
+            self.logger.info(
+                f"[Game ID {self.game_id}] Launch check {i + 1}/{retries}: {member_count}/{correct} players."
+            )
+
+            if members and member_count == correct:
+                self.dota.launch_practice_lobby()
+                self.logger.info(
+                    f"[Game ID {self.game_id}] Lobby ready after poll — launched successfully."
+                )
+                return
+
+        self.logger.warning(
+            f"[Game ID {self.game_id}] Poll ended but lobby never stabilized after {retries * delay}s."
+        )
 
     def update_lobby_teams(self, radiant: list[int], dire: list[int]) -> bool:
         """Replace the intended team lists; if a lobby exists, kick mis-seated players to re-seat."""
@@ -497,8 +524,14 @@ class ClientWrapper:
                                 f"User found on team: {member.team} (SteamID: {member.id} Member.name: {member.name})")
 
                         if correct == len(self.radiant + self.dire):
-                            dota.launch_practice_lobby()
-                            logger.info(f"[Game ID {self.game_id}] Game launched")
+                            if getattr(self, "polling_active", False):
+                                logger.info(
+                                    f"[Game ID {self.game_id}] All players ready but polling is active — delaying launch.")
+                                if self.lobby:
+                                    self.lobby.send("All players are ready but game mode poll is still active.  Will start game upon completion.")
+                            else:
+                                dota.launch_practice_lobby()
+                                logger.info(f"[Game ID {self.game_id}] Game launched")
 
                     elif (state == LobbyState.POSTGAME) or (getattr(message, "game_state", None) == GameState.POST_GAME):
                         try:
