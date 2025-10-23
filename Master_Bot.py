@@ -1480,12 +1480,12 @@ class Master_Bot(commands.Bot):
                     logger.exception(f"Error with interaction response for mmr check for user with error: {e}")
             try:
                 mmr = DB.fetch_rating(user.id)
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"User: {user} currently has a rating of: {mmr}", ephemeral=True
                 )
             except Exception as e:
                 logger.exception(f"Error retrieving MMR from database for user: {e}")
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"Error retrieving MMR for User: {user}", ephemeral=True
                 )
 
