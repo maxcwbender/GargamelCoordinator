@@ -371,7 +371,7 @@ class ClientWrapper:
                 return
 
         self.logger.warning(
-            f"[Game ID {self.game_id}] Poll ended but lobby never stabilized after {retries * delay}s."
+            f"[Game ID {self.game_id}] Poll ended but lobby never stabilized after {delay}s."
         )
 
     def update_lobby_teams(self, radiant: list[int], dire: list[int]) -> bool:
