@@ -1533,9 +1533,41 @@ class Master_Bot(commands.Bot):
             await interaction.followup.send(f"Success.  Gargamel Coordinator beginning restart.", ephemeral=True)
             os.system("supervisorctl restart gargamel")
 
+        @app_commands.command(name="set_debug_mode", description="Restart the Gargamel Coordinator")
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(
+            debug_mode="True or False"
+        )
+        async def set_debug_mode(
+            interaction: discord.Interaction,
+            debug_mode: bool,
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error setting debug mode: {e}")
+
+            with open("config.json", "r") as f:
+                config = json.load(f)
+                if debug_mode:
+                    config["TEAM_SIZE"] = 1
+                    config["DEBUG_MODE"] = True
+                else:
+                    config["TEAM_SIZE"] = 5
+                    config["DEBUG_MODE"] = False
+
+                with open("config.json", "w") as file:
+                    json.dump(config, file, indent=4)
+
+
+            logger.info(f"Setting Gargamel Coordinator debug mode to {debug_mode}. Terminating instance.")
+            await interaction.followup.send(f"Success.  Gargamel Coordinator debug mode set to {debug_mode}. Restarting Coordinator", ephemeral=True)
+            os.system("supervisorctl restart gargamel")
 
         @restart_bot.error
-        async def restart_bot_error(interaction: discord.Interaction, error):
+        @set_debug_mode.error
+        async def permissions_error(interaction: discord.Interaction, error):
             if isinstance(error, app_commands.MissingRole):
                 await interaction.response.send_message(
                     "You do not have permission to run this command (Mod role required).",
