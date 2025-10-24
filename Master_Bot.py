@@ -7,6 +7,7 @@ import math
 import sqlite3
 import asyncio
 import discord
+import os
 from discord import app_commands
 from discord.ext import commands
 import random
@@ -1517,6 +1518,22 @@ class Master_Bot(commands.Bot):
                     f"Error retrieving MMR for User: {user}", ephemeral=True
                 )
 
+        @app_commands.command(name="restart_bot", description="Restart the Gargamel Coordinator")
+        @app_commands.checks.has_role("Mod")
+        async def restart_bot(
+            interaction: discord.Interaction,
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error restarting Gargamel Coordinator with err: {e}")
+
+            if not self._has_role(interaction.user, "Mod"):
+                logger.warning(f"User {interaction.user.id} has no mod role and tried to restart the Gargamel Coordinator.")
+                return await interaction.response.send_message("Only authorized users can restart the Gargamel Coordinator.",
+                                                               ephemeral=True)
+            os.system("supervisorctl restart gargamel")
 
         # Add explicitly
         self.tree.add_command(poll_registration)
@@ -1532,6 +1549,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(clear_queue)
         self.tree.add_command(remove_from_queue)
         self.tree.add_command(check_mmr)
+        self.tree.add_command(restart_bot)
 
         if not self.config["DEBUG_MODE"]:
             await self.tree.sync()  # Clears global commands from Discord
