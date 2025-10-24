@@ -1592,6 +1592,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(remove_from_queue)
         self.tree.add_command(check_mmr)
         self.tree.add_command(restart_bot)
+        self.tree.add_command(set_debug_mode)
 
         if not self.config["DEBUG_MODE"]:
             await self.tree.sync()  # Clears global commands from Discord
