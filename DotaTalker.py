@@ -317,6 +317,7 @@ class ClientWrapper:
         await asyncio.to_thread(_do_change)
 
     async def alert_game_polling_started(self):
+        self.polling_active = True
         if not self.dota:
             logger.exception(f"Game {self.game_id} has no dota client available")
 

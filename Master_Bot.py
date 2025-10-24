@@ -633,9 +633,9 @@ class Master_Bot(commands.Bot):
 
             # Update button labels if you want clearer UI
             for item in self.children:
-                if isinstance(item, type(self).GameModePoll.StartPollButton):
+                if isinstance(item, self.StartPollButton):
                     item.label = "Start Poll"
-                elif isinstance(item, type(self).GameModePoll.EndPollButton):
+                elif isinstance(item, self.EndPollButton):
                     item.label = "End Poll"
 
             # Edit the message to reflect re-enabled buttons
