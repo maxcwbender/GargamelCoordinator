@@ -1528,10 +1528,11 @@ class Master_Bot(commands.Bot):
                     await interaction.response.defer(thinking=True, ephemeral=True)
                 except Exception as e:
                     logger.exception(f"Error restarting Gargamel Coordinator with err: {e}")
+
             logger.info(f"Received command to Restart Gargamel Coordinator. Terminating instance.")
+            await interaction.followup.send(f"Success.  Gargamel Coordinator beginning restart.", ephemeral=True)
             os.system("supervisorctl restart gargamel")
 
-            await interaction.followup.send(f"Success.  Gargamel Coordinator beginning restart.", ephemeral=True)
 
         @restart_bot.error
         async def restart_bot_error(interaction: discord.Interaction, error):
