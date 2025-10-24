@@ -332,43 +332,43 @@ class ClientWrapper:
 
         await asyncio.to_thread(_send_message)
 
-    async def notify_polling_complete(self, delay: int = 5, retries: int = 6):
+    async def notify_polling_complete(self, delay: int = 5):
         """Safely attempt to launch after a game mode poll finishes."""
         self.polling_active = False
         self.logger.info(f"[Game ID {self.game_id}] Game Mode Poll ended — scheduling launch checks...")
 
-        for i in range(retries):
-            await asyncio.sleep(delay)
 
-            lobby = getattr(self.dota, "lobby", None)
-            if not lobby:
-                self.logger.warning(f"[Game ID {self.game_id}] No lobby found on attempt {i + 1}/{retries}")
-                continue
+        await asyncio.sleep(delay)
 
-            members = getattr(lobby, "all_members", [])
-            if not members:
-                self.logger.warning(f"[Game ID {self.game_id}] No members found in lobby (attempt {i + 1}/{retries})")
-                continue
+        lobby = getattr(self.dota, "lobby", None)
+        if not lobby:
+            self.logger.warning(f"[Game ID {self.game_id}] No lobby found while notifying polling complete")
+            return
 
-            # --- Count team members ---
-            radiant_count = sum(1 for m in members if getattr(m, "team", None) == DOTA_GC_TEAM_GOOD_GUYS)
-            dire_count = sum(1 for m in members if getattr(m, "team", None) == DOTA_GC_TEAM_BAD_GUYS)
-            total_expected = 10
+        members = getattr(lobby, "all_members", [])
+        if not members:
+            self.logger.warning(f"[Game ID {self.game_id}] No members found on notifying polling complete.)")
+            return
 
-            self.logger.info(
-                f"[Game ID {self.game_id}] Launch check {i + 1}/{retries}: "
-                f"Radiant={radiant_count}/5, Dire={dire_count}/5 (expected total={total_expected})."
-            )
+        # --- Count team members ---
+        radiant_count = sum(1 for m in members if getattr(m, "team", None) == DOTA_GC_TEAM_GOOD_GUYS)
+        dire_count = sum(1 for m in members if getattr(m, "team", None) == DOTA_GC_TEAM_BAD_GUYS)
+        total_expected = 10
 
-            # --- Launch only if both sides are full ---
-            if radiant_count == 5 and dire_count == 5:
-                try:
-                    self.dota.launch_practice_lobby()
-                    self.logger.info(f"[Game ID {self.game_id}] All 10 players ready — launched successfully.")
-                    return
-                except Exception as e:
-                    self.logger.exception(f"[Game ID {self.game_id}] Failed to launch lobby: {e}")
-                    return
+        self.logger.info(
+            f"[Game ID {self.game_id}] Polling complete. Launch check: "
+            f"Radiant={radiant_count}/5, Dire={dire_count}/5 (expected total={total_expected})."
+        )
+
+        # --- Launch only if both sides are full ---
+        if radiant_count == 5 and dire_count == 5:
+            try:
+                self.dota.launch_practice_lobby()
+                self.logger.info(f"[Game ID {self.game_id}] All 10 players ready — launched successfully.")
+                return
+            except Exception as e:
+                self.logger.exception(f"[Game ID {self.game_id}] Failed to launch lobby: {e}")
+                return
 
         self.logger.warning(
             f"[Game ID {self.game_id}] Poll ended but lobby never stabilized after {retries * delay}s."

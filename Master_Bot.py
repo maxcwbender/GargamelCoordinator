@@ -491,11 +491,18 @@ class Master_Bot(commands.Bot):
                     return await interaction.response.send_message("Only authorized users can start the poll.",
                                                                    ephemeral=True)
 
+                # ✅ Defer early so Discord doesn’t time out
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+
                 async with self.outer._lock:
                     if self.outer._started:
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message("Poll already started.", ephemeral=True)
+                        try:
+                            await interaction.followup.send("Poll already started.", ephemeral=True)
+                        except Exception:
+                            pass
                         return
+
                     self.outer._started = True
                     self.outer.select.disabled = False
 
@@ -523,6 +530,7 @@ class Master_Bot(commands.Bot):
 
                 await self.outer.parent.dota_talker.alert_game_polling_started(self.outer.game_id)
                 await message.edit(embed=embed, view=self.outer)
+                await interaction.followup.send("Polling started!", ephemeral=True)
 
                 # Start the countdown now
                 asyncio.create_task(self.outer._auto_close_task(message))
@@ -536,6 +544,10 @@ class Master_Bot(commands.Bot):
                 if self.outer.allowed_role and not self.outer._has_role(interaction.user, self.outer.allowed_role):
                     return await interaction.response.send_message("Only authorized users can end the poll.",
                                                                    ephemeral=True)
+
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+
                 await self.outer._end_poll(interaction, manual=True)
 
         # Polling Lifecycle
@@ -641,6 +653,15 @@ class Master_Bot(commands.Bot):
             # Edit the message to reflect re-enabled buttons
             if message:
                 await message.edit(view=self)
+
+            if interaction:
+                try:
+                    if not interaction.response.is_done():
+                        await interaction.response.send_message("Poll closed.", ephemeral=True)
+                    else:
+                        await interaction.followup.send("Poll closed.", ephemeral=True)
+                except Exception as e:
+                    logging.exception(f"Failed to send end-poll response: {e}")
 
         async def _update_poll_embed(self, interaction: discord.Interaction, transient_notice: str = ""):
             message = self.parent.lobby_messages.get(self.game_id)
