@@ -209,8 +209,15 @@ class Master_Bot(commands.Bot):
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
 
+        if interaction and not interaction.response.is_done():
+            try:
+                await interaction.response.defer(thinking=True, ephemeral=True)
+            except Exception:
+                pass
+
+
         if self.coordinator.in_queue(interaction.user.id):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You're already in the queue, bozo.", ephemeral=True
             )
             return False
@@ -218,7 +225,7 @@ class Master_Bot(commands.Bot):
         rating = DB.fetch_rating(interaction.user.id)
         if not rating:
             logger.info(f"User with ID: {interaction.user.id} doesn't have a rating")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You don't have a rating yet. Talk to an Administrator to get started.",
                 ephemeral=True,
             )
@@ -238,21 +245,28 @@ class Master_Bot(commands.Bot):
 
         # Slash command requires a response for success
         if respond and not interaction.response.is_done():
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"You're now queueing with rating {rating}.", ephemeral=True
             )
 
         return True  # success
 
     async def leave_queue(self, interaction: discord.Interaction, respond=True):
+
+        if interaction and not interaction.response.is_done():
+            try:
+                await interaction.response.defer(thinking=True, ephemeral=True)
+            except Exception:
+                pass
+
         if not self.coordinator.in_queue(interaction.user.id):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You're not in the queue, bozo, how are you gonna leave?",
                 ephemeral=True,
             )
             return False
         self.coordinator.remove_player(interaction.user.id)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "You have left the queue.", ephemeral=True
         )
         await self.update_queue_status_message()
