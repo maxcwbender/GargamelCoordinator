@@ -211,7 +211,7 @@ class Master_Bot(commands.Bot):
 
         if interaction and not interaction.response.is_done():
             try:
-                await interaction.response.defer(thinking=True, ephemeral=True)
+                await interaction.response.defer(thinking=False, ephemeral=True)
             except Exception:
                 pass
 
