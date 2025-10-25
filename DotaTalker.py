@@ -144,6 +144,9 @@ class ClientWrapper:
         self.dire: list[int] = []
         self.polling_active = False
 
+        # Single lock for non button presses, if we hit 6+ players only poll once.
+        self.polling_done = False
+
         self.ALLOWED_LOBBY_KEYS = {
             # core
             "game_name",
@@ -318,6 +321,7 @@ class ClientWrapper:
 
     async def alert_game_polling_started(self):
         self.polling_active = True
+        e
         if not self.dota:
             logger.exception(f"Game {self.game_id} has no dota client available")
 
@@ -335,6 +339,7 @@ class ClientWrapper:
     async def notify_polling_complete(self, delay: int = 5):
         """Safely attempt to launch after a game mode poll finishes."""
         self.polling_active = False
+        self.polling_done = True
         self.logger.info(f"[Game ID {self.game_id}] Game Mode Poll ended — scheduling launch checks...")
 
 
@@ -527,14 +532,14 @@ class ClientWrapper:
                     if message.state == LobbyState.UI:
                         correct = 0
 
-                        # Automatically trigger a game mode poll with more than 6 players in the lobby
-                        # if not self.polling_active and len(message.all_members) > 6:
-                        #     self.logger.info(
-                        #         f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
-                        #     asyncio.run_coroutine_threadsafe(
-                        #         self.discord_bot.trigger_gamemode_poll(self.game_id),
-                        #         self.loop,
-                        #     )
+                        # Automatically trigger a game mode poll with more than 6 players in the lobby, single shot.
+                        if not self.polling_done and not self.polling_active and len(message.all_members) > 2:
+                            self.logger.info(
+                                f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
+                            asyncio.run_coroutine_threadsafe(
+                                self.discord_bot.start_poll(self.game_id),
+                                self.loop,
+                            )
 
                         for member in message.all_members:
                             sid32 = SteamID(member.id).as_32
