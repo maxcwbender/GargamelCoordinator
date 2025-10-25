@@ -244,7 +244,7 @@ class Master_Bot(commands.Bot):
                 self.pending_game_task = asyncio.create_task(self._start_game_loop(start_game_timer))
 
         # Slash command requires a response for success
-        if respond and not interaction.response.is_done():
+        if respond:
             await interaction.followup.send(
                 f"You're now queueing with rating {rating}.", ephemeral=True
             )
