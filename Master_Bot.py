@@ -1734,6 +1734,17 @@ class Master_Bot(commands.Bot):
                 DB.execute(
                     "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
                 )
+
+            # Adding cute little emoji reaction to match card for the winner
+            try:
+                lobby_msg = self.lobby_messages.get(game_id)
+                if s_radiant:
+                    await lobby_msg.add_reaction("🌞")
+                else:
+                    await lobby_msg.add_reaction("🌚")
+            except Exception as e:
+                logger.exception(f"Failed to react to lobby message with winner with error: {e}")
+
         except Exception as e:
             logging.exception(f"Error updating users table with ratings with err: {e}")
 
