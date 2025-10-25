@@ -628,7 +628,6 @@ class Master_Bot(commands.Bot):
             if triggered_by:
                 await triggered_by.followup.send("Polling started!", ephemeral=True)
 
-
         async def _end_poll(self, interaction: Optional[discord.Interaction], manual: bool = False):
             async with self._lock:
                 if self._closed:
@@ -642,86 +641,118 @@ class Master_Bot(commands.Bot):
                     if isinstance(item, (discord.ui.Select, discord.ui.Button)):
                         item.disabled = True
 
-            # Tally votes
-            tally: Dict[str, int] = {}
+            # --- Collect votes ---
+            tally_all: dict[str, int] = {}
             for choice in self.votes_by_user.values():
-                tally[choice] = tally.get(choice, 0) + 1
+                tally_all[choice] = tally_all.get(choice, 0) + 1
 
-            options_in_order = self._options_in_order()
+            # Identify players currently in this game
+            current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
+            current_player_ids = current_sets[0] | current_sets[1]
 
-            # Decide winner (No votes: keep Ranked AP / Prior. Tie is randomized.)
-            winner: Optional[str] = None
-            reason = ""
-            if not tally:
-                reason = "No votes — keeping current mode."
-            else:
-                max_votes = max(tally.values())
-                winners = [name for name, v in tally.items() if v == max_votes]
-                if len(winners) == 1:
-                    winner = winners[0]
-                    reason = f"Winner by {max_votes} vote{'s' if max_votes != 1 else ''}."
+            # Split into in-game vs outside votes
+            tally_in: dict[str, int] = {}
+            tally_out: dict[str, int] = {}
+            for user_id, choice in self.votes_by_user.items():
+                if user_id in current_player_ids:
+                    tally_in[choice] = tally_in.get(choice, 0) + 1
                 else:
-                    winner = random.choice(winners)
-                    reason = f"Tie resolved randomly among {', '.join(winners)}."
+                    tally_out[choice] = tally_out.get(choice, 0) + 1
 
-            # Apply mode only if we have a winner
-            if winner:
+            winner = None
+            reason = ""
+
+            # --- Determine winner ---
+            if tally_in:
+                # Normal case: at least one in-game vote
+                max_in = max(tally_in.values())
+                winners_in = [name for name, v in tally_in.items() if v == max_in]
+
+                if len(winners_in) == 1:
+                    winner = winners_in[0]
+                    reason = f"Winner by {max_in} in-game vote{'s' if max_in != 1 else ''}."
+                else:
+                    # Tie among in-game players
+                    outside_for_tied = {opt: tally_out.get(opt, 0) for opt in winners_in}
+                    max_out = max(outside_for_tied.values()) if outside_for_tied else 0
+                    winners_out = [opt for opt, v in outside_for_tied.items() if v == max_out]
+
+                    if max_out > 0 and len(winners_out) == 1:
+                        winner = winners_out[0]
+                        reason = f"Tie among in-game players resolved by outside votes ({max_out} supporting {winner})."
+                    else:
+                        winner = random.choice(winners_in)
+                        reason = f"Tie among in-game players and outside votes — randomly chose **{winner}**."
+            else:
+                # No in-game votes at all — do not change mode
+                winner = None
+                reason = "No in-game votes — mode unchanged."
+
+            # --- Apply the result if there’s a winner ---
+            if winner is not None:
                 try:
                     mode_enum = self.mode_name_to_enum[winner]
                     await self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
 
-                    # Alerting the game lobby that the poll has finished so it can stop blocking game launch
+                    # Notify game that poll finished
                     wrapper = self.parent.dota_talker.lobby_clients.get(self.game_id)
-                    await wrapper.notify_polling_complete()
-
+                    if wrapper:
+                        await wrapper.notify_polling_complete()
                 except Exception as e:
-                    logging.exception(f"Failed to apply mode {winner}={mode_enum}: {e}")
+                    logging.exception(f"Failed to apply mode {winner}: {e}")
 
-            # Only showing results for options that got >0 votes
-            summary_lines = [f"- {name}: **{tally[name]}**"
-                             for name in options_in_order if tally.get(name, 0) > 0]
+            # --- Build summary text ---
+            options_in_order = self._options_in_order()
+            summary_lines = [
+                f"- {name}: **{tally_all.get(name, 0)}**"
+                for name in options_in_order
+                if tally_all.get(name, 0) > 0
+            ]
             summary = "\n".join(summary_lines) or "*No votes*"
 
-            # Update embed
+            # --- Update embed ---
             message = self.parent.lobby_messages.get(self.game_id)
             if message:
                 embed = message.embeds[0]
-                idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+                idx = next(
+                    (i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")),
+                    None
+                )
+
                 result_text = (
                     f"**Poll closed ({'manually' if manual else 'automatically'}).**\n"
                     f"{('Winner: **' + winner + '**' if winner else 'Mode unchanged.')}"
                     f"{' — ' + reason if reason else ''}\n\n"
                     f"**Results:**\n{summary}"
                 )
+
                 if idx is not None:
-                    embed.set_field_at(idx, name="🗳️ Game Mode Voting — Results", value=result_text, inline=False)
+                    embed.set_field_at(
+                        idx,
+                        name="🗳️ Game Mode Voting — Results",
+                        value=result_text,
+                        inline=False,
+                    )
                 else:
-                    embed.add_field(name="🗳️ Game Mode Voting — Results", value=result_text, inline=False)
+                    embed.add_field(
+                        name="🗳️ Game Mode Voting — Results",
+                        value=result_text,
+                        inline=False,
+                    )
+
                 await message.edit(embed=embed, view=self)
 
-            if interaction and not interaction.response.is_done():
-                await interaction.response.send_message("Poll closed.", ephemeral=True)
-
-            # Allow a new poll to start
+            # --- Reset state for future polls ---
             self._started = False
             self._closed = False
             self.votes_by_user.clear()
 
-            # Re-enable components for next poll
             for item in self.children:
                 if isinstance(item, discord.ui.Select):
-                    item.disabled = True  # keep dropdown disabled until Start pressed again
+                    item.disabled = True  # Keep dropdown disabled until Start pressed again
                 elif isinstance(item, discord.ui.Button):
-                    item.disabled = False  # re-enable Start and End buttons
+                    item.disabled = False  # Re-enable Start and End buttons
 
-            # Update button labels if you want clearer UI
-            for item in self.children:
-                if isinstance(item, self.StartPollButton):
-                    item.label = "Start Poll"
-                elif isinstance(item, self.EndPollButton):
-                    item.label = "End Poll"
-
-            # Edit the message to reflect re-enabled buttons
             if message:
                 await message.edit(view=self)
 
