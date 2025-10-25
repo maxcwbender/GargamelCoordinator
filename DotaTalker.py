@@ -537,7 +537,7 @@ class ClientWrapper:
                             self.logger.info(
                                 f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
                             asyncio.run_coroutine_threadsafe(
-                                self.discord_bot.start_poll(self.game_id),
+                                self.discord_bot.trigger_gamemode_poll(self.game_id),
                                 self.loop,
                             )
 

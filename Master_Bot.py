@@ -768,6 +768,50 @@ class Master_Bot(commands.Bot):
             if not interaction.response.is_done():
                 await interaction.response.send_message(transient_notice, ephemeral=True)
 
+    async def trigger_gamemode_poll(self, game_id: int):
+        """Automatically create and start a game mode poll for a lobby."""
+        try:
+            message = self.lobby_messages.get(game_id)
+            if not message:
+                logger.warning(f"[Game {game_id}] No lobby message found — cannot start poll.")
+                return
+
+            # Get the wrapper
+            wrapper = self.dota_talker.lobby_clients.get(game_id)
+            if not wrapper:
+                logger.warning(f"[Game {game_id}] No DotaTalker wrapper found — skipping poll trigger.")
+                return
+
+            # Prevent duplicates
+            if wrapper.polling_done:
+                logger.info(f"[Game {game_id}] Poll already finished, skipping.")
+                return
+            if wrapper.polling_active:
+                logger.info(f"[Game {game_id}] Poll already active, skipping duplicate trigger.")
+                return
+
+            # Mark it active immediately
+            wrapper.polling_active = True
+
+            # Create the poll view
+            view = GameModePoll(
+                parent=self,
+                game_id=game_id,
+                mode_name_to_enum=self.dota_talker.mode_map,
+                duration_sec=60,
+                allowed_role="Mod",  # lock to Mod role
+            )
+
+            # Attach it to the existing lobby message
+            await message.edit(view=view)
+
+            # Start it programmatically
+            await view.start_poll()
+
+            logger.info(f"[Game {game_id}] Game mode poll auto-started successfully.")
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Failed to trigger game mode poll: {e}")
+            
     def run(self):
         """
         Start the bot using the token loaded from config file.
@@ -824,6 +868,7 @@ class Master_Bot(commands.Bot):
             title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
             color=discord.Color.red(),
         )
+
 
         embed.add_field(
             name=f"🌞 Radiant ({int(r_radiant)})",
