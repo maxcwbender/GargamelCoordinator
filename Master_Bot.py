@@ -794,7 +794,7 @@ class Master_Bot(commands.Bot):
             wrapper.polling_active = True
 
             # Create the poll view
-            view = GameModePoll(
+            view = self.QueueButtonView.GameModePoll(
                 parent=self,
                 game_id=game_id,
                 mode_name_to_enum=self.dota_talker.mode_map,
@@ -811,7 +811,7 @@ class Master_Bot(commands.Bot):
             logger.info(f"[Game {game_id}] Game mode poll auto-started successfully.")
         except Exception as e:
             logger.exception(f"[Game {game_id}] Failed to trigger game mode poll: {e}")
-            
+
     def run(self):
         """
         Start the bot using the token loaded from config file.
