@@ -321,7 +321,7 @@ class ClientWrapper:
 
     async def alert_game_polling_started(self):
         self.polling_active = True
-        
+
         if not self.dota:
             logger.exception(f"Game {self.game_id} has no dota client available")
 
@@ -533,7 +533,7 @@ class ClientWrapper:
                         correct = 0
 
                         # Automatically trigger a game mode poll with more than 6 players in the lobby, single shot.
-                        if not self.polling_done and not self.polling_active and len(message.all_members) > 2:
+                        if not self.polling_done and not self.polling_active and len(message.all_members) > 6:
                             self.logger.info(
                                 f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
                             asyncio.run_coroutine_threadsafe(
