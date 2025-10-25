@@ -794,7 +794,7 @@ class Master_Bot(commands.Bot):
             wrapper.polling_active = True
 
             # Create the poll view
-            view = self.QueueButtonView.GameModePoll(
+            view = self.GameModePoll(
                 parent=self,
                 game_id=game_id,
                 mode_name_to_enum=self.dota_talker.mode_map,
