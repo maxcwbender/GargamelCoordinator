@@ -639,7 +639,7 @@ class Master_Bot(commands.Bot):
                         reason = f"Tie among players resolved by {max_spec} spectator vote{'s' if max_spec != 1 else ''}."
                     else:
                         winner = random.choice(winners_in)
-                        reason = f"Tie among players (and spectator votes) — randomly chose **{winner}**."
+                        reason = f"Tie among players (spectators did not tiebreak) — randomly chose **{winner}**."
             else:
                 # No in-game votes at all: don't change game modes even with spectators
                 winner = None
