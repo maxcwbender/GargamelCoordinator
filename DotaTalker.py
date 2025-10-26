@@ -533,13 +533,13 @@ class ClientWrapper:
                         correct = 0
 
                         # Automatically trigger a game mode poll with more than 6 players in the lobby, single shot.
-                        if not self.polling_done and not self.polling_active and len(message.all_members) > 2:
-                            self.logger.info(
-                                f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
-                            asyncio.run_coroutine_threadsafe(
-                                self.discord_bot.trigger_gamemode_poll(self.game_id),
-                                self.loop,
-                            )
+                        # if not self.polling_done and not self.polling_active and len(message.all_members) > 6:
+                        #     self.logger.info(
+                        #         f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
+                        #     asyncio.run_coroutine_threadsafe(
+                        #         self.discord_bot.trigger_gamemode_poll(self.game_id),
+                        #         self.loop,
+                        #     )
 
                         for member in message.all_members:
                             sid32 = SteamID(member.id).as_32
