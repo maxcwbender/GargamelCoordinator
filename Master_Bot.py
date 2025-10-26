@@ -7,10 +7,14 @@ import math
 import sqlite3
 import asyncio
 import discord
+import os
 from discord import app_commands
 from discord.ext import commands
 import random
 import signal
+import csv
+import re
+from pathlib import Path
 
 import DBFunctions as DB
 from logger import setup_logging
@@ -66,6 +70,7 @@ class Master_Bot(commands.Bot):
 
         intents = discord.Intents.default()
         intents.members = True
+        intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
 
         self.con = sqlite3.connect("allUsers.db")
@@ -84,6 +89,32 @@ class Master_Bot(commands.Bot):
         self.pending_matches = set()
         self.ready_check_lock = asyncio.Lock()
         self.ready_check_status = False
+
+        self.deadleague_channel_id = int(self.config.get("GENERAL_CHANNEL_ID", 0))
+        self.deadleague_cooldown = int(self.config.get("DEAD_LEAGUE_COOLDOWN", 15))
+        self.deadleague_csv_path = self.config.get("DEAD_LEAGUE_CSV_PATH", "dead_league_responses.csv")
+        self._deadleague_last_ts: float = 0.0
+        self._deadleague_trigger = re.compile(r"\bdead\s*league\b", re.IGNORECASE)
+
+        def _load_deadleague_responses(csv_path: str) -> list[str]:
+            p = Path(csv_path)
+            if p.exists():
+                with p.open(newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    out = [row.get("response", "").strip() for row in reader if row.get("response", "").strip()]
+                    if out:
+                        logger.info(f"Loaded {len(out)} Dead League responses from CSV.")
+                        return out
+            logger.warning("Dead League CSV not found or empty. Falling back to a small built-in list.")
+            return [
+                "Ah yes, spoken like a true spectator.",
+                "Bold words from someone not even on the scoreboard.",
+                "League’s alive — unlike your MMR.",
+                "You’re right, it’s dead… just like you in most games.",
+                "Thanks for the league prediction, Oracle."
+            ]
+
+        self._deadleague_responses = _load_deadleague_responses(self.deadleague_csv_path)
 
     async def setup_hook(self):
         # Overriding discord bot.py setup_hook to register commands so they can be globally used by gui and slash
@@ -108,6 +139,16 @@ class Master_Bot(commands.Bot):
 
     def handle_exit_signals(self, signum, frame):
         logger.info(f"Received exit signal {signum}, cleaning up bot creations.")
+
+
+        # Clean up all remaining Steam/Dota clients for games
+        if hasattr(self, "dota_talker") and self.dota_talker:
+            try:
+                for gid in list(self.dota_talker.lobby_clients.keys()):
+                    self.dota_talker.teardown_lobby(gid)
+                logger.info("[handle_exit_signals] All Dota clients torn down.")
+            except Exception:
+                logger.exception("[handle_exit_signals] Error tearing down Dota clients")
 
         # Clean up Discord Voice and Text Channels, Clear the Bot Channel
         # TODO: Clean up Dota Lobbies that are empty if we bailed at the wrong time.
@@ -168,8 +209,15 @@ class Master_Bot(commands.Bot):
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
 
+        if interaction and not interaction.response.is_done():
+            try:
+                await interaction.response.defer(thinking=False, ephemeral=True)
+            except Exception:
+                pass
+
+
         if self.coordinator.in_queue(interaction.user.id):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You're already in the queue, bozo.", ephemeral=True
             )
             return False
@@ -177,7 +225,7 @@ class Master_Bot(commands.Bot):
         rating = DB.fetch_rating(interaction.user.id)
         if not rating:
             logger.info(f"User with ID: {interaction.user.id} doesn't have a rating")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You don't have a rating yet. Talk to an Administrator to get started.",
                 ephemeral=True,
             )
@@ -196,22 +244,29 @@ class Master_Bot(commands.Bot):
                 self.pending_game_task = asyncio.create_task(self._start_game_loop(start_game_timer))
 
         # Slash command requires a response for success
-        if respond and not interaction.response.is_done():
-            await interaction.response.send_message(
+        if respond:
+            await interaction.followup.send(
                 f"You're now queueing with rating {rating}.", ephemeral=True
             )
 
         return True  # success
 
     async def leave_queue(self, interaction: discord.Interaction, respond=True):
+
+        if interaction and not interaction.response.is_done():
+            try:
+                await interaction.response.defer(thinking=True, ephemeral=True)
+            except Exception:
+                pass
+
         if not self.coordinator.in_queue(interaction.user.id):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You're not in the queue, bozo, how are you gonna leave?",
                 ephemeral=True,
             )
             return False
         self.coordinator.remove_player(interaction.user.id)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "You have left the queue.", ephemeral=True
         )
         await self.update_queue_status_message()
@@ -413,6 +468,7 @@ class Master_Bot(commands.Bot):
             # Controls
             self.add_item(self.StartPollButton(self))
             self.add_item(self.EndPollButton(self))
+            self._auto_task: Optional[asyncio.Task] = None
 
         # Helper Functions
         def _has_role(self, member: discord.abc.User, role_name: str) -> bool:
@@ -429,16 +485,32 @@ class Master_Bot(commands.Bot):
                 self.outer = outer
 
             async def callback(self, interaction: discord.Interaction):
+
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+
                 async with self.outer._lock:
                     if self.outer._closed or not self.outer._started:
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message(
-                                "Poll isn’t active.", ephemeral=True
-                            )
+                        try:
+                            await interaction.followup.send("Poll isn’t active.", ephemeral=True)
+                        except Exception as e:
+                            logger.exception(f"[Game {self.outer.game_id}] Poll not active: {e}")
                         return
+
                     choice = self.values[0]
                     self.outer.votes_by_user[interaction.user.id] = choice
-                await self.outer._update_poll_embed(interaction, transient_notice=f"You voted **{choice}**.")
+
+                    # Determine if voter is a player or spectator
+                    current_sets = self.outer.parent.game_map_inverse.get(self.outer.game_id, (set(), set()))
+                    current_player_ids = current_sets[0] | current_sets[1]
+                    is_spectator = interaction.user.id not in current_player_ids
+
+                    if is_spectator:
+                        msg = f"You voted **{choice}**. *(Spectator votes only count during tiebreakers.)*"
+                    else:
+                        msg = f"You voted **{choice}**."
+
+                await self.outer._update_poll_embed(interaction, transient_notice=msg)
 
         class StartPollButton(discord.ui.Button):
             def __init__(self, outer: "GameModePoll"):
@@ -446,43 +518,17 @@ class Master_Bot(commands.Bot):
                 self.outer = outer
 
             async def callback(self, interaction: discord.Interaction):
+                # Permission check
                 if self.outer.allowed_role and not self.outer._has_role(interaction.user, self.outer.allowed_role):
                     return await interaction.response.send_message("Only authorized users can start the poll.",
                                                                    ephemeral=True)
 
-                async with self.outer._lock:
-                    if self.outer._started:
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message("Poll already started.", ephemeral=True)
-                        return
-                    self.outer._started = True
-                    self.outer.select.disabled = False
-
-                message = self.outer.parent.lobby_messages.get(self.outer.game_id)
-                if not message:
-                    if not interaction.response.is_done():
-                        await interaction.response.send_message("Lobby message not found.", ephemeral=True)
-                    return
-
-                embed = message.embeds[0]
-
-                idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
-                voting_text = (
-                    "Select a mode from the dropdown below.\n\n"
-                    f"Poll ends in **{self.outer.duration_sec} seconds**."
-                )
-                if idx is not None:
-                    embed.set_field_at(idx, name="🗳️ Game Mode Voting", value=voting_text, inline=False)
-                else:
-                    embed.add_field(name="🗳️ Game Mode Voting", value=voting_text, inline=False)
-
+                # Always defer immediately to prevent timeouts
                 if not interaction.response.is_done():
-                    await interaction.response.send_message("Voting started!", ephemeral=True)
+                    await interaction.response.defer(ephemeral=True)
 
-                await message.edit(embed=embed, view=self.outer)
-
-                # Start the countdown now
-                asyncio.create_task(self.outer._auto_close_task(message))
+                # Delegate to reusable helper
+                await self.outer.start_poll(interaction)
 
         class EndPollButton(discord.ui.Button):
             def __init__(self, outer: "GameModePoll"):
@@ -493,15 +539,69 @@ class Master_Bot(commands.Bot):
                 if self.outer.allowed_role and not self.outer._has_role(interaction.user, self.outer.allowed_role):
                     return await interaction.response.send_message("Only authorized users can end the poll.",
                                                                    ephemeral=True)
+
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+
                 await self.outer._end_poll(interaction, manual=True)
 
         # Polling Lifecycle
         async def _auto_close_task(self, message: discord.Message):
             try:
                 await asyncio.sleep(self.duration_sec)
-                await self._end_poll(None)
+                # If we hit End manually, avoid a double trigger
+                if not self._closed:
+                    await self._end_poll(None)
+            except asyncio.CancelledError:
+                # Task was cancelled because poll ended early
+                return
             except Exception as e:
-                logging.exception(f"Poll auto-close error: {e}")
+                logger.exception(f"Poll auto-close error: {e}")
+
+        async def start_poll(self, triggered_by: Optional[discord.Interaction] = None):
+            """Start the poll manually or programmatically."""
+            async with self._lock:
+                if self._started:
+                    if triggered_by:
+                        await triggered_by.followup.send("Poll already started.", ephemeral=True)
+                    return
+                self._started = True
+                self.select.disabled = False
+
+            message = self.parent.lobby_messages.get(self.game_id)
+            if not message:
+                if triggered_by:
+                    await triggered_by.followup.send("Lobby message not found.", ephemeral=True)
+                return
+
+            embed = message.embeds[0]
+            idx = next((i for i, f in enumerate(embed.fields)
+                        if f.name.startswith("🗳️ Game Mode Voting")), None)
+
+            voting_text = (
+                "Select a mode from the dropdown below.\n\n"
+                f"Poll ends in **{self.duration_sec} seconds**."
+            )
+
+            if idx is not None:
+                embed.set_field_at(idx, name="🗳️ Game Mode Voting", value=voting_text, inline=False)
+            else:
+                embed.add_field(name="🗳️ Game Mode Voting", value=voting_text, inline=False)
+
+            await message.edit(embed=embed, view=self)
+
+            # Alert game-side and start timer
+            await self.parent.dota_talker.alert_game_polling_started(self.game_id)
+            # Cancel any leftover auto task before starting new one
+            if self._auto_task and not self._auto_task.done():
+                self._auto_task.cancel()
+                self._auto_task = None
+
+            # Start a new auto-close timer
+            self._auto_task = asyncio.create_task(self._auto_close_task(message))
+
+            if triggered_by:
+                await triggered_by.followup.send("Polling started!", ephemeral=True)
 
         async def _end_poll(self, interaction: Optional[discord.Interaction], manual: bool = False):
             async with self._lock:
@@ -511,99 +611,248 @@ class Master_Bot(commands.Bot):
                     return
                 self._closed = True
 
+                # Cancel any pending auto-close timer
+                if hasattr(self, "_auto_task") and self._auto_task and not self._auto_task.done():
+                    self._auto_task.cancel()
+                    self._auto_task = None
+
                 # Freeze UI
                 for item in self.children:
                     if isinstance(item, (discord.ui.Select, discord.ui.Button)):
                         item.disabled = True
 
             # Tally votes
-            tally: Dict[str, int] = {}
-            for choice in self.votes_by_user.values():
-                tally[choice] = tally.get(choice, 0) + 1
+            current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
+            current_player_ids = current_sets[0] | current_sets[1]
 
-            options_in_order = self._options_in_order()
+            tally_in: dict[str, int] = {}
+            tally_spec: dict[str, int] = {}
 
-            # Decide winner (No votes: keep Ranked AP / Prior. Tie is randomized.)
+            for user_id, choice in self.votes_by_user.items():
+                if user_id in current_player_ids:
+                    tally_in[choice] = tally_in.get(choice, 0) + 1
+                else:
+                    tally_spec[choice] = tally_spec.get(choice, 0) + 1
+
             winner: Optional[str] = None
             reason = ""
-            if not tally:
-                reason = "No votes — keeping current mode."
-            else:
-                max_votes = max(tally.values())
-                winners = [name for name, v in tally.items() if v == max_votes]
-                if len(winners) == 1:
-                    winner = winners[0]
-                    reason = f"Winner by {max_votes} vote{'s' if max_votes != 1 else ''}."
-                else:
-                    winner = random.choice(winners)
-                    reason = f"Tie resolved randomly among {', '.join(winners)}."
 
-            # Apply mode only if we have a winner
-            if winner:
+            # Determine winner
+            if tally_in:
+                max_in = max(tally_in.values())
+                winners_in = [mode for mode, v in tally_in.items() if v == max_in]
+
+                if len(winners_in) == 1:
+                    winner = winners_in[0]
+                    reason = f"Winner by {max_in} in-game vote{'s' if max_in != 1 else ''}."
+                else:
+                    spec_for_tied = {mode: tally_spec.get(mode, 0) for mode in winners_in}
+                    max_spec = max(spec_for_tied.values())
+                    winners_spec = [mode for mode, v in spec_for_tied.items() if v == max_spec]
+
+                    if max_spec > 0 and len(winners_spec) == 1:
+                        winner = winners_spec[0]
+                        reason = f"Tie among players resolved by {max_spec} spectator vote{'s' if max_spec != 1 else ''}."
+                    else:
+                        winner = random.choice(winners_in)
+                        reason = f"Tie among players (spectators did not tiebreak) — randomly chose **{winner}**."
+            else:
+                winner = None
+                reason = "No in-game votes — mode unchanged."
+
+            # Apply winning mode
+            if winner is not None:
                 try:
                     mode_enum = self.mode_name_to_enum[winner]
                     await self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
+
+                    wrapper = self.parent.dota_talker.lobby_clients.get(self.game_id)
+                    if wrapper:
+                        await wrapper.notify_polling_complete()
                 except Exception as e:
-                    logging.exception(f"Failed to apply mode {winner}={mode_enum}: {e}")
+                    logger.exception(f"[Game {self.game_id}] Failed to apply mode {winner}: {e}")
 
-            # Only showing results for options that got >0 votes
-            summary_lines = [f"- {name}: **{tally[name]}**"
-                             for name in options_in_order if tally.get(name, 0) > 0]
-            summary = "\n".join(summary_lines) or "*No votes*"
+            # Build results for embed
+            options_in_order = self._options_in_order()
 
-            # Update embed
+            summary_lines_in = [
+                                   f"- {name}: **{tally_in.get(name, 0)}**"
+                                   for name in options_in_order if tally_in.get(name, 0) > 0
+                               ] or ["*No in-game votes*"]
+            summary_in = "\n".join(summary_lines_in)
+
+            # Only show spectators if any actually voted
+            spectator_voted = any(v > 0 for v in tally_spec.values())
+            summary_spec = ""
+            if spectator_voted:
+                summary_lines_spec = [
+                    f"- {name}: **{tally_spec.get(name, 0)}**"
+                    for name in options_in_order if tally_spec.get(name, 0) > 0
+                ]
+                summary_spec = "\n\n**Spectator votes:**\n" + "\n".join(summary_lines_spec)
+
+            # Update poll embed
             message = self.parent.lobby_messages.get(self.game_id)
             if message:
                 embed = message.embeds[0]
                 idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+
                 result_text = (
                     f"**Poll closed ({'manually' if manual else 'automatically'}).**\n"
                     f"{('Winner: **' + winner + '**' if winner else 'Mode unchanged.')}"
-                    f"{' — ' + reason if reason else ''}\n\n"
-                    f"**Results:**\n{summary}"
+                    f"{(' — ' + reason) if reason else ''}\n\n"
+                    f"**In-game votes:**\n{summary_in}"
+                    f"{summary_spec}"  # only added if spectators voted
                 )
+
                 if idx is not None:
-                    embed.set_field_at(idx, name="🗳️ Game Mode Voting — Results", value=result_text, inline=False)
+                    embed.set_field_at(
+                        idx,
+                        name="🗳️ Game Mode Voting — Results",
+                        value=result_text,
+                        inline=False,
+                    )
                 else:
-                    embed.add_field(name="🗳️ Game Mode Voting — Results", value=result_text, inline=False)
+                    embed.add_field(
+                        name="🗳️ Game Mode Voting — Results",
+                        value=result_text,
+                        inline=False,
+                    )
                 await message.edit(embed=embed, view=self)
 
-            if interaction and not interaction.response.is_done():
-                await interaction.response.send_message("Poll closed.", ephemeral=True)
+            # --- Reset state for next poll ---
+            self._started = False
+            self._closed = False
+            self.votes_by_user.clear()
+
+            for item in self.children:
+                if isinstance(item, discord.ui.Select):
+                    item.disabled = True  # Keep dropdown disabled until next Start
+                elif isinstance(item, discord.ui.Button):
+                    item.disabled = False  # Re-enable Start/End buttons
+
+            if message:
+                await message.edit(view=self)
+
+            # --- Notify interaction ---
+            if interaction:
+                try:
+                    if not interaction.response.is_done():
+                        await interaction.response.send_message("Poll closed.", ephemeral=True)
+                    else:
+                        await interaction.followup.send("Poll closed.", ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"[Game {self.game_id}] Failed to send end-poll response: {e}")
 
         async def _update_poll_embed(self, interaction: discord.Interaction, transient_notice: str = ""):
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message("Lobby message not found.", ephemeral=True)
+                try:
+                    await interaction.followup.send("Lobby message not found.", ephemeral=True)
+                except Exception:
+                    pass
                 return
+
             if not self._started or self._closed:
-                # Don’t live-update if not active
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(transient_notice, ephemeral=True)
+                try:
+                    await interaction.followup.send(transient_notice or "Poll isn’t active.", ephemeral=True)
+                except Exception:
+                    pass
                 return
 
-            tally: Dict[str, int] = {}
-            for choice in self.votes_by_user.values():
-                tally[choice] = tally.get(choice, 0) + 1
+            # Identify players and spectators
+            current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
+            current_player_ids = current_sets[0] | current_sets[1]
 
-            # Only show top among options with >0 votes
+            tally_in: dict[str, int] = {}
+            tally_spec: dict[str, int] = {}
+
+            for user_id, choice in self.votes_by_user.items():
+                if user_id in current_player_ids:
+                    tally_in[choice] = tally_in.get(choice, 0) + 1
+                else:
+                    tally_spec[choice] = tally_spec.get(choice, 0) + 1
+
             options_in_order = self._options_in_order()
-            voted = [n for n in options_in_order if tally.get(n, 0) > 0]
-            top = sorted(voted, key=lambda n: (-tally[n], options_in_order.index(n)))[:3]
-            status = ", ".join(f"{n} ({tally[n]})" for n in top) or "No votes yet"
+
+            # Build in-game status
+            voted_in = [n for n in options_in_order if tally_in.get(n, 0) > 0]
+            top_in = sorted(voted_in, key=lambda n: (-tally_in[n], options_in_order.index(n)))[:3]
+            status_in = ", ".join(f"{n} ({tally_in[n]})" for n in top_in) or "No in-game votes yet"
+
+            # Build spectator status **only** if there are spectator votes
+            voted_spec = [n for n in options_in_order if tally_spec.get(n, 0) > 0]
+            status_spec = None
+            if voted_spec:
+                top_spec = sorted(voted_spec, key=lambda n: (-tally_spec[n], options_in_order.index(n)))[:3]
+                status_spec = ", ".join(f"{n} ({tally_spec[n]})" for n in top_spec)
 
             embed = message.embeds[0]
             idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
             if idx is not None:
-                base = embed.fields[idx].value.split("\n\n")[0]  # original instructions
-                new_val = f"{base}\n\n_Current top:_ {status}"
+                base = embed.fields[idx].value.split("\n\n")[0]
+                # Build new value
+                new_val = f"{base}\n\n**In-game votes:** {status_in}"
+                if status_spec is not None:
+                    new_val += f"\n**Spectator votes:** {status_spec}"
                 embed.set_field_at(idx, name=embed.fields[idx].name, value=new_val, inline=False)
+            else:
+                # field not found: add new
+                new_val = f"**In-game votes:** {status_in}"
+                if status_spec is not None:
+                    new_val += f"\n**Spectator votes:** {status_spec}"
+                embed.add_field(name="🗳️ Game Mode Voting", value=new_val, inline=False)
 
             await message.edit(embed=embed, view=self)
 
-            if not interaction.response.is_done():
-                await interaction.response.send_message(transient_notice, ephemeral=True)
+            try:
+                await interaction.followup.send(transient_notice, ephemeral=True)
+            except (discord.errors.InteractionResponded, discord.errors.NotFound):
+                pass
+
+    async def trigger_gamemode_poll(self, game_id: int):
+        """Automatically create and start a game mode poll for a lobby."""
+        try:
+            message = self.lobby_messages.get(game_id)
+            if not message:
+                logger.warning(f"[Game {game_id}] No lobby message found — cannot start poll.")
+                return
+
+            # Get the wrapper
+            wrapper = self.dota_talker.lobby_clients.get(game_id)
+            if not wrapper:
+                logger.warning(f"[Game {game_id}] No DotaTalker wrapper found — skipping poll trigger.")
+                return
+
+            # Prevent duplicates
+            if wrapper.polling_done:
+                logger.info(f"[Game {game_id}] Poll already finished, skipping.")
+                return
+            if wrapper.polling_active:
+                logger.info(f"[Game {game_id}] Poll already active, skipping duplicate trigger.")
+                return
+
+            # Mark it active immediately
+            wrapper.polling_active = True
+
+            # Create the poll view
+            view = self.GameModePoll(
+                parent=self,
+                game_id=game_id,
+                mode_name_to_enum=self.dota_talker.mode_map,
+                duration_sec=60,
+                allowed_role="Mod",  # lock to Mod role
+            )
+
+            # Attach it to the existing lobby message
+            await message.edit(view=view)
+
+            # Start it programmatically
+            await view.start_poll()
+
+            logger.info(f"[Game {game_id}] Game mode poll auto-started successfully.")
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Failed to trigger game mode poll: {e}")
 
     def run(self):
         """
@@ -661,6 +910,7 @@ class Master_Bot(commands.Bot):
             title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
             color=discord.Color.red(),
         )
+
 
         embed.add_field(
             name=f"🌞 Radiant ({int(r_radiant)})",
@@ -896,6 +1146,26 @@ class Master_Bot(commands.Bot):
             pass
         finally:
             self.pending_game_task = None
+
+    async def on_message(self, message: discord.Message):
+        # ignore DMs & self
+        if message.author == self.user or message.guild is None:
+            return
+
+        # keep other channels untouched
+        if self.deadleague_channel_id and message.channel.id == self.deadleague_channel_id:
+            if self._deadleague_trigger.search(message.content or ""):
+                now = discord.utils.utcnow().timestamp()
+                if now - self._deadleague_last_ts >= self.deadleague_cooldown:
+                    self._deadleague_last_ts = now
+                    try:
+                        await message.reply(random.choice(self._deadleague_responses), mention_author=False,
+                                            suppress_embeds=True)
+                    except Exception as e:
+                        logger.exception(f"Failed to send Dead League reply: {e}")
+
+        # ensure normal command processing continues
+        await self.process_commands(message)
 
     async def on_ready(self):
         """
@@ -1238,21 +1508,34 @@ class Master_Bot(commands.Bot):
                 interaction (discord.Interaction): The slash command context.
                 game_id (int, optional): ID of the game to cancel. Defaults to most recent.
             """
+
+            await interaction.response.defer(thinking=True, ephemeral=True)
             # Find the most recent game if no ID provided
             if game_id is None:
                 if not self.game_map_inverse:
-                    return await interaction.response.send_message(
+                    return await interaction.followup.send(
                         "No active games to cancel.", ephemeral=True
                     )
                 game_id = max(self.game_map_inverse.keys())
 
             if game_id not in self.game_map_inverse:
-                return await interaction.response.send_message(
+                return await interaction.followup.send(
                     f"No active game with ID {game_id}.", ephemeral=True
                 )
 
-            await self.clear_game(game_id)
-            await interaction.response.send_message(
+            try:
+                await self.clear_game(game_id)
+            except Exception as e:
+                logger.exception(f"[cancel_game] Failed to clear internal game {game_id}")
+
+            # Tearing down steam/dota client for game
+            try:
+                self.dota_talker.teardown_lobby(game_id)
+                logger.info(f"[cancel_game] Torn down Dota client for canceled game {game_id}")
+            except Exception:
+                logger.exception(f"[cancel_game] Failed to teardown Dota client for game {game_id}")
+
+            await interaction.followup.send(
                 f"Game {game_id} has been cancelled. ❌", ephemeral=True
             )
 
@@ -1280,20 +1563,30 @@ class Master_Bot(commands.Bot):
                 old_member (discord.Member): Player to remove.
                 new_member (discord.Member): Player to add.
             """
+            await interaction.response.defer(thinking=True)
+            success = self.dota_talker.replace_player_in_game(game_id, old_member.id, new_member.id)
+
+            if not success:
+                await interaction.followup.send(
+                    f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>.",
+                    ephemeral=True,
+                )
+                return
+
             if game_id not in self.game_map_inverse:
-                return await interaction.response.send_message(
+                return await interaction.followup.send(
                     f"No active game with ID {game_id}.", ephemeral=True
                 )
 
             radiant, dire = self.game_map_inverse[game_id]
 
             if old_member.id not in radiant and old_member.id not in dire:
-                return await interaction.response.send_message(
+                return await interaction.followup.send(
                     f"{old_member.display_name} is not in game {game_id}.",
                     ephemeral=True,
                 )
             if new_member.id in radiant or new_member.id in dire:
-                return await interaction.response.send_message(
+                return await interaction.followup.send(
                     f"{new_member.display_name} is already in game {game_id}.",
                     ephemeral=True,
                 )
@@ -1322,7 +1615,15 @@ class Master_Bot(commands.Bot):
             self.game_map.pop(old_member.id, None)
             self.game_map[new_member.id] = game_id
 
-            await interaction.response.send_message(
+            # Edit original lobby message
+            lobby_msg = self.lobby_messages.get(game_id)
+
+            embed = self.build_game_embed(game_id, radiant, dire, self.dota_talker.get_password(game_id))
+
+            if lobby_msg:
+                await lobby_msg.edit(embed=embed)
+
+            await interaction.followup.send(
                 f"Replaced {old_member.mention} with {new_member.mention} in game {game_id}.",
                 ephemeral=True,
             )
@@ -1375,6 +1676,86 @@ class Master_Bot(commands.Bot):
             else:
                 await interaction.response.send_message(f"{user.mention} was not in the queue.", ephemeral=True)
 
+        @app_commands.command(name="mmr", description="Check the MMR of a specific player")
+        async def check_mmr(
+            interaction: discord.Interaction,
+            user: discord.User,
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error with interaction response for mmr check for user with error: {e}")
+            try:
+                mmr = DB.fetch_rating(user.id)
+                await interaction.followup.send(
+                    f"User: {user} currently has a rating of: {mmr}", ephemeral=True
+                )
+            except Exception as e:
+                logger.exception(f"Error retrieving MMR from database for user: {e}")
+                await interaction.followup.send(
+                    f"Error retrieving MMR for User: {user}", ephemeral=True
+                )
+
+        @app_commands.command(name="restart_bot", description="Restart the Gargamel Coordinator")
+        @app_commands.checks.has_role("Mod")
+        async def restart_bot(
+            interaction: discord.Interaction,
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error restarting Gargamel Coordinator with err: {e}")
+
+            logger.info(f"Received command to Restart Gargamel Coordinator. Terminating instance.")
+            await interaction.followup.send(f"Success.  Gargamel Coordinator beginning restart.", ephemeral=True)
+            os.system("supervisorctl restart gargamel")
+
+        @app_commands.command(name="set_debug_mode", description="Restart the Gargamel Coordinator")
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(
+            debug_mode="True or False"
+        )
+        async def set_debug_mode(
+            interaction: discord.Interaction,
+            debug_mode: bool,
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error setting debug mode: {e}")
+
+            with open("config.json", "r") as f:
+                config = json.load(f)
+                if debug_mode:
+                    config["TEAM_SIZE"] = 1
+                    config["DEBUG_MODE"] = True
+                else:
+                    config["TEAM_SIZE"] = 5
+                    config["DEBUG_MODE"] = False
+
+                with open("config.json", "w") as file:
+                    json.dump(config, file, indent=4)
+
+
+            logger.info(f"Setting Gargamel Coordinator debug mode to {debug_mode}. Terminating instance.")
+            await interaction.followup.send(f"Success.  Gargamel Coordinator debug mode set to {debug_mode}. Restarting Coordinator", ephemeral=True)
+            os.system("supervisorctl restart gargamel")
+
+        @restart_bot.error
+        @set_debug_mode.error
+        async def permissions_error(interaction: discord.Interaction, error):
+            if isinstance(error, app_commands.MissingRole):
+                await interaction.response.send_message(
+                    "You do not have permission to run this command (Mod role required).",
+                    ephemeral=True
+                )
+            else:
+                # Re-raise other unexpected errors so they're logged
+                raise error
+
         # Add explicitly
         self.tree.add_command(poll_registration)
         self.tree.add_command(approve)
@@ -1388,6 +1769,9 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(ping)
         self.tree.add_command(clear_queue)
         self.tree.add_command(remove_from_queue)
+        self.tree.add_command(check_mmr)
+        self.tree.add_command(restart_bot)
+        self.tree.add_command(set_debug_mode)
 
         if not self.config["DEBUG_MODE"]:
             await self.tree.sync()  # Clears global commands from Discord
@@ -1431,7 +1815,7 @@ class Master_Bot(commands.Bot):
             radiant_ids, dire_ids = self.game_map_inverse.get(game_id, (set(), set()))
             for discord_id in radiant_ids:
                 mmr = DB.fetch_rating(discord_id)
-                logging.info(f"Adding Radiant player: discord_id {discord_id} to database for match_id: {match_id} with mmr: {mmr}")
+                logger.info(f"Adding Radiant player: discord_id {discord_id} to database for match_id: {match_id} with mmr: {mmr}")
                 DB.execute(
                     """
                     INSERT INTO match_players (match_id, discord_id, team, mmr)
@@ -1443,7 +1827,7 @@ class Master_Bot(commands.Bot):
 
             for discord_id in dire_ids:
                 mmr = DB.fetch_rating(discord_id)
-                logging.info(
+                logger.info(
                     f"Adding Dire player: discord_id {discord_id} to database for match_id: {match_id} with mmr: {mmr}")
                 DB.execute(
                     """
@@ -1472,7 +1856,7 @@ class Master_Bot(commands.Bot):
             game_info: Object containing all game information
         """
         try:
-            logging.info(f"Entered on game ended")
+            logger.info(f"Entered on game ended")
             radiant, dire = self.game_map_inverse[game_id]
 
             await self.clear_game(game_id)
@@ -1508,21 +1892,39 @@ class Master_Bot(commands.Bot):
                 DB.execute(
                     "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
                 )
+
+            # Adding cute little emoji reaction to match card for the winner
+            try:
+                lobby_msg = self.lobby_messages.get(game_id)
+                if s_radiant:
+                    await lobby_msg.add_reaction("🌞")
+                else:
+                    await lobby_msg.add_reaction("🌚")
+            except Exception as e:
+                logger.exception(f"Failed to react to lobby message with winner with error: {e}")
+
         except Exception as e:
-            logging.exception(f"Error updating users table with ratings with err: {e}")
+            logger.exception(f"Error updating users table with ratings with err: {e}")
 
 
         try:
             # Update match with game state POSTGAME and Winner details
-            logging.info(f"Logging match results in DB for match_id {game_info.match_id} with winner: {game_info.match_outcome} and game_state: {game_info.game_state}")
+            logger.info(f"Logging match results in DB for match_id {game_info.match_id} with winner: {game_info.match_outcome} and game_state: {game_info.game_state}")
             DB.execute("""
                 UPDATE matches
                 SET winning_team = ?, state = ?
                 WHERE match_id = ?
             """, (game_info.match_outcome, game_info.game_state, game_info.match_id))
-            logging.info(f"Post results add")
+            logger.info(f"Post results add")
         except Exception as e:
             logger.exception(f"Error updating matches table with err: {e}")
+
+        # Teardown Steam/Dota client for this match
+        try:
+            self.dota_talker.teardown_lobby(game_id)
+            logger.info(f"[on_game_ended] Torn down Dota client for game {game_id}")
+        except Exception:
+            logger.exception(f"[on_game_ended] Failed to teardown Dota client for game {game_id}")
 
 
     async def clear_game(self, game_id: int):
@@ -1598,7 +2000,7 @@ class Master_Bot(commands.Bot):
             next_game_id = DB.fetch_one("SELECT counter FROM game_counter WHERE id = 1")
             return next_game_id
         except Exception as e:
-            logging.exception(f"Error getting next game id: {e}")
+            logger.exception(f"Error getting next game id: {e}")
 
     async def make_game(self, radiant, dire, cut_players):
         """
@@ -1681,7 +2083,7 @@ class Master_Bot(commands.Bot):
 
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
-        password = self.dota_talker.make_game(game_id, radiant, dire)
+        password = await self.dota_talker.make_game(game_id, radiant, dire)
 
         embed = self.build_game_embed(game_id, radiant, dire, password)
 

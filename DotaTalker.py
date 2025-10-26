@@ -1,33 +1,46 @@
+# DotaTalker.py
+from __future__ import annotations
+
+import gevent.monkey
+gevent.monkey.patch_all()
+
+import asyncio
+import json
+import logging
+import random
+import threading
+from dataclasses import dataclass
+from enum import IntEnum
+from typing import Any, Dict, Optional
+
+from google.protobuf.json_format import MessageToDict
+from steam.client import SteamClient
+from steam.enums import EFriendRelationship
+from steam.steamid import SteamID
 from dota2.client import Dota2Client
 from dota2.protobufs.dota_shared_enums_pb2 import (
     DOTA_GC_TEAM_BAD_GUYS,
     DOTA_GC_TEAM_GOOD_GUYS,
 )
+from dota2.features.chat import ChannelManager
 
-from steam.client import SteamClient
-from steam.steamid import SteamID
-from steam.enums import EFriendRelationship
-
-import json
-from threading import Thread
-import random
-
-from Master_Bot import Master_Bot
 import DBFunctions as DB
-import logging
-logger = logging.getLogger(__name__)
-import asyncio
-
-from typing import Any, Dict
-from google.protobuf.json_format import MessageToDict
-
+from threading import Thread
+from Master_Bot import Master_Bot
 from enum import IntEnum
 
+logger = logging.getLogger(__name__)
+
+
+# ----------------------------- #
+#         Game Enums            #
+# ----------------------------- #
 class LobbyState(IntEnum):
     UI = 0
     SERVERSETUP = 1
     RUN = 2
     POSTGAME = 3
+
 
 class GameState(IntEnum):
     INIT = 0
@@ -38,14 +51,16 @@ class GameState(IntEnum):
     IN_PROGRESS = 5
     POST_GAME = 6
 
+
 class MatchOutcome(IntEnum):
     UNKNOWN = 0
     RADIANT_WIN = 2
     DIRE_WIN = 3
 
+
 class DOTA_GameMode(IntEnum):
     DOTA_GAMEMODE_NONE = 0
-    DOTA_GAMEMODE_AP = 1
+    # DOTA_GAMEMODE_AP = 1
     DOTA_GAMEMODE_CM = 2
     DOTA_GAMEMODE_RD = 3
     DOTA_GAMEMODE_SD = 4
@@ -72,39 +87,65 @@ class DOTA_GameMode(IntEnum):
     # DOTA_GAMEMODE_COACHES_CHALLENGE = 25
 
 
-class DotaTalker:
-    def __init__(self, discordBot: 'Master_Bot.Master_Bot', loop: asyncio.AbstractEventLoop):
-        """
-        Initializes the DotaTalker instance and starts client threads.
 
-        Args:
-            discordBot (Master_Bot.Master_Bot): The Discord bot instance to communicate with.
-        """
-        self.discordBot: 'Master_Bot.Master_Bot' = discordBot
+@dataclass
+class ClientAccounts:
+    """Allocates one username/password per active lobby."""
+    total: int
+    in_use: set[int]
+
+    def next_free(self) -> Optional[int]:
+        for i in range(self.total):
+            if i not in self.in_use:
+                self.in_use.add(i)
+                return i
+        return None
+
+    def release(self, idx: int) -> None:
+        self.in_use.discard(idx)
+
+
+class ClientWrapper:
+    """
+    Owns exactly one Steam/Dota client (one account) living in its own thread.
+    Async entrypoints (`create_lobby`, `shutdown`) never block the asyncio loop.
+    """
+
+    def __init__(
+        self,
+        *,
+        game_id: int,
+        config: dict,
+        loop: asyncio.AbstractEventLoop,
+        discord_bot: "Master_Bot.Master_Bot",
+        account_index: int,
+        logger: Optional[logging.Logger] = None,
+    ):
+        self.game_id = game_id
+        self.config = config
         self.loop = loop
-        with open("config.json") as configFile:
-            self.config: dict = json.load(configFile)
+        self.discord_bot = discord_bot
+        self.account_index = account_index
 
-        self.threads: list[Thread] = []
-        self.dotaClients: list[Dota2Client] = [None] * self.config["numClients"]
-        self.client_ready: dict[int, bool] = {}
-        self.gameBacklog: list[list[int]] = []
-        self.pending_matches = []
-        self.mode_map = {
-            "All Pick" : 1,
-            "Ranked All Pick" : 22, # Ranked All Pick
-            "Captains Mode" : 2,
-            "Random Draft" : 3,
-            "Single Draft" : 4,
-            "All Random" : 5,
-            "Reverse Captains Mode" : 8,
-            "Mid Only" : 11,
-            "Least Played" : 12,
-            "Captains Draft" : 16,
-            "Ability Draft" : 18,
-            "All Random Deathmatch" : 20,
-            "Turbo" : 23
-        }
+        self.logger = logger or logging.getLogger("DotaTalker")
+
+        # Threading primitives
+        self._thread: Optional[threading.Thread] = None
+        self._stop_evt = threading.Event()
+        self._ready_evt = threading.Event()   # set when dota client is 'ready'
+
+        # Steam/Dota objects (only touch on the wrapper thread!)
+        self.steam: Optional[SteamClient] = None
+        self.dota: Optional[Dota2Client] = None
+
+        # Lobby state
+        self.password: Optional[str] = None
+        self.radiant: list[int] = []
+        self.dire: list[int] = []
+        self.polling_active = False
+
+        # Single lock for non button presses, if we hit 6+ players only poll once.
+        self.polling_done = False
 
         self.ALLOWED_LOBBY_KEYS = {
             # core
@@ -131,21 +172,108 @@ class DotaTalker:
             "allchat",             # sometimes exposed as a toggle
         }
 
-        for i in range(self.config["numClients"]):
-            t = Thread(target=self.setupClient, args=(i,), daemon=True)
-            t.start()
-            self.threads.append(t)
+    # ---------------- Thread lifecycle ----------------
 
-        logger.info("DotaTalker setup done")
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._thread_main, name=f"steam-dota-{self.game_id}", daemon=True)
+        self._thread.start()
 
-    def _safe_lobby_snapshot(self, client) -> Dict[str, Any]:
+    def shutdown(self):
+        self._stop_evt.set()
+        if self.dota:
+            try:
+                self.dota.leave_practice_lobby()
+            except Exception:
+                pass
+        if self.steam:
+            try:
+                self.steam.logout()
+                self.steam.disconnect()
+            except Exception:
+                pass
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=10.0)
+
+    def swap_players(self, discord_id_1: int, discord_id_2: int) -> bool:
+        """Swap two players between radiant/dire lists. Kicks them so they re-seat correctly."""
+        s1 = DB.fetch_steam_id(str(discord_id_1))
+        s2 = DB.fetch_steam_id(str(discord_id_2))
+        logger.info(f"Swapping player {discord_id_1} with player {discord_id_2} in game_id: {self.game_id}")
+        if not s1 or not s2:
+            self.logger.error(f"[Game {self.game_id}] swap failed: missing steam ids")
+            return False
+
+        # must be on opposite teams
+        if s1 in self.radiant and s2 in self.dire:
+            self.radiant.remove(s1)
+            self.dire.remove(s2)
+            self.radiant.append(s2)
+            self.dire.append(s1)
+        elif s2 in self.radiant and s1 in self.dire:
+            self.radiant.remove(s2)
+            self.dire.remove(s1)
+            self.radiant.append(s1)
+            self.dire.append(s2)
+        else:
+            self.logger.error(f"[Game {self.game_id}] swap failed: not on opposite teams")
+            return False
+
+        # If a lobby exists, kick both so they can seat on the new sides
+        if self.dota and getattr(self.dota, "lobby", None):
+            try:
+                self.dota.practice_lobby_kick_from_team(SteamID(s1).as_32)
+            except Exception:
+                self.logger.exception(f"Error kicking player from Team")
+            try:
+                self.dota.practice_lobby_kick_from_team(SteamID(s2).as_32)
+            except Exception:
+                self.logger.exception(f"Error kicking player from Team")
+
+        self.logger.info(f"[Game {self.game_id}] swapped {s1} <-> {s2}")
+        # self.update_lobby_teams(self.radiant, self.dire)
+        return True
+
+    def replace_player(self, old_player_id : int, new_player_id : int) -> bool:
+        old_player_sid = DB.fetch_steam_id(str(old_player_id))
+        new_player_sid = DB.fetch_steam_id(str(new_player_id))
+        if not old_player_sid or not new_player_sid:
+            self.logger.error(f"[Game {self.game_id}] swap failed: missing steam ids")
+            return False
+        # New Player cannot be in the game
+        if new_player_sid in self.radiant or new_player_sid in self.dire:
+            self.logger.error(f"[Game {self.game_id}] Replace Player failed: Replacement is already in game.")
+            return False
+        elif old_player_sid in self.radiant:
+            self.radiant.remove(old_player_sid)
+            self.radiant.append(new_player_sid)
+        elif old_player_sid in self.dire:
+            self.dire.remove(old_player_sid)
+            self.dire.append(new_player_sid)
+        else:
+            self.logger.error(f"[Game {self.game_id}] Replace Player failed: Old Player wasn't on either team.")
+
+        # If a lobby exists, kick both so they can seat on the new sides
+        if self.dota and getattr(self.dota, "lobby", None):
+            try:
+                self.dota.practice_lobby_kick_from_team(SteamID(old_player_sid).as_32)
+            except Exception:
+                self.logger.exception(f"Error kicking player from Team")
+
+        self.logger.info(f"[Game {self.game_id}] Replaced Player {old_player_sid} with {new_player_sid}")
+        return True
+
+    def _safe_lobby_snapshot(self) -> Dict[str, Any]:
         """
         Take the current lobby proto, convert to dict, then filter out fields that
         config_practice_lobby doesn't accept (like 'state', team rosters, ids, etc.).
         """
-        lob = getattr(client, "lobby", None)
+        # if self.dota and getattr(self.dota, "lobby", None):
+        lob = getattr(self.dota, "lobby", None)
         if lob is None:
-            raise RuntimeError("Not currently in a lobby")
+            # raise RuntimeError("Not currently in a lobby")
+            logger.exception(f"[Game {self.game_id}] currently has no lobby")
 
         snap = MessageToDict(
             lob,
@@ -165,7 +293,7 @@ class DotaTalker:
                 try:
                     filtered[key] = int(filtered[key])
                 except Exception:
-                    pass
+                    logger.exception(f"[Game {self.game_id}] {key} was not an integer")
         for key in ("allow_cheats", "fill_with_bots", "intro_mode",
                     "allow_spectating", "allchat"):
             if key in filtered:
@@ -173,297 +301,469 @@ class DotaTalker:
 
         return filtered
 
-    def is_ready(self, i: int) -> bool:
+    async def change_lobby_mode(self, game_mode: int) -> None:
+        """Change lobby game mode without blocking the asyncio loop."""
+        if not self.dota:
+            logger.exception(f"Game {self.game_id} has no dota client available")
+            return
+
+        def _do_change():
+            try:
+                # minimal config patch; dota2 library accepts partial opts
+                opts = self._safe_lobby_snapshot()
+                opts["game_mode"] = game_mode
+                self.dota.config_practice_lobby(opts)
+                self.logger.info(f"[Game {self.game_id}] lobby mode set to {game_mode}")
+            except Exception:
+                self.logger.exception(f"[Game {self.game_id}] failed to set mode {game_mode}")
+
+        await asyncio.to_thread(_do_change)
+
+    async def alert_game_polling_started(self):
+        self.polling_active = True
+
+        if not self.dota:
+            logger.exception(f"Game {self.game_id} has no dota client available")
+
+        def _send_message():
+            try:
+                self.dota.chat.join_lobby_channel()
+                self.lobby = self.dota.chat.lobby
+                if self.lobby:
+                    self.lobby.send("Game Polling has Started! Check #match-listings on Discord to Vote!!")
+            except Exception as e:
+                self.logger.exception(f"[Game {self.game_id}] failed to send game polling message: {e}")
+
+        await asyncio.to_thread(_send_message)
+
+    async def notify_polling_complete(self, delay: int = 5):
+        """Safely attempt to launch after a game mode poll finishes."""
+        self.polling_active = False
+        self.polling_done = True
+        self.logger.info(f"[Game ID {self.game_id}] Game Mode Poll ended — scheduling launch checks...")
+
+
+        await asyncio.sleep(delay)
+
+        lobby = getattr(self.dota, "lobby", None)
+        if not lobby:
+            self.logger.warning(f"[Game ID {self.game_id}] No lobby found while notifying polling complete")
+            return
+
+        members = getattr(lobby, "all_members", [])
+        if not members:
+            self.logger.warning(f"[Game ID {self.game_id}] No members found on notifying polling complete.)")
+            return
+
+        # --- Count team members ---
+        radiant_count = sum(1 for m in members if getattr(m, "team", None) == DOTA_GC_TEAM_GOOD_GUYS)
+        dire_count = sum(1 for m in members if getattr(m, "team", None) == DOTA_GC_TEAM_BAD_GUYS)
+        total_expected = 10
+
+        self.logger.info(
+            f"[Game ID {self.game_id}] Polling complete. Launch check: "
+            f"Radiant={radiant_count}/5, Dire={dire_count}/5 (expected total={total_expected})."
+        )
+
+        # --- Launch only if both sides are full ---
+        if radiant_count == 5 and dire_count == 5:
+            try:
+                self.dota.launch_practice_lobby()
+                self.logger.info(f"[Game ID {self.game_id}] All 10 players ready — launched successfully.")
+                return
+            except Exception as e:
+                self.logger.exception(f"[Game ID {self.game_id}] Failed to launch lobby: {e}")
+                return
+
+        self.logger.warning(
+            f"[Game ID {self.game_id}] Poll ended but lobby slots not ready to start game after {delay}s.  Lobby update event will trigger game start."
+        )
+
+    def update_lobby_teams(self, radiant: list[int], dire: list[int]) -> bool:
+        """Replace the intended team lists; if a lobby exists, kick mis-seated players to re-seat."""
+        self.radiant = list(radiant)
+        self.dire = list(dire)
+
+        if self.dota and getattr(self.dota, "lobby", None):
+            try:
+                # kick anyone currently in teams but not in our intended lists to force re-seat
+                for m in getattr(self.dota.lobby, "all_members", []):
+                    sid64 = m.id
+                    on_team = m.team in (DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS)
+                    should_be = (sid64 in self.radiant) or (sid64 in self.dire)
+                    if on_team and not should_be:
+                        self.dota.practice_lobby_kick_from_team(SteamID(sid64).as_32)
+            except Exception:
+                self.logger.exception(f"[Game {self.game_id}] update_lobby_teams kick failed")
+        return True
+
+    # ---------------- Async entrypoints ----------------
+
+    async def create_lobby(self, radiant_steam_ids: list[int], dire_steam_ids: list[int], password: str) -> None:
         """
-        Checks if the client at index i is ready.
-
-        Args:
-            i (int): Index of the client.
-
-        Returns:
-            bool: True if the client is ready, False otherwise.
+        Async-safe. Waits for the wrapper thread to bring up Steam+Dota, then creates the lobby.
+        Never blocks the asyncio event loop.
         """
-        return self.client_ready.get(i, False)
+        self.radiant = radiant_steam_ids
+        self.dire = dire_steam_ids
+        self.password = password
 
-    def set_ready(self, i: int, value: bool):
+        # Wait for dota 'ready' without blocking asyncio
+        ready = await asyncio.to_thread(self._ready_evt.wait, 60.0)
+        if not ready:
+            raise RuntimeError(f"[Game {self.game_id}] Dota client did not become ready within 60s")
+
+        # Create lobby in the wrapper thread (blocking), but do it via to_thread to avoid blocking asyncio
+        await asyncio.to_thread(self._thread_create_lobby)
+
+    # ---------------- Internals (run in wrapper thread) ----------------
+
+    def _thread_main(self):
         """
-        Sets the readiness of the client at index i.
-
-        Args:
-            i (int): Index of the client.
-            value (bool): Readiness value to set.
+        Runs in a dedicated OS thread. Owns SteamClient + Dota2Client and all gevent work.
         """
-        self.client_ready[i] = value
+        try:
+            uname = self.config.get(f"username_{self.account_index}")
+            pwd = self.config.get(f"password_{self.account_index}")
+            if not uname or not pwd:
+                self.logger.error(f"[Game {self.game_id}] Missing credentials for account index {self.account_index}")
+                self._ready_evt.set()  # unblock caller so we error fast
+                return
 
-    def make_game(self, gameID: int, radiant_discord_ids: list[int], dire_discord_ids: list[int]) -> str:
+            self.logger.info(f"[Game {self.game_id}] Logging into Steam as account index {self.account_index}")
+
+            self.steam = SteamClient()
+            self.dota = Dota2Client(self.steam)
+            self.dota.chat = ChannelManager(self.dota, logger_name="DotaChat")
+            dota = self.dota
+            steam = self.steam
+
+            # track lobby ownership
+            dota.gameID = self.game_id
+            dota.password = None
+
+            # event handlers (thread context!)
+            @steam.on("logged_on")
+            def _on_logged_on():
+                self.logger.info(f"[Game {self.game_id}] Steam logged on; launching Dota 2 client")
+                dota.launch()
+
+            @steam.on("friendlist")
+            def _on_friendlist(_message):
+                for sid, rel in steam.friends.items():
+                    if rel == EFriendRelationship.RequestRecipient:
+                        steam.friends.add(sid)
+                        # If lobby exists, auto-invite
+                        if dota.gameID and sid in (set(self.radiant) | set(self.dire)):
+                            dota.invite_to_lobby(sid)
+
+            @dota.on("ready")
+            def _on_dota_ready():
+                try:
+                    self.logger.info(f"[Game {self.game_id}] Dota client ready")
+                    dota.abandon_current_game()
+                    dota.leave_practice_lobby()
+                except Exception:
+                    pass
+                finally:
+                    self._ready_evt.set()
+
+            @dota.steam.on("persona_state")
+            def _persona_update(persona):
+                # lightweight visibility; avoid heavy logging spam
+                self.logger.debug(f"[Game {self.game_id}] Persona: {persona.name} ({persona.steam_id})")
+
+            @dota.on("lobby_new")
+            def _on_lobby_new(lobby):
+                # Invite all designated players
+                # self._setup_chat()
+
+                for sid in (self.radiant + self.dire):
+                    try:
+                        if sid not in steam.friends:
+                            steam.friends.add(sid)
+                        dota.invite_to_lobby(sid)
+                        user = steam.get_user(sid)
+                        if user and dota.password is not None:
+                            user.send_message(
+                                f"Invited to 'Gargamel League Game {self.game_id}'. Password: {dota.password}"
+                            )
+                    except Exception:
+                        self.logger.exception(f"[Game {self.game_id}] Failed invite/send to {sid}")
+
+            # import enums from your module
+            from dota2.protobufs.dota_shared_enums_pb2 import (
+                DOTA_GC_TEAM_BAD_GUYS,
+                DOTA_GC_TEAM_GOOD_GUYS,
+            )
+            from enum import IntEnum
+            class LobbyState(IntEnum):
+                UI = 0
+                SERVERSETUP = 1
+                RUN = 2
+                POSTGAME = 3
+            class GameState(IntEnum):
+                INIT = 0
+                STARTING = 1
+                HERO_SELECTION = 2
+                STRATEGY_TIME = 3
+                PRE_GAME = 4
+                IN_PROGRESS = 5
+                POST_GAME = 6
+
+            @dota.on("lobby_changed")
+            def _on_lobby_changed(message):
+                try:
+                    # Ask steam for names (non-blocking in this thread)
+                    for m in getattr(message, "all_members", []):
+                        try:
+                            steam.request_persona_state([m.id])
+                        except Exception:
+                            pass
+
+                    state = getattr(message, "state", None)
+                    if state == LobbyState.RUN:
+                        # Notify Discord side when we see the lobby in RUN\
+                        if self.game_id in self.discord_bot.pending_matches:
+                            asyncio.run_coroutine_threadsafe(
+                                self.discord_bot.on_game_started(self.game_id, message),
+                                self.loop,
+                            )
+                    if message.state == LobbyState.UI:
+                        correct = 0
+
+                        # Automatically trigger a game mode poll with more than 6 players in the lobby, single shot.
+                        if not self.polling_done and not self.polling_active and len(message.all_members) > 2:
+                            self.logger.info(
+                                f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
+                            asyncio.run_coroutine_threadsafe(
+                                self.discord_bot.trigger_gamemode_poll(self.game_id),
+                                self.loop,
+                            )
+
+                        for member in message.all_members:
+                            sid32 = SteamID(member.id).as_32
+                            if member.id not in self.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS:
+                                dota.practice_lobby_kick_from_team(sid32)
+                                logger.info(f"[Game ID {self.game_id}] {member.name}: wrong team (should not be Radiant)")
+                            if member.id not in self.dire and member.team == DOTA_GC_TEAM_BAD_GUYS:
+                                dota.practice_lobby_kick_from_team(sid32)
+                                logger.info(f"[Game ID {self.game_id}] {member.name}: wrong team (should not be Dire)")
+                            if (member.id in self.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS) or \
+                                    (member.id in self.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
+                                correct += 1
+                            logger.info(
+                                f"User found on team: {member.team} (SteamID: {member.id} Member.name: {member.name})")
+
+                        if correct == len(self.radiant + self.dire):
+                            if getattr(self, "polling_active", False):
+                                logger.info(
+                                    f"[Game ID {self.game_id}] All players ready but polling is active — delaying launch.")
+                                if self.lobby:
+                                    self.lobby.send("All players are ready but game mode poll is still active.  Will start game upon completion.")
+                            else:
+                                dota.launch_practice_lobby()
+                                logger.info(f"[Game ID {self.game_id}] Game launched")
+
+                    elif (state == LobbyState.POSTGAME) or (getattr(message, "game_state", None) == GameState.POST_GAME):
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                self.discord_bot.on_game_ended(self.game_id, message),
+                                self.loop,
+                            )
+                        finally:
+                            try:
+                                dota.leave_practice_lobby()
+                            except Exception:
+                                pass
+                            # allow outer manager to recycle account
+                            self._stop_evt.set()
+                except Exception:
+                    self.logger.exception(f"[Game {self.game_id}] Error in lobby_changed handler")
+
+            # ---- login & loop ----
+            try:
+                steam.login(username=uname, password=pwd)
+            except Exception as e:
+                self.logger.exception(f"[Game {self.game_id}] Steam login failed: {e}")
+                self._ready_evt.set()  # unblock waiter so it can error fast
+                return
+
+            # Gevent loop (in this thread). Run until stop requested.
+            try:
+                steam.run_forever()
+            except Exception as e:
+                self.logger.exception(f"[Game {self.game_id}] Steam/Dota thread crashed: {e}")
+            finally:
+                try:
+                    steam.logout()
+                    steam.disconnect()
+                except Exception:
+                    pass
+
+        except Exception:
+            self.logger.exception(f"[Game {self.game_id}] Unhandled error in wrapper thread")
+        finally:
+            self._ready_evt.set()  # ensure anyone waiting can proceed/raise
+
+    def _thread_create_lobby(self):
         """
-        Attempts to create a game using available Dota2 clients.
-
-        Args:
-            gameID (int): The game ID to assign.
-            radiant_discord_ids (list[int]): Discord IDs for Radiant team.
-            dire_discord_ids (list[int]): Discord IDs for Dire team.
-
-        Returns:
-            str: Password of the created lobby or "-1" if no client is available.
+        Called via asyncio.to_thread. Runs on wrapper thread. Creates the lobby.
         """
+        if not self.dota:
+            raise RuntimeError("Dota client not initialized")
+        # configure default options
+        options = {
+            "game_name": f"Gargamel League Game {self.game_id}",
+            "server_region": 2,
+            "game_mode": 22,
+            "allow_cheats": bool(self.config.get("DEBUG_MODE", False)),
+            "allow_spectating": True,
+            "leagueid": self.config.get("league_id", 0),
+        }
 
+        self.dota.password = self.password
+        self.dota.create_practice_lobby(password=self.password, options=options)
+        self.logger.info(f"[Game {self.game_id}] Created lobby with password {self.password}")
+
+
+class DotaTalker:
+    """
+    On-demand lobby manager.
+    - Spawns a ClientWrapper (Steam+Dota) per active lobby.
+    - Tears down wrapper when the game ends/cancels.
+    - Also should tear down in the signal interruptions to close the bot.
+    """
+
+    def __init__(self, discordBot: "Master_Bot.Master_Bot", loop: asyncio.AbstractEventLoop):
+        self.discordBot = discordBot
+        self.loop = loop
+
+        with open("config.json") as f:
+            self.config: dict = json.load(f)
+
+        # account allocator (based on config["numClients"] + username_i/password_i)
+        self.accounts = ClientAccounts(
+            total=int(self.config.get("numClients", 1)),
+            in_use=set()
+        )
+
+        # active game_id -> wrapper
+        self.lobby_clients: dict[int, ClientWrapper] = {}
+
+        self.mode_map = {
+            # "All Pick": int(DOTA_GameMode.DOTA_GAMEMODE_AP),
+            "Ranked All Pick": int(DOTA_GameMode.DOTA_GAMEMODE_ALL_DRAFT),  # 22
+            "Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_CM),
+            "Random Draft": int(DOTA_GameMode.DOTA_GAMEMODE_RD),
+            "Single Draft": int(DOTA_GameMode.DOTA_GAMEMODE_SD),
+            "All Random": int(DOTA_GameMode.DOTA_GAMEMODE_AR),
+            # "Reverse Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_REVERSE_CM),
+            # "Mid Only": int(DOTA_GameMode.DOTA_GAMEMODE_MO),
+            "Least Played": int(DOTA_GameMode.DOTA_GAMEMODE_LP),
+            "Captains Draft": int(DOTA_GameMode.DOTA_GAMEMODE_CD),
+            # "Ability Draft": int(DOTA_GameMode.DOTA_GAMEMODE_ABILITY_DRAFT),
+            # "All Random Deathmatch": int(DOTA_GameMode.DOTA_GAMEMODE_ARDM),
+            # "Turbo": int(DOTA_GameMode.DOTA_GAMEMODE_TURBO),
+        }
+
+        logger.info("DotaTalker ready — on-demand client per lobby")
+
+    def _allocate_account(self) -> int:
+        idx = self.accounts.next_free()
+        if idx is None:
+            raise RuntimeError("No free Steam accounts")
+        return idx
+
+    def _release_account(self, idx: int) -> None:
+        self.accounts.release(idx)
+
+    # -------------- Public API ---------------- #
+    async def make_game(self, gameID: int, radiant_discord_ids: list[int], dire_discord_ids: list[int]) -> str:
+        """
+        Async: spins up a per-lobby client (in a thread), waits for 'ready',
+        creates the lobby, and returns the lobby password.
+        """
         radiant_steam_ids = [DB.fetch_steam_id(did) for did in radiant_discord_ids]
         dire_steam_ids = [DB.fetch_steam_id(did) for did in dire_discord_ids]
 
-
-        for i in range(self.config["numClients"]):
-            client = self.dotaClients[i]
-            if client.gameID is None and self.is_ready(i):
-                self.set_ready(i, False)
-                password = str(random.randint(1000, 9999))
-                self.make_lobby(i, gameID, radiant_steam_ids, dire_steam_ids, password)
-                return password
-        return "-1"
-
-    def make_lobby(self, clientIdx: int, gameID: int, radiant: list[int], dire: list[int], password: str):
-        """
-        Creates a new Dota 2 lobby using the specified client.
-
-        Args:
-            clientIdx (int): Index of the client.
-            gameID (int): Game ID.
-            radiant (list[int]): List of Radiant team Steam IDs.
-            dire (list[int]): List of Dire team Steam IDs.
-            password (str): Lobby password.
-        """
-        logger.info(f"[Client {clientIdx}] Looking for game")
-        dotaClient = self.dotaClients[clientIdx]
-        dotaClient.gameID = gameID
-        dotaClient.radiant = radiant
-        dotaClient.dire = dire
-        dotaClient.password = password
-
-        lobbyConfig = {
-            "game_name": f"Gargamel League Game {gameID}",
-            "server_region": 2,
-            "game_mode": 22,
-            "allow_cheats": self.config["DEBUG_MODE"],
-            "allow_spectating": True,
-            "leagueid": self.config["league_id"],
-        }
-
-        dotaClient.create_practice_lobby(password=password, options=lobbyConfig)
-        logger.info(f"[Client {clientIdx}] Created lobby for game {gameID} with password {dotaClient.password}")
-
-    def get_password(self, game_id: str) -> str:
-        for i in range(self.config["numClients"]):
-            client = self.dotaClients[i]
-            if client.gameID == game_id:
-                return client.password
-            
-        return "-1"
-    
-    def swap_players_in_game(self, game_id: int, discord_id_1: int, discord_id_2: int) -> bool:
-        """
-        Swaps two players between teams in the lobby for the given game ID.
-
-        Args:
-            game_id (int): ID of the game.
-            discord_id_1 (int): Discord ID of the first player.
-            discord_id_2 (int): Discord ID of the second player.
-
-        Returns:
-            bool: True if successful, False if the swap couldn't be performed.
-        """
-
-        steam_id_1 = DB.fetch_steam_id(discord_id_1)
-        steam_id_2 = DB.fetch_steam_id(discord_id_2)
-
-        for client in self.dotaClients:
-            if client and client.gameID == game_id:
-                if steam_id_1 in client.radiant and steam_id_2 in client.dire:
-                    client.radiant.remove(steam_id_1)
-                    client.dire.remove(steam_id_2)
-                    client.radiant.append(steam_id_2)
-                    client.dire.append(steam_id_1)
-                    logger.info(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
-                    return True
-                elif steam_id_1 in client.dire and steam_id_2 in client.radiant:
-                    client.radiant.remove(steam_id_2)
-                    client.dire.remove(steam_id_1)
-                    client.radiant.append(steam_id_1)
-                    client.dire.append(steam_id_2)
-                    logger.info(f"[Game {game_id}] Swapped {steam_id_1} and {steam_id_2}")
-                    return True
-                else:
-                    logger.error(f"[Game {game_id}] One or both users not found on opposing teams")
-                    return False
-        logger.error(f"No lobby found with game ID {game_id}")
-        return False
-
-    async def change_lobby_mode(self, game_id, game_mode):
+        # Pick a free account (using your allocator if you added one)
         try:
-            for client in self.dotaClients:
-                if client and client.gameID == game_id and client.lobby:
-                    opts = self._safe_lobby_snapshot(client)
-                    opts["game_mode"] = game_mode
-                    await client.config_practice_lobby(opts)
+            account_index = self._allocate_account() if hasattr(self, "_allocate_account") else 0
         except Exception as e:
-            print(f"Failed to apply mode {game_mode}: {e}")
+            logging.exception(f"[Game {gameID}] No free Steam accounts: {e}")
+            return "-1"
+
+        password = str(random.randint(1000, 9999))
+
+        wrapper = ClientWrapper(
+            game_id=gameID,
+            config=self.config,
+            loop=self.loop,
+            discord_bot=self.discordBot,
+            account_index=account_index,
+            logger=logging.getLogger("DotaTalker"),
+        )
+        if not hasattr(self, "lobby_clients"):
+            self.lobby_clients: dict[int, ClientWrapper] = {}
+        self.lobby_clients[gameID] = wrapper
+
+        wrapper.start()
+        try:
+            await wrapper.create_lobby(radiant_steam_ids, dire_steam_ids, password)
+            return password
+        except Exception as e:
+            logging.exception(f"[Game {gameID}] Failed to create lobby: {e}")
+            # cleanup & release account
+            try:
+                wrapper.shutdown()
+            finally:
+                if hasattr(self, "_release_account"):
+                    self._release_account(account_index)
+            return "-1"
+
+    def teardown_lobby(self, game_id: int):
+        wrapper = getattr(self, "lobby_clients", {}).pop(game_id, None)
+        if wrapper:
+            acct = getattr(wrapper, "account_index", None)
+            try:
+                wrapper.shutdown()
+            finally:
+                if hasattr(self, "_release_account") and acct is not None:
+                    self._release_account(acct)
+
+    def get_password(self, game_id: int) -> str:
+        wrapper = self.lobby_clients.get(game_id)
+        return wrapper.password if wrapper and wrapper.password else "-1"
+
+    def swap_players_in_game(self, game_id: int, discord_id_1: int, discord_id_2: int) -> bool:
+        wrapper = self.lobby_clients.get(game_id)
+        if not wrapper:
+            logger.error(f"No lobby wrapper for game {game_id}")
+            return False
+        return wrapper.swap_players(discord_id_1, discord_id_2)
+
+    def replace_player_in_game(self, game_id:int, discord_id_1: int, discord_id_2: int) -> bool:
+        wrapper = self.lobby_clients.get(game_id)
+        if not wrapper:
+            logger.error(f"No lobby wrapper for game {game_id}")
+            return False
+        return wrapper.replace_player(discord_id_1, discord_id_2)
+
+    async def change_lobby_mode(self, game_id: int, game_mode: int):
+        wrapper = self.lobby_clients.get(game_id)
+        if not wrapper:
+            return
+        await wrapper.change_lobby_mode(game_mode)
+
+    async def alert_game_polling_started(self, game_id: int):
+        wrapper = self.lobby_clients.get(game_id)
+        if not wrapper:
+            return
+        await wrapper.alert_game_polling_started()
 
     def update_lobby_teams(self, gameID: int, radiant: list[int], dire: list[int]) -> bool:
-        """
-        Updates the Radiant and Dire teams in an existing lobby.
-
-        Args:
-            gameID (int): Game ID to match with a lobby.
-            radiant (list[int]): Updated Radiant team Steam IDs.
-            dire (list[int]): Updated Dire team Steam IDs.
-
-        Returns:
-            bool: True if updated successfully, False if no matching lobby found.
-        """
-        for client in self.dotaClients:
-            if client and client.gameID == gameID and client.lobby:
-                client.radiant = radiant
-                client.dire = dire
-                logger.info(f"[Game {gameID}] Lobby teams updated")
-                return True
-        return False
-
-    def setupClient(self, i: int):
-        """
-        Initializes and connects a Steam/Dota2 client.
-
-        Args:
-            i (int): Index of the client.
-        """
-        steamClient = SteamClient()
-        dotaClient = Dota2Client(steamClient)
-        dotaClient.gameID = None
-        dotaClient.radiant = None
-        dotaClient.dire = None
-        dotaClient.password = None
-        self.dotaClients[i] = dotaClient
-        self.set_ready(i, False)
-
-        @steamClient.on("logged_on")
-        def _():
-            logger.info(f"[Client {i}] Logged on to Steam")
-            dotaClient.launch()
-
-        @steamClient.on("friendlist")
-        def _(message):
-            logger.info("Friendlist message: " + str(message))
-            for steam_id, relationship in steamClient.friends.items():
-                if relationship == EFriendRelationship.RequestRecipient:
-                    logger.info(f"Received friend request from: {steam_id}")
-                    steamClient.friends.add(steam_id)
-
-                    if dotaClient.gameID and steam_id in (dotaClient.radiant + dotaClient.dire):
-                        dotaClient.invite_to_lobby(steam_id)
-
-        @dotaClient.on("ready")
-        def _():
-            logger.info(f"[Client {i}] Dota 2 client ready")
-            dotaClient.abandon_current_game()
-            dotaClient.leave_practice_lobby()
-            self.set_ready(i, True)
-
-
-        @dotaClient.on("lobby_new")
-        def _(lobby):
-            if dotaClient.gameID is None:
-                return
-
-            for sid in dotaClient.radiant + dotaClient.dire:
-                if sid not in dotaClient.steam.friends:
-                    dotaClient.steam.friends.add(sid)
-                dotaClient.invite_to_lobby(sid)
-                dotaClient.steam.get_user(sid).send_message(
-                    f"Just invited you to a lobby! The lobby name is 'Gargamel League Game {dotaClient.gameID}' and the password is {dotaClient.password}"
-                )
-                logger.info(f"[Game {dotaClient.gameID}] Inviting {dotaClient.steam.get_user(sid).name}")
-
-        # Allegedly we cannot access member.name until this event triggers
-        # TODO here, I just want to see how long it takes to get them
-        @dotaClient.steam.on("persona_state")
-        def handle_persona_update(persona):
-            logger.info(f"Persona update: {persona.name} (SteamID: {persona.steam_id})")
-
-        @dotaClient.on("lobby_changed")
-        def _(message):
-            logger.info(f"[Client {i}] Lobby changed")
-
-            for member in message.all_members:
-                try:
-                    dotaClient.steam.request_persona_state([member.id])
-                except Exception as e:
-                    logger.exception(f"Error requesting user persona for member:id: {member.id}, err: {e}")
-
-                logger.info(f"Member.id: {member.id}, Member.team: {member.team}, Member.name: {member.name}, Member.slot: {member.slot}, Member.channel: {member.channel}")
-                if member.id not in dotaClient.steam.friends:
-                    dotaClient.steam.friends.add(member.id)
-
-            if message.state == LobbyState.RUN:
-                # Only add the coroutine if the match is pending start
-                if dotaClient.gameID in self.discordBot.pending_matches:
-                    logger.info(f"Lobby with gameId {dotaClient.gameID} found in running state that is pending creation.  Sending to Master Bot for DB Add.")
-                    asyncio.run_coroutine_threadsafe(
-                        self.discordBot.on_game_started(dotaClient.gameID, message),
-                        self.loop
-                    )
-                else:
-                    print(f"Found lobby not in pending matches with gameID: {dotaClient.gameID}")
-
-            if message.state == LobbyState.UI:
-                correct = 0
-                for member in message.all_members:
-                    sid32 = SteamID(member.id).as_32
-                    if member.id in dotaClient.radiant and member.team != DOTA_GC_TEAM_GOOD_GUYS:
-                        dotaClient.practice_lobby_kick_from_team(sid32)
-                        logger.info(f"[Client {i}] {member.name}: wrong team (should be Radiant)")
-                    elif member.id in dotaClient.dire and member.team != DOTA_GC_TEAM_BAD_GUYS:
-                        dotaClient.practice_lobby_kick_from_team(sid32)
-                        logger.info(f"[Client {i}] {member.name}: wrong team (should be Dire)")
-                    elif (member.id in dotaClient.radiant and member.team == DOTA_GC_TEAM_GOOD_GUYS) or \
-                         (member.id in dotaClient.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
-                        correct += 1
-                    elif member.team in [DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS]:
-                        dotaClient.practice_lobby_kick_from_team(sid32)
-                        logger.info(f"[Client {i}] {member.name} not part of current game")
-                    logger.info(f"User found on team: {member.team} (SteamID: {member.id} Member.name: {member.name})")
-
-                if correct == len(dotaClient.radiant + dotaClient.dire):
-                    dotaClient.launch_practice_lobby()
-                    logger.info(f"[Client {i}] Game launched")
-
-            elif message.state == LobbyState.POSTGAME or getattr(message, 'game_state', None) == GameState.POST_GAME:
-                match_id = getattr(message, 'match_id', None)
-                match_outcome = getattr(message, 'match_outcome', MatchOutcome.UNKNOWN)
-
-                logger.info(f"[Client {i}] Game ended, match ID: {message.match_id}")
-                logger.info(f"Match ID: {match_id}, Outcome: {match_outcome}")
-
-                dotaClient.leave_practice_lobby()
-
-                asyncio.run_coroutine_threadsafe(
-                    # self.discordBot.on_game_ended(dotaClient.gameID, message.match_outcome, GameState.POSTGAME), self.loop
-                    self.discordBot.on_game_ended(dotaClient.gameID, message),
-                    self.loop
-                )
-
-                logger.info(f"Past coroutine run")
-
-                # Reset Client State
-                dotaClient.gameID = None
-                dotaClient.radiant = None
-                dotaClient.dire = None
-                dotaClient.password = None
-
-                self.set_ready(i, True)
-
-            else:
-                logger.info(f"Message State was: {message.state} ")
-
-        steamClient.login(
-            username=self.config.get(f"username_{i}"),
-            password=self.config.get(f"password_{i}"),
-        )
-        steamClient.run_forever()
+        wrapper = self.lobby_clients.get(gameID)
+        if not wrapper:
+            return False
+        return wrapper.update_lobby_teams(radiant, dire)
