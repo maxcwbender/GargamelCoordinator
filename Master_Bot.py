@@ -620,7 +620,7 @@ class Master_Bot(commands.Bot):
             winner: Optional[str] = None
             reason = ""
 
-            # Determine winner (in-game first, spectators only for tiebreakers if applicable)
+            # Determine winner
             if tally_in:
                 max_in = max(tally_in.values())
                 winners_in = [mode for mode, v in tally_in.items() if v == max_in]
@@ -629,7 +629,6 @@ class Master_Bot(commands.Bot):
                     winner = winners_in[0]
                     reason = f"Winner by {max_in} in-game vote{'s' if max_in != 1 else ''}."
                 else:
-                    # Tie among in-game players → spectators decide if possible
                     spec_for_tied = {mode: tally_spec.get(mode, 0) for mode in winners_in}
                     max_spec = max(spec_for_tied.values())
                     winners_spec = [mode for mode, v in spec_for_tied.items() if v == max_spec]
@@ -641,7 +640,6 @@ class Master_Bot(commands.Bot):
                         winner = random.choice(winners_in)
                         reason = f"Tie among players (spectators did not tiebreak) — randomly chose **{winner}**."
             else:
-                # No in-game votes at all: don't change game modes even with spectators
                 winner = None
                 reason = "No in-game votes — mode unchanged."
 
@@ -659,18 +657,22 @@ class Master_Bot(commands.Bot):
 
             # Build results for embed
             options_in_order = self._options_in_order()
+
             summary_lines_in = [
                                    f"- {name}: **{tally_in.get(name, 0)}**"
                                    for name in options_in_order if tally_in.get(name, 0) > 0
                                ] or ["*No in-game votes*"]
-
-            summary_lines_spec = [
-                                     f"- {name}: **{tally_spec.get(name, 0)}**"
-                                     for name in options_in_order if tally_spec.get(name, 0) > 0
-                                 ] or ["*No spectator votes*"]
-
             summary_in = "\n".join(summary_lines_in)
-            summary_spec = "\n".join(summary_lines_spec)
+
+            # Only show spectators if any actually voted
+            spectator_voted = any(v > 0 for v in tally_spec.values())
+            summary_spec = ""
+            if spectator_voted:
+                summary_lines_spec = [
+                    f"- {name}: **{tally_spec.get(name, 0)}**"
+                    for name in options_in_order if tally_spec.get(name, 0) > 0
+                ]
+                summary_spec = "\n\n**Spectator votes:**\n" + "\n".join(summary_lines_spec)
 
             # Update poll embed
             message = self.parent.lobby_messages.get(self.game_id)
@@ -682,8 +684,8 @@ class Master_Bot(commands.Bot):
                     f"**Poll closed ({'manually' if manual else 'automatically'}).**\n"
                     f"{('Winner: **' + winner + '**' if winner else 'Mode unchanged.')}"
                     f"{(' — ' + reason) if reason else ''}\n\n"
-                    f"**In-game votes:**\n{summary_in}\n\n"
-                    f"**Spectator votes:**\n{summary_spec}"
+                    f"**In-game votes:**\n{summary_in}"
+                    f"{summary_spec}"  # only added if spectators voted
                 )
 
                 if idx is not None:
@@ -708,9 +710,9 @@ class Master_Bot(commands.Bot):
 
             for item in self.children:
                 if isinstance(item, discord.ui.Select):
-                    item.disabled = True # Keep dropdown disabled until Start pressed again
+                    item.disabled = True  # Keep dropdown disabled until next Start
                 elif isinstance(item, discord.ui.Button):
-                    item.disabled = False # Re-enable Start and End buttons
+                    item.disabled = False  # Re-enable Start/End buttons
 
             if message:
                 await message.edit(view=self)
