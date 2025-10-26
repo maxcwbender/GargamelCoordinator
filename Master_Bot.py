@@ -484,28 +484,32 @@ class Master_Bot(commands.Bot):
                 self.outer = outer
 
             async def callback(self, interaction: discord.Interaction):
+
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+
                 async with self.outer._lock:
                     if self.outer._closed or not self.outer._started:
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message(
-                                "Poll isn’t active.", ephemeral=True
-                            )
+                        try:
+                            await interaction.followup.send("Poll isn’t active.", ephemeral=True)
+                        except Exception as e:
+                            logger.exception(f"[Game {self.outer.game_id}] Poll not active: {e}")
                         return
+
                     choice = self.values[0]
                     self.outer.votes_by_user[interaction.user.id] = choice
 
-                    # Determine if the voter is a player or a spectator
+                    # Determine if voter is a player or spectator
                     current_sets = self.outer.parent.game_map_inverse.get(self.outer.game_id, (set(), set()))
                     current_player_ids = current_sets[0] | current_sets[1]
                     is_spectator = interaction.user.id not in current_player_ids
 
-                    # Build appropriate message
                     if is_spectator:
                         msg = f"You voted **{choice}**. *(Spectator votes only count during tiebreakers.)*"
                     else:
                         msg = f"You voted **{choice}**."
 
-                    await self.outer._update_poll_embed(interaction, transient_notice=msg)
+                await self.outer._update_poll_embed(interaction, transient_notice=msg)
 
         class StartPollButton(discord.ui.Button):
             def __init__(self, outer: "GameModePoll"):
@@ -724,61 +728,68 @@ class Master_Bot(commands.Bot):
         async def _update_poll_embed(self, interaction: discord.Interaction, transient_notice: str = ""):
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message("Lobby message not found.", ephemeral=True)
+                try:
+                    await interaction.followup.send("Lobby message not found.", ephemeral=True)
+                except Exception:
+                    pass
                 return
+
             if not self._started or self._closed:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(transient_notice, ephemeral=True)
+                try:
+                    await interaction.followup.send(transient_notice or "Poll isn’t active.", ephemeral=True)
+                except Exception:
+                    pass
                 return
 
             # Identify players and spectators
             current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
             current_player_ids = current_sets[0] | current_sets[1]
 
-            # Depending on how you track spectators — e.g., you might have parent.spectators_map[game_id]
-            # For example:
-            current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
-            current_player_ids = current_sets[0] | current_sets[1]
+            tally_in: dict[str, int] = {}
+            tally_spec: dict[str, int] = {}
 
-            # Tally votes for players and spectators
-            tally_players: Dict[str, int] = {}
-            tally_spectators: Dict[str, int] = {}
             for user_id, choice in self.votes_by_user.items():
                 if user_id in current_player_ids:
-                    tally_players[choice] = tally_players.get(choice, 0) + 1
+                    tally_in[choice] = tally_in.get(choice, 0) + 1
                 else:
-                    tally_spectators[choice] = tally_spectators.get(choice, 0) + 1
+                    tally_spec[choice] = tally_spec.get(choice, 0) + 1
 
-            # Build status line: for example show top options among **in-game players** first,
-            # then maybe show spectator counts underneath
             options_in_order = self._options_in_order()
-            voted_players = [n for n in options_in_order if tally_players.get(n, 0) > 0]
-            top_players = sorted(voted_players, key=lambda n: (-tally_players[n], options_in_order.index(n)))[:3]
-            status_players = ", ".join(f"{n} ({tally_players[n]})" for n in top_players) or "No in-game votes yet"
 
-            # Spectator status
-            voted_spectators = [n for n in options_in_order if tally_spectators.get(n, 0) > 0]
-            top_spectators = sorted(voted_spectators, key=lambda n: (-tally_spectators[n], options_in_order.index(n)))[
-                             :3]
-            status_spectators = ", ".join(
-                f"{n} ({tally_spectators[n]})" for n in top_spectators) or "No spectator votes yet"
+            # Build in-game status
+            voted_in = [n for n in options_in_order if tally_in.get(n, 0) > 0]
+            top_in = sorted(voted_in, key=lambda n: (-tally_in[n], options_in_order.index(n)))[:3]
+            status_in = ", ".join(f"{n} ({tally_in[n]})" for n in top_in) or "No in-game votes yet"
+
+            # Build spectator status **only** if there are spectator votes
+            voted_spec = [n for n in options_in_order if tally_spec.get(n, 0) > 0]
+            status_spec = None
+            if voted_spec:
+                top_spec = sorted(voted_spec, key=lambda n: (-tally_spec[n], options_in_order.index(n)))[:3]
+                status_spec = ", ".join(f"{n} ({tally_spec[n]})" for n in top_spec)
 
             embed = message.embeds[0]
             idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
             if idx is not None:
                 base = embed.fields[idx].value.split("\n\n")[0]
-                new_val = (
-                    f"{base}\n\n"
-                    f"_Current top (in-game players):_ {status_players}\n"
-                    f"_Spectator votes:_ {status_spectators}"
-                )
+                # Build new value
+                new_val = f"{base}\n\n**In-game votes:** {status_in}"
+                if status_spec is not None:
+                    new_val += f"\n**Spectator votes:** {status_spec}"
                 embed.set_field_at(idx, name=embed.fields[idx].name, value=new_val, inline=False)
+            else:
+                # field not found: add new
+                new_val = f"**In-game votes:** {status_in}"
+                if status_spec is not None:
+                    new_val += f"\n**Spectator votes:** {status_spec}"
+                embed.add_field(name="🗳️ Game Mode Voting", value=new_val, inline=False)
 
             await message.edit(embed=embed, view=self)
 
-            if not interaction.response.is_done():
-                await interaction.response.send_message(transient_notice, ephemeral=True)
+            try:
+                await interaction.followup.send(transient_notice, ephemeral=True)
+            except (discord.errors.InteractionResponded, discord.errors.NotFound):
+                pass
 
     async def trigger_gamemode_poll(self, game_id: int):
         """Automatically create and start a game mode poll for a lobby."""
