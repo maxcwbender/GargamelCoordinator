@@ -747,11 +747,8 @@ class Master_Bot(commands.Bot):
             for user_id, choice in self.votes_by_user.items():
                 if user_id in current_player_ids:
                     tally_players[choice] = tally_players.get(choice, 0) + 1
-                elif user_id in spectator_ids:
-                    tally_spectators[choice] = tally_spectators.get(choice, 0) + 1
                 else:
-                    # votes by outsiders (neither player nor spectator) — exclude or treat differently
-                    pass
+                    tally_spectators[choice] = tally_spectators.get(choice, 0) + 1
 
             # Build status line: for example show top options among **in-game players** first,
             # then maybe show spectator counts underneath
