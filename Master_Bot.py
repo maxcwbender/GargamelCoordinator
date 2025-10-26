@@ -548,7 +548,9 @@ class Master_Bot(commands.Bot):
         async def _auto_close_task(self, message: discord.Message):
             try:
                 await asyncio.sleep(self.duration_sec)
-                await self._end_poll(None)
+                # If we hit the end button manually, avoiding a double trigger of poll results
+                if not self._closed:
+                    await self._end_poll(None)
             except Exception as e:
                 logger.exception(f"Poll auto-close error: {e}")
 
