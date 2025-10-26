@@ -738,7 +738,8 @@ class Master_Bot(commands.Bot):
 
             # Depending on how you track spectators — e.g., you might have parent.spectators_map[game_id]
             # For example:
-            spectator_ids = self.parent.spectators_map.get(self.game_id, set())
+            current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
+            current_player_ids = current_sets[0] | current_sets[1]
 
             # Tally votes for players and spectators
             tally_players: Dict[str, int] = {}
