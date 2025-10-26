@@ -376,7 +376,7 @@ class ClientWrapper:
                 return
 
         self.logger.warning(
-            f"[Game ID {self.game_id}] Poll ended but lobby never stabilized after {delay}s."
+            f"[Game ID {self.game_id}] Poll ended but lobby slots not ready to start game after {delay}s.  Lobby update event will trigger game start."
         )
 
     def update_lobby_teams(self, radiant: list[int], dire: list[int]) -> bool:
@@ -533,7 +533,7 @@ class ClientWrapper:
                         correct = 0
 
                         # Automatically trigger a game mode poll with more than 6 players in the lobby, single shot.
-                        if not self.polling_done and not self.polling_active and len(message.all_members) > 6:
+                        if not self.polling_done and not self.polling_active and len(message.all_members) > 2:
                             self.logger.info(
                                 f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
                             asyncio.run_coroutine_threadsafe(

@@ -468,6 +468,7 @@ class Master_Bot(commands.Bot):
             # Controls
             self.add_item(self.StartPollButton(self))
             self.add_item(self.EndPollButton(self))
+            self._auto_task: Optional[asyncio.Task] = None
 
         # Helper Functions
         def _has_role(self, member: discord.abc.User, role_name: str) -> bool:
@@ -548,9 +549,12 @@ class Master_Bot(commands.Bot):
         async def _auto_close_task(self, message: discord.Message):
             try:
                 await asyncio.sleep(self.duration_sec)
-                # If we hit the end button manually, avoiding a double trigger of poll results
+                # If we hit End manually, avoid a double trigger
                 if not self._closed:
                     await self._end_poll(None)
+            except asyncio.CancelledError:
+                # Task was cancelled because poll ended early
+                return
             except Exception as e:
                 logger.exception(f"Poll auto-close error: {e}")
 
@@ -588,7 +592,13 @@ class Master_Bot(commands.Bot):
 
             # Alert game-side and start timer
             await self.parent.dota_talker.alert_game_polling_started(self.game_id)
-            asyncio.create_task(self._auto_close_task(message))
+            # Cancel any leftover auto task before starting new one
+            if self._auto_task and not self._auto_task.done():
+                self._auto_task.cancel()
+                self._auto_task = None
+
+            # Start a new auto-close timer
+            self._auto_task = asyncio.create_task(self._auto_close_task(message))
 
             if triggered_by:
                 await triggered_by.followup.send("Polling started!", ephemeral=True)
@@ -600,6 +610,11 @@ class Master_Bot(commands.Bot):
                         await interaction.response.send_message("Poll already closed.", ephemeral=True)
                     return
                 self._closed = True
+
+                # Cancel any pending auto-close timer
+                if hasattr(self, "_auto_task") and self._auto_task and not self._auto_task.done():
+                    self._auto_task.cancel()
+                    self._auto_task = None
 
                 # Freeze UI
                 for item in self.children:
