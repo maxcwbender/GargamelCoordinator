@@ -549,15 +549,16 @@ class Master_Bot(commands.Bot):
         async def _auto_close_task(self):
             """Background task that ends poll automatically after duration."""
             try:
+                logger.debug(f"[Game {self.game_id}] Auto-close sleeping {self.duration_sec}s")
                 await asyncio.sleep(self.duration_sec)
                 async with self._lock:
                     if not self._closed:
+                        logger.debug(f"[Game {self.game_id}] Auto-close waking up — ending poll.")
                         await self._end_poll(None, manual=False)
             except asyncio.CancelledError:
-                # Cancelled when manual close happens
+                logger.debug(f"[Game {self.game_id}] Auto-close task cancelled early.")
                 return
             except Exception as e:
-                logger.exception(f"[Game {self.game_id}] Poll auto-close error: {e}")
                 logger.exception(f"[Game {self.game_id}] Poll auto-close error: {e}")
 
         async def start_poll(self, triggered_by: Optional[discord.Interaction] = None):
@@ -567,10 +568,14 @@ class Master_Bot(commands.Bot):
                     if triggered_by:
                         await triggered_by.followup.send("Poll already started.", ephemeral=True)
                     return
+
                 self._started = True
                 self._closed = False
-
                 self.select.disabled = False
+
+                if self._auto_task and not self._auto_task.done():
+                    self._auto_task.cancel()
+                self._auto_task = asyncio.create_task(self._auto_close_task())
 
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
@@ -579,8 +584,7 @@ class Master_Bot(commands.Bot):
                 return
 
             embed = message.embeds[0]
-            idx = next((i for i, f in enumerate(embed.fields)
-                        if f.name.startswith("🗳️ Game Mode Voting")), None)
+            idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
 
             voting_text = (
                 "Select a mode from the dropdown below.\n\n"
@@ -593,21 +597,12 @@ class Master_Bot(commands.Bot):
                 embed.add_field(name="🗳️ Game Mode Voting", value=voting_text, inline=False)
 
             await message.edit(embed=embed, view=self)
-
-            # Alert game-side and start timer
             await self.parent.dota_talker.alert_game_polling_started(self.game_id)
-            # Cancel any leftover auto task before starting new one
-            if self._auto_task and not self._auto_task.done():
-                self._auto_task.cancel()
-                self._auto_task = None
-
-            # Start a new auto-close timer
-            self._auto_task = asyncio.create_task(self._auto_close_task())
 
             if triggered_by:
                 await triggered_by.followup.send("Polling started!", ephemeral=True)
 
-        async def _end_poll(self, interaction: Optional[discord.Interaction] = None, manual: bool = False):
+        async def _end_poll(self, interaction: Optional[discord.Interaction], manual: bool = False):
             async with self._lock:
                 if self._closed:
                     if interaction and not interaction.response.is_done():
@@ -615,8 +610,7 @@ class Master_Bot(commands.Bot):
                     return
                 self._closed = True
 
-                # Cancel any pending auto-close timer
-                if hasattr(self, "_auto_task") and self._auto_task and not self._auto_task.done():
+                if self._auto_task and not self._auto_task.done():
                     self._auto_task.cancel()
                     self._auto_task = None
 
@@ -625,10 +619,9 @@ class Master_Bot(commands.Bot):
                     if isinstance(item, (discord.ui.Select, discord.ui.Button)):
                         item.disabled = True
 
-            # Tally votes
+            # ---------------- TALLY + EMBED UPDATES ----------------
             current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
             current_player_ids = current_sets[0] | current_sets[1]
-
             tally_in: dict[str, int] = {}
             tally_spec: dict[str, int] = {}
 
@@ -641,11 +634,9 @@ class Master_Bot(commands.Bot):
             winner: Optional[str] = None
             reason = ""
 
-            # Determine winner
             if tally_in:
                 max_in = max(tally_in.values())
                 winners_in = [mode for mode, v in tally_in.items() if v == max_in]
-
                 if len(winners_in) == 1:
                     winner = winners_in[0]
                     reason = f"Winner by {max_in} in-game vote{'s' if max_in != 1 else ''}."
@@ -664,28 +655,23 @@ class Master_Bot(commands.Bot):
                 winner = None
                 reason = "No in-game votes — mode unchanged."
 
-            # Apply winning mode
             if winner is not None:
                 try:
                     mode_enum = self.mode_name_to_enum[winner]
                     await self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
-
                     wrapper = self.parent.dota_talker.lobby_clients.get(self.game_id)
                     if wrapper:
                         await wrapper.notify_polling_complete()
                 except Exception as e:
                     logger.exception(f"[Game {self.game_id}] Failed to apply mode {winner}: {e}")
 
-            # Build results for embed
+            # ---------------- EMBED UPDATES ----------------
             options_in_order = self._options_in_order()
-
             summary_lines_in = [
                                    f"- {name}: **{tally_in.get(name, 0)}**"
                                    for name in options_in_order if tally_in.get(name, 0) > 0
                                ] or ["*No in-game votes*"]
             summary_in = "\n".join(summary_lines_in)
-
-            # Only show spectators if any actually voted
             spectator_voted = any(v > 0 for v in tally_spec.values())
             summary_spec = ""
             if spectator_voted:
@@ -695,7 +681,6 @@ class Master_Bot(commands.Bot):
                 ]
                 summary_spec = "\n\n**Spectator votes:**\n" + "\n".join(summary_lines_spec)
 
-            # Update poll embed
             message = self.parent.lobby_messages.get(self.game_id)
             if message:
                 embed = message.embeds[0]
@@ -706,7 +691,7 @@ class Master_Bot(commands.Bot):
                     f"{('Winner: **' + winner + '**' if winner else 'Mode unchanged.')}"
                     f"{(' — ' + reason) if reason else ''}\n\n"
                     f"**In-game votes:**\n{summary_in}"
-                    f"{summary_spec}"  # only added if spectators voted
+                    f"{summary_spec}"
                 )
 
                 if idx is not None:
@@ -724,21 +709,19 @@ class Master_Bot(commands.Bot):
                     )
                 await message.edit(embed=embed, view=self)
 
-            # --- Reset state for next poll ---
-            # self._started = False
-            # self._closed = False
+            # Reset votes only
             self.votes_by_user.clear()
 
+            # Update buttons
             for item in self.children:
                 if isinstance(item, discord.ui.Select):
-                    item.disabled = True  # Keep dropdown disabled until next Start
+                    item.disabled = True
                 elif isinstance(item, discord.ui.Button):
-                    item.disabled = False  # Re-enable Start/End buttons
+                    item.disabled = False
 
             if message:
                 await message.edit(view=self)
 
-            # --- Notify interaction ---
             if interaction:
                 try:
                     if not interaction.response.is_done():
@@ -748,6 +731,9 @@ class Master_Bot(commands.Bot):
                 except Exception as e:
                     logger.exception(f"[Game {self.game_id}] Failed to send end-poll response: {e}")
 
+        # ----------------------------------------------------------------------
+        # Embed Update During Voting
+        # ----------------------------------------------------------------------
         async def _update_poll_embed(self, interaction: discord.Interaction, transient_notice: str = ""):
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
@@ -764,7 +750,6 @@ class Master_Bot(commands.Bot):
                     pass
                 return
 
-            # Identify players and spectators
             current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
             current_player_ids = current_sets[0] | current_sets[1]
 
@@ -778,13 +763,10 @@ class Master_Bot(commands.Bot):
                     tally_spec[choice] = tally_spec.get(choice, 0) + 1
 
             options_in_order = self._options_in_order()
-
-            # Build in-game status
             voted_in = [n for n in options_in_order if tally_in.get(n, 0) > 0]
             top_in = sorted(voted_in, key=lambda n: (-tally_in[n], options_in_order.index(n)))[:3]
             status_in = ", ".join(f"{n} ({tally_in[n]})" for n in top_in) or "No in-game votes yet"
 
-            # Build spectator status **only** if there are spectator votes
             voted_spec = [n for n in options_in_order if tally_spec.get(n, 0) > 0]
             status_spec = None
             if voted_spec:
@@ -795,13 +777,11 @@ class Master_Bot(commands.Bot):
             idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
             if idx is not None:
                 base = embed.fields[idx].value.split("\n\n")[0]
-                # Build new value
                 new_val = f"{base}\n\n**In-game votes:** {status_in}"
                 if status_spec is not None:
                     new_val += f"\n**Spectator votes:** {status_spec}"
                 embed.set_field_at(idx, name=embed.fields[idx].name, value=new_val, inline=False)
             else:
-                # field not found: add new
                 new_val = f"**In-game votes:** {status_in}"
                 if status_spec is not None:
                     new_val += f"\n**Spectator votes:** {status_spec}"
