@@ -665,18 +665,43 @@ class Master_Bot(commands.Bot):
 
                 self._closed = True
 
-                # Cancel any pending auto-close task
+                # Cancel any pending auto-close timer
                 if self._auto_task and not self._auto_task.done():
                     logger.debug(f"[Game {self.game_id}] Cancelling auto-close task.")
                     self._auto_task.cancel()
                     self._auto_task = None
 
-                # Disable interactive components
+                # Freeze UI
                 for item in self.children:
                     if isinstance(item, (discord.ui.Select, discord.ui.Button)):
                         item.disabled = True
 
-            # --- Prepare to tally votes ---
+            # --- DEBUGGING BLOCK ---
+            message = getattr(self, "message", None)
+            logger.info(f"[Game {self.game_id}] DEBUG: message from self.message = {message!r}")
+            if message:
+                logger.info(
+                    f"[Game {self.game_id}] DEBUG: message.id={getattr(message, 'id', None)} channel={getattr(message, 'channel', None)}")
+            else:
+                logger.info(f"[Game {self.game_id}] DEBUG: no self.message, checking parent dict")
+                message = self.parent.lobby_messages.get(self.game_id)
+                logger.info(f"[Game {self.game_id}] DEBUG: message from parent dict = {message!r}")
+
+            # --- If still no message, try to re-fetch from Discord ---
+            if not message and hasattr(self, "message_id"):
+                try:
+                    chan = self.parent.bot.get_channel(self.channel_id)
+                    message = await chan.fetch_message(self.message_id)
+                    logger.info(f"[Game {self.game_id}] Re-fetched poll message successfully.")
+                except Exception as e:
+                    logger.exception(f"[Game {self.game_id}] Failed to re-fetch poll message: {e}")
+                    return
+
+            if not message:
+                logger.error(f"[Game {self.game_id}] No message found for poll end update.")
+                return
+
+            # --- Tally votes ---
             current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
             current_player_ids = current_sets[0] | current_sets[1]
 
@@ -726,7 +751,7 @@ class Master_Bot(commands.Bot):
                 except Exception as e:
                     logger.exception(f"[Game {self.game_id}] Failed to apply mode {winner}: {e}")
 
-            # --- Prepare embed summary ---
+            # --- Build results for embed ---
             options_in_order = self._options_in_order()
 
             summary_lines_in = [
@@ -744,15 +769,6 @@ class Master_Bot(commands.Bot):
                 ]
                 summary_spec = "\n\n**Spectator votes:**\n" + "\n".join(summary_lines_spec)
 
-            # --- Locate the message (self.message as fallback) ---
-            message = getattr(self, "message", None) or self.parent.lobby_messages.get(self.game_id)
-            logger.info(f"[Game {self.game_id}] Message for poll end: {message!r}")
-
-            if not message:
-                logger.error(f"[Game {self.game_id}] No message found for poll end update.")
-                return
-
-            # --- Update the poll embed ---
             try:
                 embed = message.embeds[0]
                 idx = next((i for i, f in enumerate(embed.fields)
@@ -780,12 +796,23 @@ class Master_Bot(commands.Bot):
                         inline=False,
                     )
 
-                await message.edit(embed=embed, view=self)
-                logger.info(f"[Game {self.game_id}] Poll message updated with results.")
+                try:
+                    await message.edit(embed=embed, view=self)
+                    logger.info(f"[Game {self.game_id}] Poll message updated with results.")
+                except discord.Forbidden:
+                    logger.error(f"[Game {self.game_id}] Cannot edit poll message — missing permissions.")
+                    return
+                except discord.NotFound:
+                    logger.error(f"[Game {self.game_id}] Poll message not found (probably deleted).")
+                    return
+                except Exception as e:
+                    logger.exception(f"[Game {self.game_id}] Unexpected error updating poll: {e}")
+                    return
+
             except Exception as e:
                 logger.exception(f"[Game {self.game_id}] Failed message.edit during _end_poll: {type(e).__name__}: {e}")
 
-            # --- Reset for next poll ---
+            # --- Reset state for next poll ---
             self.votes_by_user.clear()
             for item in self.children:
                 if isinstance(item, discord.ui.Select):
@@ -795,12 +822,9 @@ class Master_Bot(commands.Bot):
 
             try:
                 await message.edit(view=self)
+                logger.debug(f"[Game {self.game_id}] Final view refresh successful.")
             except Exception as e:
                 logger.exception(f"[Game {self.game_id}] Failed to refresh view after close: {e}")
-
-            # --- Cleanup reference from parent ---
-            if hasattr(self.parent, "active_polls"):
-                self.parent.active_polls.pop(self.game_id, None)
 
             # --- Notify interaction (if manual) ---
             if interaction:
