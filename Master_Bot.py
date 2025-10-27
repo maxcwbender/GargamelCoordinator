@@ -563,28 +563,49 @@ class Master_Bot(commands.Bot):
 
         async def start_poll(self, triggered_by: Optional[discord.Interaction] = None):
             """Start the poll manually or programmatically."""
+            logger.info(f"[Game {self.game_id}] ENTERED start_poll() on {self!r}")
+
             async with self._lock:
+                logger.info(
+                    f"[Game {self.game_id}] start_poll() called; started={self._started}, closed={self._closed}"
+                )
+
+                # Prevent duplicate starts
                 if self._started:
+                    logger.warning(f"[Game {self.game_id}] Poll already started — aborting start.")
                     if triggered_by:
-                        await triggered_by.followup.send("Poll already started.", ephemeral=True)
+                        try:
+                            await triggered_by.followup.send("Poll already started.", ephemeral=True)
+                        except Exception:
+                            pass
                     return
 
+                # Initialize state
                 self._started = True
                 self._closed = False
                 self.select.disabled = False
 
+                # Cancel any old auto-close tasks before starting a new one
                 if self._auto_task and not self._auto_task.done():
+                    logger.debug(f"[Game {self.game_id}] Cancelling existing auto-close task before restart.")
                     self._auto_task.cancel()
-                self._auto_task = asyncio.create_task(self._auto_close_task())
+                    self._auto_task = None
 
+            # Lookup the message for this lobby
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
+                logger.error(f"[Game {self.game_id}] No lobby message found — cannot start poll.")
                 if triggered_by:
-                    await triggered_by.followup.send("Lobby message not found.", ephemeral=True)
+                    try:
+                        await triggered_by.followup.send("Lobby message not found.", ephemeral=True)
+                    except Exception:
+                        pass
                 return
 
+            # Edit embed to show poll start
             embed = message.embeds[0]
-            idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+            idx = next((i for i, f in enumerate(embed.fields)
+                        if f.name.startswith("🗳️ Game Mode Voting")), None)
 
             voting_text = (
                 "Select a mode from the dropdown below.\n\n"
@@ -596,11 +617,37 @@ class Master_Bot(commands.Bot):
             else:
                 embed.add_field(name="🗳️ Game Mode Voting", value=voting_text, inline=False)
 
-            await message.edit(embed=embed, view=self)
-            await self.parent.dota_talker.alert_game_polling_started(self.game_id)
+            try:
+                await message.edit(embed=embed, view=self)
+                logger.info(f"[Game {self.game_id}] Poll embed updated and view attached.")
+            except Exception as e:
+                logger.exception(f"[Game {self.game_id}] Failed to edit message for poll start: {e}")
+                return
 
+            # Notify game integration (if applicable)
+            try:
+                await self.parent.dota_talker.alert_game_polling_started(self.game_id)
+                logger.debug(f"[Game {self.game_id}] Notified game-side poll start.")
+            except Exception as e:
+                logger.exception(f"[Game {self.game_id}] Failed to notify game-side poll start: {e}")
+
+            # Start auto-close timer task
+            try:
+                self._auto_task = asyncio.create_task(self._auto_close_task())
+                logger.info(
+                    f"[Game {self.game_id}] Auto-close task started ({self.duration_sec}s timer). Task={self._auto_task!r}")
+            except Exception as e:
+                logger.exception(f"[Game {self.game_id}] Failed to start auto-close task: {e}")
+                self._auto_task = None
+
+            # Send ephemeral confirmation to user
             if triggered_by:
-                await triggered_by.followup.send("Polling started!", ephemeral=True)
+                try:
+                    await triggered_by.followup.send("Polling started!", ephemeral=True)
+                except Exception:
+                    pass
+
+            logger.info(f"[Game {self.game_id}] Polling successfully started.")
 
         async def _end_poll(self, interaction: Optional[discord.Interaction], manual: bool = False):
             async with self._lock:
