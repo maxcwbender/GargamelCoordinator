@@ -549,14 +549,13 @@ class Master_Bot(commands.Bot):
         async def _auto_close_task(self):
             """Background task that ends poll automatically after duration."""
             try:
-                logger.debug(f"[Game {self.game_id}] Auto-close sleeping {self.duration_sec}s")
                 await asyncio.sleep(self.duration_sec)
                 async with self._lock:
                     if not self._closed:
-                        logger.debug(f"[Game {self.game_id}] Auto-close waking up — ending poll.")
-                        await self._end_poll(None, manual=False)
+                        logger.info(f"[Game {self.game_id}] Auto-close timer expired — closing poll automatically.")
+                await self._end_poll(manual=False)
             except asyncio.CancelledError:
-                logger.debug(f"[Game {self.game_id}] Auto-close task cancelled early.")
+                logger.debug(f"[Game {self.game_id}] Auto-close task cancelled (manual close).")
                 return
             except Exception as e:
                 logger.exception(f"[Game {self.game_id}] Poll auto-close error: {e}")
@@ -654,15 +653,17 @@ class Master_Bot(commands.Bot):
             logger.info(f"[Game {self.game_id}] ENTERED _end_poll(manual={manual})")
 
             async with self._lock:
+                logger.info(f"[Game {self.game_id}] Lock Entered")
                 if self._closed:
-                    logger.warning(f"[Game {self.game_id}] Poll already closed — skipping.")
+                    logger.info(f"[Game {self.game_id}] Poll already closed — skipping.")
                     if interaction and not interaction.response.is_done():
                         try:
+                            logger.info(f"[Game {self.game_id}] Response is done")
                             await interaction.response.send_message("Poll already closed.", ephemeral=True)
                         except Exception:
                             pass
                     return
-
+                logger.info(f"[Game {self.game_id}] Setting closed to true")
                 self._closed = True
 
                 # Cancel any pending auto-close timer
