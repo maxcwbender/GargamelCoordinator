@@ -546,17 +546,19 @@ class Master_Bot(commands.Bot):
                 await self.outer._end_poll(interaction, manual=True)
 
         # Polling Lifecycle
-        async def _auto_close_task(self, message: discord.Message):
+        async def _auto_close_task(self):
+            """Background task that ends poll automatically after duration."""
             try:
                 await asyncio.sleep(self.duration_sec)
-                # If we hit End manually, avoid a double trigger
-                if not self._closed:
-                    await self._end_poll(None)
+                async with self._lock:
+                    if not self._closed:
+                        await self._end_poll(reason="automatically")
             except asyncio.CancelledError:
-                # Task was cancelled because poll ended early
+                # Cancelled when manual close happens
                 return
             except Exception as e:
-                logger.exception(f"Poll auto-close error: {e}")
+                logger.exception(f"[Game {self.game_id}] Poll auto-close error: {e}")
+                logger.exception(f"[Game {self.game_id}] Poll auto-close error: {e}")
 
         async def start_poll(self, triggered_by: Optional[discord.Interaction] = None):
             """Start the poll manually or programmatically."""
@@ -566,6 +568,8 @@ class Master_Bot(commands.Bot):
                         await triggered_by.followup.send("Poll already started.", ephemeral=True)
                     return
                 self._started = True
+                self._closed = False
+
                 self.select.disabled = False
 
             message = self.parent.lobby_messages.get(self.game_id)
@@ -598,7 +602,7 @@ class Master_Bot(commands.Bot):
                 self._auto_task = None
 
             # Start a new auto-close timer
-            self._auto_task = asyncio.create_task(self._auto_close_task(message))
+            self._auto_task = asyncio.create_task(self._auto_close_task())
 
             if triggered_by:
                 await triggered_by.followup.send("Polling started!", ephemeral=True)
@@ -721,8 +725,8 @@ class Master_Bot(commands.Bot):
                 await message.edit(embed=embed, view=self)
 
             # --- Reset state for next poll ---
-            self._started = False
-            self._closed = False
+            # self._started = False
+            # self._closed = False
             self.votes_by_user.clear()
 
             for item in self.children:
