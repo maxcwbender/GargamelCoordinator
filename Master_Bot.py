@@ -552,7 +552,7 @@ class Master_Bot(commands.Bot):
                 await asyncio.sleep(self.duration_sec)
                 async with self._lock:
                     if not self._closed:
-                        await self._end_poll(reason="automatically")
+                        await self._end_poll(None, manual=False)
             except asyncio.CancelledError:
                 # Cancelled when manual close happens
                 return
@@ -607,7 +607,7 @@ class Master_Bot(commands.Bot):
             if triggered_by:
                 await triggered_by.followup.send("Polling started!", ephemeral=True)
 
-        async def _end_poll(self, interaction: Optional[discord.Interaction], manual: bool = False):
+        async def _end_poll(self, interaction: Optional[discord.Interaction] = None, manual: bool = False):
             async with self._lock:
                 if self._closed:
                     if interaction and not interaction.response.is_done():
