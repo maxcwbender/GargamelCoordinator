@@ -46,6 +46,6 @@ def setup_logging():
     stdout_logger = logging.getLogger('STDOUT')
     stderr_logger = logging.getLogger('STDERR')
 
-    sys.stdout = StreamToLogger(stdout_logger, logging.INFO)
-    sys.stderr = StreamToLogger(stderr_logger, logging.ERROR)
+    # sys.stdout = StreamToLogger(stdout_logger, logging.INFO)
+    # sys.stderr = StreamToLogger(stderr_logger, logging.ERROR)
 
