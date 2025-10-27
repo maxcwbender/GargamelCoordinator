@@ -649,29 +649,43 @@ class Master_Bot(commands.Bot):
 
             logger.info(f"[Game {self.game_id}] Polling successfully started.")
 
-        async def _end_poll(self, interaction: Optional[discord.Interaction], manual: bool = False):
+        async def _end_poll(self, interaction: Optional[discord.Interaction] = None, manual: bool = False):
+            """Close the poll, tally votes, update embed, and clean up state."""
+            logger.info(f"[Game {self.game_id}] ENTERED _end_poll(manual={manual})")
+
             async with self._lock:
+                # Prevent double-close
                 if self._closed:
+                    logger.warning(f"[Game {self.game_id}] Poll already closed — skipping.")
                     if interaction and not interaction.response.is_done():
-                        await interaction.response.send_message("Poll already closed.", ephemeral=True)
+                        try:
+                            await interaction.response.send_message("Poll already closed.", ephemeral=True)
+                        except Exception:
+                            pass
                     return
+
+                # Mark as closed immediately
                 self._closed = True
 
+                # Cancel any pending auto-close task
                 if self._auto_task and not self._auto_task.done():
+                    logger.debug(f"[Game {self.game_id}] Cancelling auto-close task.")
                     self._auto_task.cancel()
                     self._auto_task = None
 
-                # Freeze UI
+                # Disable interactive components
                 for item in self.children:
                     if isinstance(item, (discord.ui.Select, discord.ui.Button)):
                         item.disabled = True
 
-            # ---------------- TALLY + EMBED UPDATES ----------------
+            # Retrieve sets of active players
             current_sets = self.parent.game_map_inverse.get(self.game_id, (set(), set()))
             current_player_ids = current_sets[0] | current_sets[1]
+
             tally_in: dict[str, int] = {}
             tally_spec: dict[str, int] = {}
 
+            # --- Tally votes ---
             for user_id, choice in self.votes_by_user.items():
                 if user_id in current_player_ids:
                     tally_in[choice] = tally_in.get(choice, 0) + 1
@@ -681,15 +695,18 @@ class Master_Bot(commands.Bot):
             winner: Optional[str] = None
             reason = ""
 
+            # --- Determine winner ---
             if tally_in:
                 max_in = max(tally_in.values())
                 winners_in = [mode for mode, v in tally_in.items() if v == max_in]
+
                 if len(winners_in) == 1:
                     winner = winners_in[0]
                     reason = f"Winner by {max_in} in-game vote{'s' if max_in != 1 else ''}."
                 else:
+                    # tie: check spectators
                     spec_for_tied = {mode: tally_spec.get(mode, 0) for mode in winners_in}
-                    max_spec = max(spec_for_tied.values())
+                    max_spec = max(spec_for_tied.values()) if spec_for_tied else 0
                     winners_spec = [mode for mode, v in spec_for_tied.items() if v == max_spec]
 
                     if max_spec > 0 and len(winners_spec) == 1:
@@ -697,28 +714,35 @@ class Master_Bot(commands.Bot):
                         reason = f"Tie among players resolved by {max_spec} spectator vote{'s' if max_spec != 1 else ''}."
                     else:
                         winner = random.choice(winners_in)
-                        reason = f"Tie among players (spectators did not tiebreak) — randomly chose **{winner}**."
+                        reason = (
+                            f"Tie among players (spectators did not tiebreak) — randomly chose **{winner}**."
+                        )
             else:
-                winner = None
                 reason = "No in-game votes — mode unchanged."
 
+            # --- Apply winning mode ---
             if winner is not None:
                 try:
                     mode_enum = self.mode_name_to_enum[winner]
                     await self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
+
                     wrapper = self.parent.dota_talker.lobby_clients.get(self.game_id)
                     if wrapper:
                         await wrapper.notify_polling_complete()
+
+                    logger.info(f"[Game {self.game_id}] Applied winning mode {winner}.")
                 except Exception as e:
                     logger.exception(f"[Game {self.game_id}] Failed to apply mode {winner}: {e}")
 
-            # ---------------- EMBED UPDATES ----------------
+            # --- Build results for embed ---
             options_in_order = self._options_in_order()
+
             summary_lines_in = [
                                    f"- {name}: **{tally_in.get(name, 0)}**"
                                    for name in options_in_order if tally_in.get(name, 0) > 0
                                ] or ["*No in-game votes*"]
             summary_in = "\n".join(summary_lines_in)
+
             spectator_voted = any(v > 0 for v in tally_spec.values())
             summary_spec = ""
             if spectator_voted:
@@ -728,10 +752,12 @@ class Master_Bot(commands.Bot):
                 ]
                 summary_spec = "\n\n**Spectator votes:**\n" + "\n".join(summary_lines_spec)
 
+            # --- Update the message embed ---
             message = self.parent.lobby_messages.get(self.game_id)
             if message:
                 embed = message.embeds[0]
-                idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+                idx = next((i for i, f in enumerate(embed.fields)
+                            if f.name.startswith("🗳️ Game Mode Voting")), None)
 
                 result_text = (
                     f"**Poll closed ({'manually' if manual else 'automatically'}).**\n"
@@ -754,12 +780,18 @@ class Master_Bot(commands.Bot):
                         value=result_text,
                         inline=False,
                     )
-                await message.edit(embed=embed, view=self)
 
-            # Reset votes only
+                try:
+                    await message.edit(embed=embed, view=self)
+                    logger.info(f"[Game {self.game_id}] Poll message updated with results.")
+                except Exception as e:
+                    logger.exception(f"[Game {self.game_id}] Failed to update poll results embed: {e}")
+            else:
+                logger.warning(f"[Game {self.game_id}] No message found for poll end update.")
+
+            # --- Reset internal state for next poll ---
             self.votes_by_user.clear()
 
-            # Update buttons
             for item in self.children:
                 if isinstance(item, discord.ui.Select):
                     item.disabled = True
@@ -767,8 +799,16 @@ class Master_Bot(commands.Bot):
                     item.disabled = False
 
             if message:
-                await message.edit(view=self)
+                try:
+                    await message.edit(view=self)
+                except Exception as e:
+                    logger.exception(f"[Game {self.game_id}] Failed to refresh view after close: {e}")
 
+            # --- Cleanup references (prevent GC leaks) ---
+            if hasattr(self.parent, "active_polls"):
+                self.parent.active_polls.pop(self.game_id, None)
+
+            # --- Notify interaction if manual ---
             if interaction:
                 try:
                     if not interaction.response.is_done():
@@ -777,6 +817,8 @@ class Master_Bot(commands.Bot):
                         await interaction.followup.send("Poll closed.", ephemeral=True)
                 except Exception as e:
                     logger.exception(f"[Game {self.game_id}] Failed to send end-poll response: {e}")
+
+            logger.info(f"[Game {self.game_id}] Poll successfully closed ({'manual' if manual else 'auto'}).")
 
         # ----------------------------------------------------------------------
         # Embed Update During Voting
