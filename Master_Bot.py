@@ -771,6 +771,8 @@ class Master_Bot(commands.Bot):
                 summary_spec = "\n\n**Spectator votes:**\n" + "\n".join(summary_lines_spec)
 
             try:
+                message = self.parent.lobby_messages.get(self.game_id)
+                logger.info(f"[Game {self.game_id}] DEBUG: message.embeds length = {len(message.embeds)}")
                 embed = message.embeds[0]
                 idx = next((i for i, f in enumerate(embed.fields)
                             if f.name.startswith("🗳️ Game Mode Voting")), None)
