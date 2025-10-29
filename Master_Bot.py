@@ -555,7 +555,7 @@ class Master_Bot(commands.Bot):
                     logger.info(f"Self_closed was false, going to end poll automatically")
                     await self._end_poll(None)
             except asyncio.CancelledError as err:
-                logger.info(f"[Game_ID:{self.game_id}] Cancelled error found for poll: {err}")
+                logger.info(f"[Game_ID:{self.game_id}] Auto-close task cancelled - poll likely ended early.")
                 # Task was cancelled because poll ended early
                 return
             except Exception as e:
@@ -624,7 +624,12 @@ class Master_Bot(commands.Bot):
                 self._closed = True
 
                 # Cancel any pending auto-close timer
-                if hasattr(self, "_auto_task") and self._auto_task and not self._auto_task.done():
+                if (
+                        hasattr(self, "_auto_task")
+                        and self._auto_task
+                        and not self._auto_task.done()
+                        and asyncio.current_task() is not self._auto_task  # <-- add this line
+                ):
                     logger.info(f"Cancelling auto task and setting auto task to None")
                     self._auto_task.cancel()
                     self._auto_task = None
