@@ -554,8 +554,8 @@ class Master_Bot(commands.Bot):
                 if not self._closed:
                     logger.info(f"Self_closed was false, going to end poll automatically")
                     await self._end_poll(None)
-            except asyncio.CancelledError:
-                logger.info(f"[Game_ID:{self.game_id}] Cancelled error found for poll.")
+            except asyncio.CancelledError as err:
+                logger.info(f"[Game_ID:{self.game_id}] Cancelled error found for poll: {err}")
                 # Task was cancelled because poll ended early
                 return
             except Exception as e:
