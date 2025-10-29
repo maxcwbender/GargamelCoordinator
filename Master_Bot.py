@@ -551,6 +551,7 @@ class Master_Bot(commands.Bot):
                 await asyncio.sleep(self.duration_sec)
                 # If we hit End manually, avoid a double trigger
                 if not self._closed:
+                    logger.info(f"Self_closed was false, going to end poll automatically")
                     await self._end_poll(None)
             except asyncio.CancelledError:
                 # Task was cancelled because poll ended early
@@ -604,19 +605,25 @@ class Master_Bot(commands.Bot):
                 await triggered_by.followup.send("Polling started!", ephemeral=True)
 
         async def _end_poll(self, interaction: Optional[discord.Interaction], manual: bool = False):
+            logger.info(f"End poll {self.game_id}")
             async with self._lock:
+                logger.info(f"Using lock for ending poll {self.game_id}")
                 if self._closed:
+                    logger.info(f"Self closed was true")
                     if interaction and not interaction.response.is_done():
                         await interaction.response.send_message("Poll already closed.", ephemeral=True)
                     return
+                logger.info(f"Setting self closed to true")
                 self._closed = True
 
                 # Cancel any pending auto-close timer
                 if hasattr(self, "_auto_task") and self._auto_task and not self._auto_task.done():
+                    logger.info(f"Cancelling auto task and setting auto task to None")
                     self._auto_task.cancel()
                     self._auto_task = None
 
                 # Freeze UI
+                logger.info(f"Freezing the UI")
                 for item in self.children:
                     if isinstance(item, (discord.ui.Select, discord.ui.Button)):
                         item.disabled = True
@@ -694,6 +701,7 @@ class Master_Bot(commands.Bot):
             # Update poll embed
             message = self.parent.lobby_messages.get(self.game_id)
             if message:
+                logger.info(f"Got the message we're updating")
                 embed = message.embeds[0]
                 idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
 
@@ -719,8 +727,10 @@ class Master_Bot(commands.Bot):
                         inline=False,
                     )
                 await message.edit(embed=embed, view=self)
+                logger.info(f"Edited message with results ")
 
             # --- Reset state for next poll ---
+            logger.info(f"Setting started to False, Closed to False, and clearing votes by user")
             self._started = False
             self._closed = False
             self.votes_by_user.clear()
@@ -732,6 +742,7 @@ class Master_Bot(commands.Bot):
                     item.disabled = False  # Re-enable Start/End buttons
 
             if message:
+                logger.info(f"Editing message (with empty contents I think)")
                 await message.edit(view=self)
 
             # --- Notify interaction ---
