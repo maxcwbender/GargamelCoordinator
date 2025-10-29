@@ -172,6 +172,9 @@ class ClientWrapper:
             "allchat",             # sometimes exposed as a toggle
         }
 
+        # Start auto polling with 1 player join (besides coordinator) on debug mode, otherwise 7 players
+        self.auto_poll_size = 1 if self.config.get("DEBUG_MODE", False) else 6
+
     # ---------------- Thread lifecycle ----------------
 
     def start(self):
@@ -379,6 +382,9 @@ class ClientWrapper:
             f"[Game ID {self.game_id}] Poll ended but lobby slots not ready to start game after {delay}s.  Lobby update event will trigger game start."
         )
 
+        if self.lobby:
+            self.lobby.send("Game polling finished, but not all players are seated.  Game will launch once all players are on their assigned teams.")
+
     def update_lobby_teams(self, radiant: list[int], dire: list[int]) -> bool:
         """Replace the intended team lists; if a lobby exists, kick mis-seated players to re-seat."""
         self.radiant = list(radiant)
@@ -533,13 +539,14 @@ class ClientWrapper:
                         correct = 0
 
                         # Automatically trigger a game mode poll with more than 6 players in the lobby, single shot.
-                        # if not self.polling_done and not self.polling_active and len(message.all_members) > 6:
-                        #     self.logger.info(
-                        #         f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
-                        #     asyncio.run_coroutine_threadsafe(
-                        #         self.discord_bot.trigger_gamemode_poll(self.game_id),
-                        #         self.loop,
-                        #     )
+                        # On debug mode, this will trigger when just the player besides Gargamelcoordinator enters the lobby.
+                        if not self.polling_done and not self.polling_active and len(message.all_members) > self.auto_poll_size:
+                            self.logger.info(
+                                f"[Game {self.game_id}] Lobby has {len(message.all_members)} players — triggering game mode poll.")
+                            asyncio.run_coroutine_threadsafe(
+                                self.discord_bot.trigger_gamemode_poll(self.game_id),
+                                self.loop,
+                            )
 
                         for member in message.all_members:
                             sid32 = SteamID(member.id).as_32
