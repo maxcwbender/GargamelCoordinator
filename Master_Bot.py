@@ -548,12 +548,14 @@ class Master_Bot(commands.Bot):
         # Polling Lifecycle
         async def _auto_close_task(self, message: discord.Message):
             try:
+                logger.info(f"[Game_ID:{self.game_id}] Setting sleep timer for 60 seconds.")
                 await asyncio.sleep(self.duration_sec)
                 # If we hit End manually, avoid a double trigger
                 if not self._closed:
                     logger.info(f"Self_closed was false, going to end poll automatically")
                     await self._end_poll(None)
             except asyncio.CancelledError:
+                logger.info(f"[Game_ID:{self.game_id}] Cancelled error found for poll.")
                 # Task was cancelled because poll ended early
                 return
             except Exception as e:
@@ -561,8 +563,11 @@ class Master_Bot(commands.Bot):
 
         async def start_poll(self, triggered_by: Optional[discord.Interaction] = None):
             """Start the poll manually or programmatically."""
+            logger.info(f"[Game_ID:{self.game_id}] Starting game mode poll.")
             async with self._lock:
+                logger.info(f"[Game_ID:{self.game_id}] Lock acquired for game mode poll.")
                 if self._started:
+                    logger.info(f"[Game_ID:{self.game_id}] Poll already in progress detected.")
                     if triggered_by:
                         await triggered_by.followup.send("Poll already started.", ephemeral=True)
                     return
@@ -571,6 +576,7 @@ class Master_Bot(commands.Bot):
 
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
+                logger.info(f"[Game_ID:{self.game_id}] No message was found to edit.  Abandoning start of poll.")
                 if triggered_by:
                     await triggered_by.followup.send("Lobby message not found.", ephemeral=True)
                 return
@@ -595,6 +601,7 @@ class Master_Bot(commands.Bot):
             await self.parent.dota_talker.alert_game_polling_started(self.game_id)
             # Cancel any leftover auto task before starting new one
             if self._auto_task and not self._auto_task.done():
+                logger.info(f"[Game_ID:{self.game_id}] Found an auto task and it wasn't done.  Cancelling older poll.")
                 self._auto_task.cancel()
                 self._auto_task = None
 
