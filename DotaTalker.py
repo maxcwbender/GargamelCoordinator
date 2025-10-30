@@ -304,6 +304,38 @@ class ClientWrapper:
 
         return filtered
 
+    # def _lobby_still_exists() -> bool:
+    #     """
+    #     Returns True if our current practice lobby is visible in GC's list.
+    #     Uses the lobby password (unique per game for you) to narrow the search.
+    #     """
+    #     try:
+    #         my = getattr(self.dota, "lobby", None)
+    #         my_id = getattr(my, "lobby_id", None)
+    #     except Exception:
+    #         my_id = None
+    #
+    #     pw = getattr(client, "password", "") or ""
+    #     try:
+    #         entries = client.get_practice_lobby_list(password=pw) or []
+    #     except Exception as e:
+    #         logger.error(f"[Game {game_id}] Error requesting lobby list: {e}")
+    #         return False
+    #
+    #     if not my_id:
+    #         # If we don't have a lobby_id locally, treat as missing.
+    #         return False
+    #
+    #     for entry in entries:
+    #         # Be tolerant of structure differences
+    #         lid = getattr(entry, "lobby_id", None)
+    #         if lid is None:
+    #             lid = getattr(entry, "id", None)
+    #         if lid == my_id:
+    #             logger.info(f"{prefix} Refreshed lobby list: found={lid}, my_lobby_id={my_id}")
+    #             return True
+    #     return False
+
     async def change_lobby_mode(self, game_mode: int) -> None:
         """Change lobby game mode without blocking the asyncio loop."""
         if not self.dota:
