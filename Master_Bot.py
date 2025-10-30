@@ -2076,7 +2076,7 @@ class Master_Bot(commands.Bot):
             mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
             await mod_chan.send(f"<@{discord_id}> joined registration queue!")
 
-    def get_players_by_match_id(match_id: int):
+    def get_players_by_match_id(self, match_id: int):
         """
         Retrieve all players (and their user info) for a given match_id.
 
