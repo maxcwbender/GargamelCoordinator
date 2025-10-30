@@ -460,8 +460,70 @@ class ClientWrapper:
                     if rel == EFriendRelationship.RequestRecipient:
                         steam.friends.add(sid)
                         # If lobby exists, auto-invite
-                        if dota.gameID and sid in (set(self.radiant) | set(self.dire)):
-                            dota.invite_to_lobby(sid)
+                        # This is causing one source of duplicate invites, I believe
+                        # if dota.gameID and sid in (set(self.radiant) | set(self.dire)):
+                        #     dota.invite_to_lobby(sid)
+
+            @steam.on("disconnected")
+            def _on_steam_disconnected():
+
+                if self._stop_evt.is_set():
+                    self.logger.info(f"[Game {self.game_id}] Steam disconnected intentionally (shutdown in progress).")
+                    return
+
+                """Triggered when Steam socket drops entirely."""
+                self.logger.info(f"[Game {self.game_id}] Steam disconnected — attempting reconnect.")
+                gevent.spawn(self._attempt_steam_reconnect)
+
+            @steam.on("reconnect")
+            def _reconnect(delay):
+                self.logger.info(f"[Client {i}] Steam scheduling reconnect in {delay}s")
+
+            @steam.on("connected")
+            def _connected():
+                self.logger.info(f"[Client {i}] Steam TCP connected")
+
+            def _attempt_steam_reconnect(self, max_retries: int = 3):
+                """Reconnect to Steam CM if underlying connection drops."""
+                for attempt in range(1, max_retries + 1):
+                    if self._stop_evt.is_set():
+                        return
+                    try:
+                        if self.steam:
+                            self.logger.info(
+                                f"[Game {self.game_id}] Reconnecting to Steam (attempt {attempt}/{max_retries})...")
+                            self.steam.reconnect(maxdelay=15)
+                            return
+                    except Exception as e:
+                        self.logger.exception(f"[Game {self.game_id}] Steam reconnect attempt {attempt} failed: {e}")
+                    if self._stop_evt.wait(15 * attempt):
+                        break
+                self.logger.error(f"[Game {self.game_id}] Failed to reconnect to Steam after {max_retries} attempts.")
+
+            def _attempt_gc_reconnect(self, max_retries: int = 5):
+                """Try to relaunch the Dota GC session if it goes notready."""
+                for attempt in range(1, max_retries + 1):
+                    if self._stop_evt.is_set():
+                        return
+                    try:
+                        if self.dota:
+                            self.logger.info(
+                                f"[Game {self.game_id}] Reconnecting to GC (attempt {attempt}/{max_retries})...")
+                            self.dota.launch()
+                            return  # If launch succeeds, stop trying
+                    except Exception as e:
+                        self.logger.exception(f"[Game {self.game_id}] GC reconnect attempt {attempt} failed: {e}")
+                    # Backoff before retry
+                    if self._stop_evt.wait(10 * attempt):
+                        break
+                self.logger.error(f"[Game {self.game_id}] Failed to reconnect to GC after {max_retries} attempts.")
+
+            @dota.on("notready")
+            def _on_gc_notready():
+                """Triggered when GC session drops but Steam remains connected."""
+                self.logger.info(f"[Game {self.game_id}] Dota GC became NOT READY — attempting reconnect.")
+                gevent.spawn(self._attempt_gc_reconnect)
+
 
             @dota.on("ready")
             def _on_dota_ready():
@@ -506,6 +568,8 @@ class ClientWrapper:
                 # Invite all designated players
                 # self._setup_chat()
 
+                # Remove this if it's a problem
+                self.dota.lobby = lobby
                 for sid in (self.radiant + self.dire):
                     try:
                         if sid not in steam.friends:
