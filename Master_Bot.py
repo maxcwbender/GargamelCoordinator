@@ -1783,31 +1783,6 @@ class Master_Bot(commands.Bot):
             await interaction.followup.send(f"Success.  Gargamel Coordinator debug mode set to {debug_mode}. Restarting Coordinator", ephemeral=True)
             os.system("supervisorctl restart gargamel")
 
-        def get_players_by_match_id(match_id: int):
-            """
-            Retrieve all players (and their user info) for a given match_id.
-
-            Args:
-                match_id (int): The match ID to look up.
-
-            Returns:
-                list[tuple]: All rows of players with their joined user data.
-            """
-            query = """
-                SELECT
-                    mp.match_id,
-                    mp.discord_id,
-                    u.steam_id,
-                    u.rating,
-                    mp.team,
-                    mp.mmr,
-                    mp.role
-                FROM match_players AS mp
-                JOIN users AS u ON mp.discord_id = u.discord_id
-                WHERE mp.match_id = ?;
-            """
-            return DB.fetch_all(query, (match_id,))
-
         @app_commands.command(name="scan_for_unfinished_matches", description="Scan the database for unfinished matches and update accordingly")
         @app_commands.checks.has_role("Mod")
         async def scan_for_unfinished_matches(
@@ -2100,6 +2075,31 @@ class Master_Bot(commands.Bot):
         if modsRemaining > 0:
             mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
             await mod_chan.send(f"<@{discord_id}> joined registration queue!")
+
+    def get_players_by_match_id(match_id: int):
+        """
+        Retrieve all players (and their user info) for a given match_id.
+
+        Args:
+            match_id (int): The match ID to look up.
+
+        Returns:
+            list[tuple]: All rows of players with their joined user data.
+        """
+        query = """
+            SELECT
+                mp.match_id,
+                mp.discord_id,
+                u.steam_id,
+                u.rating,
+                mp.team,
+                mp.mmr,
+                mp.role
+            FROM match_players AS mp
+            JOIN users AS u ON mp.discord_id = u.discord_id
+            WHERE mp.match_id = ?;
+        """
+        return DB.fetch_all(query, (match_id,))
 
     def get_unfinished_matches(self) -> list[tuple]:
         query = "SELECT * FROM matches WHERE winning_team IS NULL;"
