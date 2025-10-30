@@ -161,8 +161,7 @@ class Master_Bot(commands.Bot):
                 logger.exception(f"Cleanup failed with exception: {e}")
 
         loop.create_task(shutdown_sequence())
-
-    async def clean_up_on_exit_helper(self):
+    async def clean_up_voice_channels(self):
         # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
         # clean them up and just assume it's fine.
         general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
@@ -176,30 +175,39 @@ class Master_Bot(commands.Bot):
                 # Queue up move tasks for all members in the Game channel
                 for member in channel.members:
                     if member.voice and member.voice.channel == channel:
-                        logger.info(f"[clean_up_on_exit_helper] Moving Member: {member} from leftover voice channel added to queued tasks.")
+                        logger.info(
+                            f"[clean_up_on_exit_helper] Moving Member: {member} from leftover voice channel added to queued tasks.")
                         move_tasks.append(member.move_to(general_channel))
 
                 # Queue up deletion of the Game channel
                 logger.info(f"[clean_up_on_exit_helper] Deleting {channel} added to queued tasks.")
                 delete_tasks.append(channel.delete())
 
-        lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-
         if move_tasks:
-            logger.info(f"[clean_up_on_exit_helper] Running async task to move all players from leftover Game Voice channels.")
+            logger.info(
+                f"[clean_up_on_exit_helper] Running async task to move all players from leftover Game Voice channels.")
             await asyncio.gather(*move_tasks)
+
+
+        logger.info(
+            f"[clean_up_on_exit_helper] Running async task to delete leftover Game Voice channels.")
+        await asyncio.gather(*delete_tasks)
+
+    async def clean_up_on_exit_helper(self):
+        # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
+        # clean them up and just assume it's fine.
+
+        await self.clean_up_voice_channels()
+
+        lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
 
         if lobby_channel:
             purge_task = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).purge(
                 limit=100
             )
 
-            await asyncio.gather(*delete_tasks, purge_task)
+            await asyncio.gather(purge_task)
 
-        else:
-            logger.info(
-                f"[clean_up_on_exit_helper] Running async task to delete leftover Game Voice channels.")
-            await asyncio.gather(*delete_tasks)
 
         if hasattr(bot, "tcp_server") and bot.tcp_server:
             bot.tcp_server.close()
@@ -1216,7 +1224,7 @@ class Master_Bot(commands.Bot):
         await lobby_channel.purge()
 
         # Purging any leftover voice channels on boot, moving all members to General.
-        await self.clean_up_on_exit_helper()
+        await self.clean_up_voice_channels()
         await self.update_queue_status_message(new_message=True)
 
         # --------------- #
