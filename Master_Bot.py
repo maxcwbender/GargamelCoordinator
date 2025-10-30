@@ -172,17 +172,21 @@ class Master_Bot(commands.Bot):
 
         for channel in self.the_guild.voice_channels:
             if channel.name.startswith("Game"):
+                logger.info(f"Found Game channel: {channel.name}")
                 # Queue up move tasks for all members in the Game channel
                 for member in channel.members:
                     if member.voice and member.voice.channel == channel:
+                        logger.info(f"[clean_up_on_exit_helper] Moving Member: {member} from leftover voice channel added to queued tasks.")
                         move_tasks.append(member.move_to(general_channel))
 
                 # Queue up deletion of the Game channel
+                logger.info(f"[clean_up_on_exit_helper] Deleting {channel} added to queued tasks.")
                 delete_tasks.append(channel.delete())
 
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
 
         if move_tasks:
+            logger.info(f"[clean_up_on_exit_helper] Running async task to move all players from leftover Game Voice channels.")
             await asyncio.gather(*move_tasks)
 
         if lobby_channel:
@@ -193,6 +197,8 @@ class Master_Bot(commands.Bot):
             await asyncio.gather(*delete_tasks, purge_task)
 
         else:
+            logger.info(
+                f"[clean_up_on_exit_helper] Running async task to delete leftover Game Voice channels.")
             await asyncio.gather(*delete_tasks)
 
         if hasattr(bot, "tcp_server") and bot.tcp_server:
@@ -1209,6 +1215,8 @@ class Master_Bot(commands.Bot):
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         await lobby_channel.purge()
 
+        # Purging any leftover voice channels on boot, moving all members to General.
+        await self.clean_up_on_exit_helper()
         await self.update_queue_status_message(new_message=True)
 
         # --------------- #
