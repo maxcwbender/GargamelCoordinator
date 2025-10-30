@@ -1801,9 +1801,9 @@ class Master_Bot(commands.Bot):
                     all_players = self.get_players_by_match_id(match[0])
                     columns = ["match_id", "discord_id", "steam_id", "rating", "team", "mmr", "role"]
                     players = [dict(zip(columns, p)) for p in all_players]
-                    logger.info(f"Players: {players}")
-                    radiant = [p for p in players if p["team"] == 2]
-                    dire = [p for p in players if p["team"] == 3]
+                    # logger.info(f"Players: {players}")
+                    radiant = [p for p in players if p["team"] == 0]
+                    dire = [p for p in players if p["team"] == 1]
                     for player in radiant:
                         logging.info(f"Radiant player: {player}")
                     for player in dire:
