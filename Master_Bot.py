@@ -180,7 +180,7 @@ class Master_Bot(commands.Bot):
                         move_tasks.append(member.move_to(general_channel))
 
                 # Queue up deletion of the Game channel
-                logger.info(f"[clean_up_on_exit_helper] Deleting {channel} added to queued tasks.")
+                logger.info(f"[clean_up_on_exit_helper] Deleting channel:'{channel}' added to queued tasks.")
                 delete_tasks.append(channel.delete())
 
         if move_tasks:
