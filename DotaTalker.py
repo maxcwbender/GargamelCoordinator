@@ -474,6 +474,28 @@ class ClientWrapper:
                 finally:
                     self._ready_evt.set()
 
+                # --- GC KEEPALIVE LOOP ---
+                def _gc_keepalive_loop():
+                    """Ping the Game Coordinator every 60s to prevent idle disconnects."""
+                    while not self._stop_evt.is_set():
+                        try:
+                            # send a harmless protobuf to GC to keep session alive
+                            dota.request_profile_card(steam.steam_id.as_32)
+                            self.logger.debug(f"[Game {self.game_id}] GC heartbeat sent.")
+                        except Exception as e:
+                            self.logger.warning(f"[Game {self.game_id}] GC heartbeat failed: {e}")
+                        # wait 60 seconds or exit early if stop flag is set
+                        if self._stop_evt.wait(60):
+                            break
+
+                self._keepalive_thread = threading.Thread(
+                    target=_gc_keepalive_loop,
+                    name=f"gc-keepalive-{self.game_id}",
+                    daemon=True,
+                )
+                self._keepalive_thread.start()
+                self.logger.info(f"[Game {self.game_id}] GC heartbeat thread started.")
+
             @dota.steam.on("persona_state")
             def _persona_update(persona):
                 # lightweight visibility; avoid heavy logging spam
@@ -580,9 +602,14 @@ class ClientWrapper:
                             )
                         finally:
                             try:
+                                self._stop_evt.set()
+                                if getattr(self, "_keepalive_thread", None):
+                                    self.logger.info(
+                                        f"[Game {self.game_id}] Stopping GC keepalive thread after game end.")
+                                    self._keepalive_thread.join(timeout=5)
                                 dota.leave_practice_lobby()
-                            except Exception:
-                                pass
+                            except Exception as err:
+                                logger.exception(f"[Game {self.game_id}] Error in POSTGAME Processing: {err}")
                             # allow outer manager to recycle account
                             self._stop_evt.set()
                 except Exception:
