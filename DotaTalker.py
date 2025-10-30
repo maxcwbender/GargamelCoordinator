@@ -505,7 +505,7 @@ class ClientWrapper:
 
                 """Triggered when Steam socket drops entirely."""
                 self.logger.info(f"[Game {self.game_id}] Steam disconnected — attempting reconnect.")
-                gevent.spawn(self._attempt_steam_reconnect)
+                gevent.spawn(_attempt_steam_reconnect)
 
             @steam.on("reconnect")
             def _reconnect(delay):
@@ -552,9 +552,13 @@ class ClientWrapper:
 
             @dota.on("notready")
             def _on_gc_notready():
+                if self._stop_evt.is_set():
+                    self.logger.info(f"[Game {self.game_id}] Dota client disconnected intentionally (shutdown in progress).")
+                    return
+
                 """Triggered when GC session drops but Steam remains connected."""
                 self.logger.info(f"[Game {self.game_id}] Dota GC became NOT READY — attempting reconnect.")
-                gevent.spawn(self._attempt_gc_reconnect)
+                gevent.spawn(_attempt_gc_reconnect)
 
 
             @dota.on("ready")

@@ -1783,8 +1783,74 @@ class Master_Bot(commands.Bot):
             await interaction.followup.send(f"Success.  Gargamel Coordinator debug mode set to {debug_mode}. Restarting Coordinator", ephemeral=True)
             os.system("supervisorctl restart gargamel")
 
+        def get_players_by_match_id(match_id: int):
+            """
+            Retrieve all players (and their user info) for a given match_id.
+
+            Args:
+                match_id (int): The match ID to look up.
+
+            Returns:
+                list[tuple]: All rows of players with their joined user data.
+            """
+            query = """
+                SELECT
+                    mp.match_id,
+                    mp.discord_id,
+                    u.steam_id,
+                    u.rating,
+                    mp.team,
+                    mp.mmr,
+                    mp.role
+                FROM match_players AS mp
+                JOIN users AS u ON mp.discord_id = u.discord_id
+                WHERE mp.match_id = ?;
+            """
+            return DB.fetch_all(query, (match_id,))
+
+        @app_commands.command(name="scan_for_unfinished_matches", description="Scan the database for unfinished matches and update accordingly")
+        @app_commands.checks.has_role("Mod")
+        async def scan_for_unfinished_matches(
+                interaction: discord.Interaction,
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error setting debug mode: {e}")
+
+            unfinished = self.get_unfinished_matches()
+            for match in unfinished:
+                all_players = self.get_players_by_match_id(match)
+                radiant = [p for p in all_players if p["team"] == 2]
+                dire = [p for p in all_players if p["team"] == 3]
+                for player in radiant:
+                    logging.info(f"Radiant player: {player}")
+                for player in dire:
+                    logging.info(f"Dire Player: {player}")
+
+
+
+        @app_commands.command(name="update_match_results",
+                              description="Update a match and all MMRs of players in the match to the new result historically.")
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(
+            winning_team="Radiant or Dire"
+        )
+        async def update_match_results(
+                interaction: discord.Interaction,
+                winning_team: str
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error setting debug mode: {e}")
+
         @restart_bot.error
         @set_debug_mode.error
+        @scan_for_unfinished_matches.error
+        @update_match_results.error
         async def permissions_error(interaction: discord.Interaction, error):
             if isinstance(error, app_commands.MissingRole):
                 await interaction.response.send_message(
@@ -1811,6 +1877,8 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(check_mmr)
         self.tree.add_command(restart_bot)
         self.tree.add_command(set_debug_mode)
+        self.tree.add_command(scan_for_unfinished_matches)
+        self.tree.add_command(update_match_results)
 
         if not self.config["DEBUG_MODE"]:
             await self.tree.sync()  # Clears global commands from Discord
@@ -2032,6 +2100,10 @@ class Master_Bot(commands.Bot):
         if modsRemaining > 0:
             mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
             await mod_chan.send(f"<@{discord_id}> joined registration queue!")
+
+    def get_unfinished_matches(self) -> list[tuple]:
+        query = "SELECT * FROM matches WHERE winning_team IS NULL;"
+        return DB.fetch_all(query)
 
     def get_next_game_id(self):
         try:
