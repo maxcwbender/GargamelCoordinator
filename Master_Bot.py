@@ -1796,7 +1796,8 @@ class Master_Bot(commands.Bot):
 
             unfinished = self.get_unfinished_matches()
             for match in unfinished:
-                all_players = self.get_players_by_match_id(match)
+                logger.info(f"Match found: {match}")
+                all_players = self.get_players_by_match_id(match[0])
                 radiant = [p for p in all_players if p["team"] == 2]
                 dire = [p for p in all_players if p["team"] == 3]
                 for player in radiant:
