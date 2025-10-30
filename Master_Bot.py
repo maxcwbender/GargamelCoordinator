@@ -1880,9 +1880,9 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(scan_for_unfinished_matches)
         self.tree.add_command(update_match_results)
 
-        if not self.config["DEBUG_MODE"]:
-            await self.tree.sync()  # Clears global commands from Discord
-            await self.tree.sync(guild=self.the_guild)
+        # if not self.config["DEBUG_MODE"]:
+        await self.tree.sync()  # Clears global commands from Discord
+        await self.tree.sync(guild=self.the_guild)
 
     async def on_game_started(self, game_id, game_info):
 
