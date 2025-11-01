@@ -44,10 +44,12 @@ server.put('/', async (req, res) => {
     const { tokenType, accessToken } = req.body;
 
     if (!tokenType || !accessToken) {
+        logger.error("Returning 400: Either missing tokentype or accesstoken.  tokenType: ${tokenType}  accessToken: ${accessToken}")
         return res.status(400).json({ result: 'Missing token information' });
     }
 
     try {
+        logger.info("Fetching userId and Connections")
         const [userRes, connRes] = await Promise.all([
             fetch('https://discord.com/api/users/@me', {
                 headers: { authorization: `${tokenType} ${accessToken}` },
@@ -61,7 +63,7 @@ server.put('/', async (req, res) => {
         const connections = await connRes.json();
 
         if (!user.id) {
-            logger.error('Invalid Discord token or user not found');
+            logger.error('Returning 400: No User ID found. ID: ${user.id}');
             return res.status(400).json({ result: 'Invalid Discord credentials' });
         }
 
@@ -78,7 +80,8 @@ server.put('/', async (req, res) => {
         }
 
         if (!steamID) {
-            return res.status(202).json({ result: 'No Steam ID linked' });
+            logger.error("Returning 400: No Steam ID Linked")
+            return res.status(400).json({ result: 'No Steam ID linked' });
         }
 
         // Insert user into database
