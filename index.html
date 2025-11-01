@@ -186,6 +186,8 @@
         body: JSON.stringify({ accessToken, tokenType }),
         headers: { 'Content-Type': 'application/json' }
       }).then(response => {
+        const data = await response.json().catch(() => ({}));
+
         if (response.ok) {
           showState('success-state');
         } else {
