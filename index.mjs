@@ -99,7 +99,7 @@ server.put('/', async (req, res) => {
         });
         stmt.finalize();
 
-        Notify local pipe
+        //Notify local pipe
         try {
             const socketPipe = new net.Socket();
             socketPipe.on('error', err => {
