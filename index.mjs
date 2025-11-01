@@ -64,7 +64,7 @@ server.put('/', async (req, res) => {
 
         if (!user.id) {
             logger.error('Returning 400: No User ID found. ID: ${user.id}');
-            return res.status(400).json({ result: 'Invalid Discord credentials' });
+            return res.status(400).json({ result: 'Invalid Discord credentials. Please try again.' });
         }
 
         const discordID = user.id;
@@ -81,7 +81,7 @@ server.put('/', async (req, res) => {
 
         if (!steamID) {
             logger.error("Returning 400: No Steam ID Linked")
-            return res.status(400).json({ result: 'No Steam ID linked' });
+            return res.status(400).json({ result: 'No Steam ID linked to Discord. Please link and Try Again.' });
         }
 
         // Insert user into database

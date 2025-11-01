@@ -189,9 +189,16 @@
         if (response.ok) {
           showState('success-state');
         } else {
+          console.error("Backend returned an error during processing:", data);
+          const msg = data?.result || `HTTP ${response.status}`;
+          document.querySelector('#error-state .status-message').innerText =
+      `There was a problem linking your accounts:\n\n${msg}`;
           showState('error-state');
         }
       }).catch(() => {
+        console.error("Networking or fetch error: ", err);
+        document.querySelector('#error-state .status-message').innerText =
+          `Network error: ${err.message}`;
         showState('error-state');
       });
     };

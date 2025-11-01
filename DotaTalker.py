@@ -579,7 +579,7 @@ class ClientWrapper:
                         try:
                             # send a harmless protobuf to GC to keep session alive
                             dota.request_profile_card(steam.steam_id.as_32)
-                            self.logger.info(f"[Game {self.game_id}] GC heartbeat sent.")
+                            self.logger.debug(f"[Game {self.game_id}] GC heartbeat sent.")
                         except Exception as e:
                             self.logger.exception(f"[Game {self.game_id}] GC heartbeat failed: {e}")
                         # wait 60 seconds or exit early if stop flag is set
@@ -592,7 +592,7 @@ class ClientWrapper:
                     daemon=True,
                 )
                 self._keepalive_thread.start()
-                self.logger.info(f"[Game {self.game_id}] GC heartbeat thread started.")
+                self.logger.info(f"[Game {self.game_id}] GC heartbeat thread started. Heartbeat messages visible on debug logging level only.")
 
             @dota.steam.on("persona_state")
             def _persona_update(persona):
