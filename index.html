@@ -195,7 +195,7 @@
       `There was a problem linking your accounts:\n\n${msg}`;
           showState('error-state');
         }
-      }).catch(() => {
+      }).catch( err => {
         console.error("Networking or fetch error: ", err);
         document.querySelector('#error-state .status-message').innerText =
           `Network error: ${err.message}`;
