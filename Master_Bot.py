@@ -490,7 +490,8 @@ class Master_Bot(commands.Bot):
             return any(getattr(r, "name", None) == role_name for r in roles)
 
         def _options_in_order(self) -> list[str]:
-            return [opt.label for opt in self.select.options]
+            # Returns the list of values in the select options, so tally uses the correct keys
+            return [opt.value for opt in self.select.options]
 
         def build_mode_options(self):
             # Easter egg game mode option
@@ -726,8 +727,10 @@ class Master_Bot(commands.Bot):
             # Build results for embed
             options_in_order = self._options_in_order()
 
+            value_to_label = {opt.value: opt.label for opt in self.select.options}
+
             summary_lines_in = [
-                                   f"- {name}: **{tally_in.get(name, 0)}**"
+                                   f"- {value_to_label.get(name, name)}: **{tally_in.get(name, 0)}**"
                                    for name in options_in_order if tally_in.get(name, 0) > 0
                                ] or ["*No in-game votes*"]
             summary_in = "\n".join(summary_lines_in)
@@ -737,10 +740,13 @@ class Master_Bot(commands.Bot):
             summary_spec = ""
             if spectator_voted:
                 summary_lines_spec = [
-                    f"- {name}: **{tally_spec.get(name, 0)}**"
+                    f"- {value_to_label.get(name, name)}: **{tally_spec.get(name, 0)}**"
                     for name in options_in_order if tally_spec.get(name, 0) > 0
                 ]
                 summary_spec = "\n\n**Spectator votes:**\n" + "\n".join(summary_lines_spec)
+
+            # Build result text
+            winner_label = value_to_label.get(winner, winner) if winner else None
 
             # Update poll embed
             message = self.parent.lobby_messages.get(self.game_id)
@@ -751,10 +757,9 @@ class Master_Bot(commands.Bot):
 
                 result_text = (
                     f"**Poll closed ({'manually' if manual else 'automatically'}).**\n"
-                    f"{('Winner: **' + winner + '**' if winner else 'Mode unchanged.')}"
+                    f"{('Winner: **' + winner_label + '**' if winner else 'Mode unchanged.')}"
                     f"{(' — ' + reason) if reason else ''}\n\n"
-                    f"**In-game votes:**\n{summary_in}"
-                    f"{summary_spec}"  # only added if spectators voted
+                    f"**In-game votes:**\n{summary_in}{summary_spec}"
                 )
 
                 if idx is not None:
@@ -800,6 +805,7 @@ class Master_Bot(commands.Bot):
                     logger.exception(f"[Game {self.game_id}] Failed to send end-poll response: {e}")
 
         async def _update_poll_embed(self, interaction: discord.Interaction, transient_notice: str = ""):
+
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
                 try:
@@ -829,32 +835,33 @@ class Master_Bot(commands.Bot):
                     tally_spec[choice] = tally_spec.get(choice, 0) + 1
 
             options_in_order = self._options_in_order()
+            value_to_label = {opt.value: opt.label for opt in self.select.options}
 
             # Build in-game status
-            voted_in = [n for n in options_in_order if tally_in.get(n, 0) > 0]
-            top_in = sorted(voted_in, key=lambda n: (-tally_in[n], options_in_order.index(n)))[:3]
-            status_in = ", ".join(f"{n} ({tally_in[n]})" for n in top_in) or "No in-game votes yet"
+            voted_in = [val for val in options_in_order if tally_in.get(val, 0) > 0]
+            top_in = sorted(voted_in, key=lambda val: (-tally_in[val], options_in_order.index(val)))[:3]
+            status_in = ", ".join(
+                f"{value_to_label.get(val, val)} ({tally_in[val]})" for val in top_in) or "No in-game votes yet"
 
             # Build spectator status **only** if there are spectator votes
-            voted_spec = [n for n in options_in_order if tally_spec.get(n, 0) > 0]
+            voted_spec = [val for val in options_in_order if tally_spec.get(val, 0) > 0]
             status_spec = None
             if voted_spec:
-                top_spec = sorted(voted_spec, key=lambda n: (-tally_spec[n], options_in_order.index(n)))[:3]
-                status_spec = ", ".join(f"{n} ({tally_spec[n]})" for n in top_spec)
+                top_spec = sorted(voted_spec, key=lambda val: (-tally_spec[val], options_in_order.index(val)))[:3]
+                status_spec = ", ".join(f"{value_to_label.get(val, val)} ({tally_spec[val]})" for val in top_spec)
 
             embed = message.embeds[0]
             idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+
             if idx is not None:
                 base = embed.fields[idx].value.split("\n\n")[0]
-                # Build new value
                 new_val = f"{base}\n\n**In-game votes:** {status_in}"
-                if status_spec is not None:
+                if status_spec:
                     new_val += f"\n**Spectator votes:** {status_spec}"
                 embed.set_field_at(idx, name=embed.fields[idx].name, value=new_val, inline=False)
             else:
-                # field not found: add new
                 new_val = f"**In-game votes:** {status_in}"
-                if status_spec is not None:
+                if status_spec:
                     new_val += f"\n**Spectator votes:** {status_spec}"
                 embed.add_field(name="🗳️ Game Mode Voting", value=new_val, inline=False)
 
