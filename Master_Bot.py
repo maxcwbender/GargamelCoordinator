@@ -494,8 +494,8 @@ class Master_Bot(commands.Bot):
             return [opt.value for opt in self.select.options]
 
         def build_mode_options(self):
-            # Turns 'Single Draft' to 'Low Quality Game Mode' 5% of the time Kek
-            easter_egg_active = random.random() < 0.05
+            # Turns 'Single Draft' to 'Low Quality Game Mode' 10% of the time
+            easter_egg_active = random.random() < 0.10
 
             options = []
             for name in self.parent.dota_talker.mode_map.keys():
@@ -1593,10 +1593,19 @@ class Master_Bot(commands.Bot):
 
             # Tearing down steam/dota client for game
             try:
-                self.dota_talker.teardown_lobby(game_id)
-                logger.info(f"[cancel_game] Torn down Dota client for canceled game {game_id}")
+                success = self.dota_talker.teardown_lobby(game_id)
+                if not success:
+                    logger.warning(f"[cancel_game] teardown_lobby() returned False for game {game_id}")
+                    channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+                    if channel:
+                        await channel.send(f"Game {game_id} teardown may have failed. Please verify manually.")
+                else:
+                    logger.info(f"[cancel_game] Torn down Dota client for canceled game {game_id}")
             except Exception:
-                logger.exception(f"[cancel_game] Failed to teardown Dota client for game {game_id}")
+                logger.exception(f"[cancel_game] Failed to teardown Dota client for game {game_id}: {e}")
+                channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+                if channel:
+                    await channel.send(f"Error while tearing down Game {game_id}: {e}")
 
             await interaction.followup.send(
                 f"Game {game_id} has been cancelled. ❌", ephemeral=True
@@ -2040,10 +2049,19 @@ class Master_Bot(commands.Bot):
 
         # Teardown Steam/Dota client for this match
         try:
-            self.dota_talker.teardown_lobby(game_id)
-            logger.info(f"[on_game_ended] Torn down Dota client for game {game_id}")
-        except Exception:
-            logger.exception(f"[on_game_ended] Failed to teardown Dota client for game {game_id}")
+            success = self.dota_talker.teardown_lobby(game_id)
+            if not success:
+                logger.warning(f"[on_game_ended] teardown_lobby() returned False for game {game_id}")
+                channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+                if channel:
+                    await channel.send(f"Game {game_id} teardown may have failed. Please verify manually.")
+            else:
+                logger.info(f"[on_game_ended] Torn down Dota client for game {game_id}")
+        except Exception as e:
+            logger.exception(f"[on_game_ended] Failed to teardown Dota client for game {game_id}: {e}")
+            channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+            if channel:
+                await channel.send(f"Exception while tearing down Game {game_id}: {e}")
 
 
     async def clear_game(self, game_id: int):

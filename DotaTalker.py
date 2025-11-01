@@ -744,6 +744,10 @@ class ClientWrapper:
         """
         Called via asyncio.to_thread. Runs on wrapper thread. Creates the lobby.
         """
+        if getattr(self.dota, "lobby", None):
+            self.logger.warning(f"[Game {self.game_id}] Lobby already exists — skipping create.")
+            return
+
         if not self.dota:
             raise RuntimeError("Dota client not initialized")
         # configure default options
@@ -819,6 +823,10 @@ class DotaTalker:
         Async: spins up a per-lobby client (in a thread), waits for 'ready',
         creates the lobby, and returns the lobby password.
         """
+        if gameID in self.lobby_clients:
+            logger.warning(f"[Game {gameID}] Wrapper already exists — skipping duplicate make_game() call.")
+            return self.lobby_clients[gameID].password
+
         radiant_steam_ids = [DB.fetch_steam_id(did) for did in radiant_discord_ids]
         dire_steam_ids = [DB.fetch_steam_id(did) for did in dire_discord_ids]
 
@@ -859,13 +867,27 @@ class DotaTalker:
 
     def teardown_lobby(self, game_id: int):
         wrapper = getattr(self, "lobby_clients", {}).pop(game_id, None)
-        if wrapper:
-            acct = getattr(wrapper, "account_index", None)
-            try:
-                wrapper.shutdown()
-            finally:
-                if hasattr(self, "_release_account") and acct is not None:
+
+        if not wrapper:
+            logger.warning(f"[teardown_lobby] No active lobby wrapper found for game {game_id}")
+            return True
+
+        acct = getattr(wrapper, "account_index", None)
+        try:
+            wrapper.shutdown()
+            logger.info(f"[teardown_lobby] Successfully tore down Dota client for game {game_id}")
+        except Exception as e:
+            logger.exception(f"[teardown_lobby] Exception while tearing down wrapper for game {game_id}: {e}")
+            return False
+        finally:
+            if hasattr(self, "_release_account") and acct is not None:
+                try:
                     self._release_account(acct)
+                    logger.debug(f"[teardown_lobby] Released account index {acct} for game {game_id}")
+                except Exception as e:
+                    logger.exception(f"[teardown_lobby] Failed to release account {acct} for game {game_id}: {e}")
+                    return False
+        return True
 
     def get_password(self, game_id: int) -> str:
         wrapper = self.lobby_clients.get(game_id)
