@@ -185,7 +185,7 @@
         method: 'PUT',
         body: JSON.stringify({ accessToken, tokenType }),
         headers: { 'Content-Type': 'application/json' }
-      }).then(response => {
+      }).then(async response => {
         const data = await response.json().catch(() => ({}));
 
         if (response.ok) {
