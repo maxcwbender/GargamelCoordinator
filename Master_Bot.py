@@ -495,7 +495,7 @@ class Master_Bot(commands.Bot):
         def build_mode_options(self):
             # Easter egg game mode option
             # Turns 'Single Draft' to 'Low Quality Game Mode' 5% of the time.
-            easter_egg_active = random.random() < 0.05
+            easter_egg_active = random.random() < 0.95
 
             options = []
             for name in self.parent.dota_talker.mode_map.keys():
