@@ -498,7 +498,7 @@ class Master_Bot(commands.Bot):
             easter_egg_active = random.random() < 0.05
 
             options = []
-            for name in self.mode_map.keys():
+            for name in self.parent.dota_talker.mode_map.keys():
                 if name == "Low Quality Game Mode":
                     continue
                 label = name
