@@ -1977,47 +1977,51 @@ class Master_Bot(commands.Bot):
             await self.clear_game(game_id)
 
             # Retrieve player ratings
-            radiant_ratings = [DB.fetch_rating(id) for id in radiant]
-            dire_ratings = [DB.fetch_rating(id) for id in dire]
+            if not self.config["DEBUG_MODE"]:
+                radiant_ratings = [DB.fetch_rating(id) for id in radiant]
+                dire_ratings = [DB.fetch_rating(id) for id in dire]
 
-            # Calculate means
-            r_radiant = DB.power_mean(radiant_ratings, 5)
-            r_dire = DB.power_mean(dire_ratings, 5)
+                # Calculate means
+                r_radiant = DB.power_mean(radiant_ratings, 5)
+                r_dire = DB.power_mean(dire_ratings, 5)
 
-            # Determine results
-            s_radiant = 1 if game_info.match_outcome == 2 else 0
-            s_dire = 1 - s_radiant
+                # Determine results
+                s_radiant = 1 if game_info.match_outcome == 2 else 0
+                s_dire = 1 - s_radiant
 
-            # ELO expected scores
-            e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
-            e_dire = 1 - e_radiant
+                # ELO expected scores
+                e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
+                e_dire = 1 - e_radiant
 
-            k = self.config.get("ELO_K")  # Use config or default
+                k = self.config.get("ELO_K")  # Use config or default
 
-            # Update radiant ratings
-            for i, pid in enumerate(radiant):
-                new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
-                DB.execute(
-                    "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-                )
+                # Update radiant ratings
+                for i, pid in enumerate(radiant):
+                    new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
+                    DB.execute(
+                        "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                    )
 
-            # Update dire ratings
-            for i, pid in enumerate(dire):
-                new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
-                DB.execute(
-                    "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-                )
+                # Update dire ratings
+                for i, pid in enumerate(dire):
+                    new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
+                    DB.execute(
+                        "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                    )
 
-            # Adding cute little emoji reaction to match card for the winner
-            try:
+                # Adding cute little emoji reaction to match card for the winner
+                try:
+                    lobby_msg = self.lobby_messages.get(game_id)
+                    if s_radiant:
+                        await lobby_msg.add_reaction("🌞")
+                    else:
+                        await lobby_msg.add_reaction("🌚")
+                except Exception as e:
+                    logger.exception(f"Failed to react to lobby message with winner with error: {e}")
+            else:
+                # Debug mode, react with Robot Emoji
                 lobby_msg = self.lobby_messages.get(game_id)
-                if s_radiant:
-                    await lobby_msg.add_reaction("🌞")
-                else:
-                    await lobby_msg.add_reaction("🌚")
-            except Exception as e:
-                logger.exception(f"Failed to react to lobby message with winner with error: {e}")
-
+                await lobby_msg.add_reaction(":BrokenRobot:1394750222940377218")
         except Exception as e:
             logger.exception(f"Error updating users table with ratings with err: {e}")
 
@@ -2173,6 +2177,19 @@ class Master_Bot(commands.Bot):
         game_id = self.get_next_game_id()
         self.pending_matches.add(game_id)
 
+        password = await self.dota_talker.make_game(game_id, radiant, dire)
+        if password == "-1":
+            logger.error(f"[Game {game_id}] Failed to create Dota lobby. Aborting Discord setup.")
+
+            channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+            if channel:
+                await channel.send(f" **Game {game_id} failed to start.** Please re-queue for the next match.")
+            else:
+                logger.warning(f"[Game {game_id}] MATCH_CHANNEL_ID not found, could not notify players.")
+
+            self.pending_matches.discard(game_id)
+            return None  # or return False to signal caller
+
         create_tasks = [
             self.the_guild.create_voice_channel(f"Game {game_id} — Radiant"),
             self.the_guild.create_voice_channel(f"Game {game_id} — Dire")
@@ -2233,7 +2250,7 @@ class Master_Bot(commands.Bot):
 
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
-        password = await self.dota_talker.make_game(game_id, radiant, dire)
+        # password = await self.dota_talker.make_game(game_id, radiant, dire)
 
         embed = self.build_game_embed(game_id, radiant, dire, password)
 
