@@ -474,7 +474,7 @@ class Master_Bot(commands.Bot):
             self._lock = asyncio.Lock()
 
             # Build options, but keep select disabled until Start is pressed
-            options = [discord.SelectOption(label=n, value=n) for n in self.mode_name_to_enum.keys()]
+            options = self.build_mode_options()
             self.select = self.GameModeSelect(self, placeholder="Choose a game mode…", options=options)
             self.select.disabled = True
             self.add_item(self.select)
@@ -491,6 +491,24 @@ class Master_Bot(commands.Bot):
 
         def _options_in_order(self) -> list[str]:
             return [opt.label for opt in self.select.options]
+
+        def build_mode_options(self):
+            # Easter egg game mode option
+            # Turns 'Single Draft' to 'Low Quality Game Mode' 5% of the time.
+            easter_egg_active = random.random() < 0.05
+
+            options = []
+            for name in self.mode_map.keys():
+                if name == "Low Quality Game Mode":
+                    continue
+                label = name
+
+                if easter_egg_active and name == "Single Draft":
+                    label = "Low Quality Game Mode"
+
+                options.append(discord.SelectOption(label=label, value=name))
+
+            return options
 
         # UI Components
         class GameModeSelect(discord.ui.Select):
@@ -2025,42 +2043,48 @@ class Master_Bot(commands.Bot):
         Args:
             game_id (int): The ID of the game to cancel.
         """
-
-        radiant, dire = self.game_map_inverse[game_id]
-        del self.game_map_inverse[game_id]
-
-        for player in radiant:
-            del self.game_map[player]
-        for player in dire:
-            del self.game_map[player]
-
-        players = self.game_map_inverse.get(game_id, set())
-        self.game_map_inverse.pop(game_id, None)
-
-        for player in players:
-            self.game_map.pop(player, None)
-
-        radiant_channel, dire_channel = self.game_channels.pop(game_id)
         try:
+            radiant, dire = self.game_map_inverse[game_id]
+            del self.game_map_inverse[game_id]
+
+            for player in radiant:
+                del self.game_map[player]
+            for player in dire:
+                del self.game_map[player]
+
+            players = self.game_map_inverse.get(game_id, set())
+            self.game_map_inverse.pop(game_id, None)
+
+            for player in players:
+                self.game_map.pop(player, None)
+
+            radiant_channel, dire_channel = self.game_channels.pop(game_id)
+
             target_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
             all_members = radiant_channel.members + dire_channel.members
+            move_tasks = []
             for member in all_members:
                 logger.info(
-                    f"{member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
-            move_tasks = [
-                member.move_to(target_channel)
-                for member in all_members
-                if member.voice and member.voice.channel != target_channel
-            ]
+                    f"[Game {game_id}] {member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
+                if not member.voice or not member.voice.channel:
+                    continue
+                if member.voice.channel.id == target_channel.id:
+                    continue
 
-            await asyncio.gather(*move_tasks)
+                try:
+                    move_tasks.append(member.move_to(target_channel))
+                except Exception as e:
+                    logger.exception(f"Failed to move {member.display_name} to {target_channel.name}: {e}")
+
+            await asyncio.gather(*move_tasks, return_exceptions=True)
             await asyncio.gather(
                 radiant_channel.delete(),
-                dire_channel.delete()
+                dire_channel.delete(),
+                return_exceptions=True
             )
 
-        except Exception as _:
-            logger.exception(f"Unexpected Exception: ")
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Error clearing game: ", e)
 
 
     async def on_steam_id_found(self, discord_id: int):

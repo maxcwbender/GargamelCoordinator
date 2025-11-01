@@ -509,11 +509,11 @@ class ClientWrapper:
 
             @steam.on("reconnect")
             def _reconnect(delay):
-                self.logger.info(f"[Client {i}] Steam scheduling reconnect in {delay}s")
+                self.logger.info(f"[Game {self.game_id}] Steam scheduling reconnect in {delay}s")
 
             @steam.on("connected")
             def _connected():
-                self.logger.info(f"[Client {i}] Steam TCP connected")
+                self.logger.info(f"[Client {self.game_id}] Steam TCP connected")
 
             def _attempt_steam_reconnect(self, max_retries: int = 3):
                 """Reconnect to Steam CM if underlying connection drops."""
@@ -788,9 +788,9 @@ class DotaTalker:
         self.mode_map = {
             # "All Pick": int(DOTA_GameMode.DOTA_GAMEMODE_AP),
             "Ranked All Pick": int(DOTA_GameMode.DOTA_GAMEMODE_ALL_DRAFT),  # 22
-            "Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_CM),
             "Random Draft": int(DOTA_GameMode.DOTA_GAMEMODE_RD),
             "Single Draft": int(DOTA_GameMode.DOTA_GAMEMODE_SD),
+            "Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_CM),
             "All Random": int(DOTA_GameMode.DOTA_GAMEMODE_AR),
             # "Reverse Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_REVERSE_CM),
             # "Mid Only": int(DOTA_GameMode.DOTA_GAMEMODE_MO),
@@ -799,6 +799,7 @@ class DotaTalker:
             # "Ability Draft": int(DOTA_GameMode.DOTA_GAMEMODE_ABILITY_DRAFT),
             # "All Random Deathmatch": int(DOTA_GameMode.DOTA_GAMEMODE_ARDM),
             # "Turbo": int(DOTA_GameMode.DOTA_GAMEMODE_TURBO),
+            "Low Quality Game Mode": int(DOTA_GameMode.DOTA_GAMEMODE_SD),
         }
 
         logger.info("DotaTalker ready — on-demand client per lobby")
