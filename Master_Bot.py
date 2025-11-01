@@ -1804,10 +1804,10 @@ class Master_Bot(commands.Bot):
                     # logger.info(f"Players: {players}")
                     radiant = [p for p in players if p["team"] == 0]
                     dire = [p for p in players if p["team"] == 1]
-                    for player in radiant:
-                        logging.info(f"Radiant player: {player}")
-                    for player in dire:
-                        logging.info(f"Dire Player: {player}")
+                    # for player in radiant:
+                    #     logging.info(f"Radiant player: {player}")
+                    # for player in dire:
+                    #     logging.info(f"Dire Player: {player}")
             except Exception as e:
                 logger.exception(f"Error scanning for unfinished matches: {e}")
 
@@ -1828,6 +1828,8 @@ class Master_Bot(commands.Bot):
                     await interaction.response.defer(thinking=True, ephemeral=True)
                 except Exception as e:
                     logger.exception(f"Error setting debug mode: {e}")
+
+
 
         @restart_bot.error
         @set_debug_mode.error

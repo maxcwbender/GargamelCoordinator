@@ -3,6 +3,13 @@ import sqlite3 from 'sqlite3';
 import express from 'express';
 import net from 'net';
 import { readFileSync } from 'fs';
+import pino from 'pino'
+const logger = pino({
+  transport: {
+    target: 'pino-pretty',
+    options: { colorize: true, translateTime: 'SYS:standard' },
+  },
+});
 
 let config = JSON.parse(readFileSync('./config.json'));
 
@@ -25,14 +32,14 @@ server.use((req, res, next) => {
 let db = new sqlite3.Database('allUsers.db');
 
 server.get('/', (request, response) => {
-    console.log('GET: ' + request.url);
-    console.log('------------------------------------------');
+    logger.info('GET: ' + request.url);
+    logger.info('------------------------------------------');
     return response.sendFile('index.html', { root: '.' });
 });
 
 server.put('/', async (req, res) => {
-    console.log('PUT: ' + JSON.stringify(req.body));
-    console.log('------------------------------------------');
+    logger.info('PUT: ' + JSON.stringify(req.body));
+    logger.info('------------------------------------------');
 
     const { tokenType, accessToken } = req.body;
 
@@ -54,7 +61,7 @@ server.put('/', async (req, res) => {
         const connections = await connRes.json();
 
         if (!user.id) {
-            console.error('Invalid Discord token or user not found');
+            logger.error('Invalid Discord token or user not found');
             return res.status(400).json({ result: 'Invalid Discord credentials' });
         }
 
@@ -83,52 +90,67 @@ server.put('/', async (req, res) => {
         `);
         await new Promise((resolve, reject) => {
             stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, err => {
-                if (err) console.error('DB upsert error:', err.message);
+                if (err) logger.error('DB upsert error:', err.message);
                 else resolve();
             });
         });
         stmt.finalize();
 
-        // Notify local pipe
+        Notify local pipe
         try {
             const socketPipe = new net.Socket();
             socketPipe.on('error', err => {
-                console.error('Pipe connection error:', err);
+                logger.error('Pipe connection error:', err);
             });
             socketPipe.connect(config.pipePort, '127.0.0.1', function () {
                 socketPipe.write(`${discordID}`);
                 socketPipe.end();
             });
         } catch (pipeErr) {
-            console.error('Pipe error:', pipeErr);
+            logger.error('Pipe error:', pipeErr);
         }
 
         // Add member to guild
-        fetch(`https://discord.com/api/guilds/${config.GUILD_ID}/members/${discordID}`, {
-            method: 'PUT',
-            body: JSON.stringify({ access_token: accessToken }),
-            headers: {
-                'Authorization': `Bot ${config.BOT_TOKEN}`,
-                'Content-Type': 'application/json',
-            },
-        }).then(res => {
-            if (!res.ok) {
-                return res.text().then(text => {
-                    console.error(`Failed to add user to guild: ${res.status} ${text}`);
-                });
-            } else {
-                console.log(`Successfully added ${discordID} to guild.`);
-            }
-        }).catch(err => {
-            console.error('Guild add error:', err);
-        });
+        try {
+            logger.info(
+              {
+                guildUrl: `https://discord.com/api/guilds/${config.GUILD_ID}/members/${discordID}`,
+                discordID,
+                guildID: config.GUILD_ID,
+              },
+              'Attempting to add user to guild'
+            );
+            const guildRes = await fetch(`https://discord.com/api/guilds/${config.GUILD_ID}/members/${discordID}`, {
+                method: 'PUT',
+                body: JSON.stringify({ access_token: accessToken }),
+                headers: {
+                    'Authorization': `Bot ${config.BOT_TOKEN}`,
+                    'Content-Type': 'application/json',
+                },
+            });
 
-        console.log(`Registered: ${discordID} with Steam ${steamName} (${steamID})`);
+            if (!guildRes.ok && guildRes.status !== 204) {
+                const errText = await guildRes.text();
+                logger.error(`Failed to add user to guild: ${guildRes.status} ${errText}`);
+                return res.status(400).json({
+                    result: `Failed to join guild: ${guildRes.status} - ${errText}`
+                });
+            }
+
+            logger.info(`Successfully added ${discordID} to guild.`);
+            return res.status(201).json({ result: steamName });
+
+        } catch (err) {
+            logger.error('Guild add error:', err);
+            return res.status(500).json({ result: 'Error adding user to guild' });
+        }
+
+        logger.info(`Registered: ${discordID} with Steam ${steamName} (${steamID})`);
         return res.status(201).json({ result: steamName });
     } catch (err) {
-        console.error('Unhandled server error:', err);
+        logger.error('Unhandled server error:', err);
         return res.status(500).json({ result: 'Server error occurred' });
     }
 });
 
-server.listen(3000, '0.0.0.0', () => console.log(`Server listening at http://localhost:3000`));
+server.listen(3000, '0.0.0.0', () => logger.info(`Server listening at http://localhost:3000`));
