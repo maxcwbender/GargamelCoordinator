@@ -81,7 +81,7 @@ server.put('/', async (req, res) => {
 
         if (!steamID) {
             logger.error("Returning 400: No Steam ID Linked")
-            return res.status(400).json({ result: 'No Steam ID linked to Discord. Please link and Try Again.' });
+            return res.status(400).json({ result: 'No Steam ID linked to Discord. Please link under \'Connections\' in Discord Settings and Try Again.' });
         }
 
         // Insert user into database
