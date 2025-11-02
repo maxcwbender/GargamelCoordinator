@@ -1929,6 +1929,8 @@ class Master_Bot(commands.Bot):
                 # DB.execute(
                 #     "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
                 # )
+            await interaction.followup.send(
+                "Match results updated.")
 
         @restart_bot.error
         @set_debug_mode.error
