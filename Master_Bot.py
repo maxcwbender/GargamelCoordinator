@@ -1878,6 +1878,11 @@ class Master_Bot(commands.Bot):
             radiant = [p for p in players if p["team"] == 0]
             dire = [p for p in players if p["team"] == 1]
 
+            if len(all_players) < 10:
+                logger.info("Not a full game.  Match Should be updated but rest of logic skipped.")
+                interaction.followup.send("Game wasn't real, less than 10 players. Setting winner to avoid filtering in the future.")
+                return
+
             logger.info(f"All Players: {players}")
             logger.info(f"Radiant: {radiant}")
             logger.info(f"Dire: {dire}")
