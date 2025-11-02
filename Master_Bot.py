@@ -1925,6 +1925,7 @@ class Master_Bot(commands.Bot):
             for i, pid in enumerate(dire):
                 new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
                 delta = new_rating - dire_ratings[i]
+                adjusted = pid["rating"] + delta
                 logger.info(f"Old Rating for Player: {pid} was {dire_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}. Current Rating: {pid["rating"]}. Adjusted: {adjusted}.")
 
                 #Hold DB Chnge until the math is correct.
