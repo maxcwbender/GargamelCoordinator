@@ -1850,10 +1850,12 @@ class Master_Bot(commands.Bot):
                               description="Update a match and all MMRs of players in the match to the new result historically.")
         @app_commands.checks.has_role("Mod")
         @app_commands.describe(
+            match_id="Game ID",
             winning_team="Radiant or Dire"
         )
         async def update_match_results(
                 interaction: discord.Interaction,
+                match_id: int,
                 winning_team: str
         ):
             if interaction and not interaction.response.is_done():
@@ -1862,7 +1864,52 @@ class Master_Bot(commands.Bot):
                 except Exception as e:
                     logger.exception(f"Error setting debug mode: {e}")
 
+            all_players = self.get_players_by_match_id(match[0])
+            columns = ["match_id", "discord_id", "steam_id", "rating", "team", "mmr", "role"]
+            players = [dict(zip(columns, p)) for p in all_players]
+            logger.info(f"Players: {players}")
+            radiant = [p for p in players if p["team"] == 0]
+            dire = [p for p in players if p["team"] == 1]
 
+            # Using Historical MMR, not current
+            radiant_ratings = [id["mmr"] for id in radiant]
+            dire_ratings = [id["mmr"] for id in dire]
+
+            # Calculate means
+            r_radiant = DB.power_mean(radiant_ratings, 5)
+            r_dire = DB.power_mean(dire_ratings, 5)
+
+            # Determine results
+            s_radiant = 1 if winning_team == "Radiant" else 0
+            s_dire = 1 - s_radiant
+
+            # ELO expected scores
+            e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
+            e_dire = 1 - e_radiant
+
+            k = self.config.get("ELO_K")  # Use config or default
+
+            # Update radiant ratings
+            for i, pid in enumerate(radiant):
+                new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
+                delta = new_rating - radiant_ratings[i]
+                logger.info(f"Old Rating for Player: {pid} was {radiant_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}")
+                # Hold DB change until the math is correct.
+                # Change rating by the delta
+                # DB.execute(
+                #     "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                # )
+
+            # Update dire ratings
+            for i, pid in enumerate(dire):
+                new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
+                delta = new_rating - dire_ratings[i]
+                logger.info(f"Old Rating for Player: {pid} was {dire_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}")
+                #Hold DB Chnge until the math is correct.
+                # Change rating by the delta.
+                # DB.execute(
+                #     "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                # )
 
         @restart_bot.error
         @set_debug_mode.error
