@@ -1870,7 +1870,7 @@ class Master_Bot(commands.Bot):
                     await interaction.response.defer(thinking=True, ephemeral=True)
                 except Exception as e:
                     logger.exception(f"Error setting debug mode: {e}")
-
+            team_value = 2 if winning_team.lower() == "Radiant" else 3 if winning_team.lower() == "Dire" else None
             all_players = self.get_players_by_match_id(match_id)
             columns = ["match_id", "discord_id", "steam_id", "rating", "team", "mmr", "role"]
             players = [dict(zip(columns, p)) for p in all_players]
@@ -1880,6 +1880,7 @@ class Master_Bot(commands.Bot):
 
             if len(all_players) < 10:
                 logger.info("Not a full game.  Match Should be updated but rest of logic skipped.")
+                DB.execute("UPDATE matches SET winning_team = ? WHERE match_id = ?", match_id)
                 await interaction.followup.send("Game wasn't real, less than 10 players. Setting winner to avoid filtering in the future.")
                 return
 
@@ -1912,7 +1913,8 @@ class Master_Bot(commands.Bot):
             for i, pid in enumerate(radiant):
                 new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
                 delta = new_rating - radiant_ratings[i]
-                logger.info(f"Old Rating for Player: {pid} was {radiant_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}")
+                adjusted = pid["rating"] + delta
+                logger.info(f"Old Rating for Player: {pid} was {radiant_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}. Current Rating: {pid["rating"]}. Adjusted: {adjusted}.")
                 # Hold DB change until the math is correct.
                 # Change rating by the delta
                 # DB.execute(
@@ -1923,7 +1925,8 @@ class Master_Bot(commands.Bot):
             for i, pid in enumerate(dire):
                 new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
                 delta = new_rating - dire_ratings[i]
-                logger.info(f"Old Rating for Player: {pid} was {dire_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}")
+                logger.info(f"Old Rating for Player: {pid} was {dire_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}. Current Rating: {pid["rating"]}. Adjusted: {adjusted}.")
+
                 #Hold DB Chnge until the math is correct.
                 # Change rating by the delta.
                 # DB.execute(
