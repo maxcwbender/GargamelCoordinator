@@ -1882,6 +1882,9 @@ class Master_Bot(commands.Bot):
             radiant_ratings = [id["mmr"] for id in radiant]
             dire_ratings = [id["mmr"] for id in dire]
 
+            logger.info(f"Radiant ratings: {radiant_ratings}")
+            logger.info(f"Dire ratings: {dire_ratings}")
+            
             # Calculate means
             r_radiant = DB.power_mean(radiant_ratings, 5)
             r_dire = DB.power_mean(dire_ratings, 5)
