@@ -1829,11 +1829,13 @@ class Master_Bot(commands.Bot):
             try:
 
                 unfinished = self.get_unfinished_matches()
+                matches = []
                 for match in unfinished:
                     logger.info(f"Match found: {match}")
                     all_players = self.get_players_by_match_id(match[0])
                     columns = ["match_id", "discord_id", "steam_id", "rating", "team", "mmr", "role"]
                     players = [dict(zip(columns, p)) for p in all_players]
+                    matches.append(match.match_id)
                     # logger.info(f"Players: {players}")
                     radiant = [p for p in players if p["team"] == 0]
                     dire = [p for p in players if p["team"] == 1]
@@ -1841,8 +1843,13 @@ class Master_Bot(commands.Bot):
                     #     logging.info(f"Radiant player: {player}")
                     # for player in dire:
                     #     logging.info(f"Dire Player: {player}")
+                await interaction.followup.send(
+                    f"List of matches without winners: {matches}", ephemeral=True
+                )
             except Exception as e:
                 logger.exception(f"Error scanning for unfinished matches: {e}")
+
+
 
 
 
@@ -1864,7 +1871,7 @@ class Master_Bot(commands.Bot):
                 except Exception as e:
                     logger.exception(f"Error setting debug mode: {e}")
 
-            all_players = self.get_players_by_match_id(match[0])
+            all_players = self.get_players_by_match_id(match_id)
             columns = ["match_id", "discord_id", "steam_id", "rating", "team", "mmr", "role"]
             players = [dict(zip(columns, p)) for p in all_players]
             logger.info(f"Players: {players}")
