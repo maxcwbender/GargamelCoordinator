@@ -1880,7 +1880,7 @@ class Master_Bot(commands.Bot):
 
             if len(all_players) < 10:
                 logger.info("Not a full game.  Match Should be updated but rest of logic skipped.")
-                interaction.followup.send("Game wasn't real, less than 10 players. Setting winner to avoid filtering in the future.")
+                await interaction.followup.send("Game wasn't real, less than 10 players. Setting winner to avoid filtering in the future.")
                 return
 
             logger.info(f"All Players: {players}")
