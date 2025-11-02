@@ -1878,13 +1878,17 @@ class Master_Bot(commands.Bot):
             radiant = [p for p in players if p["team"] == 0]
             dire = [p for p in players if p["team"] == 1]
 
+            logger.info(f"All Players: {players}")
+            logger.info(f"Radiant: {radiant}")
+            logger.info(f"Dire: {dire}")
+
             # Using Historical MMR, not current
             radiant_ratings = [id["mmr"] for id in radiant]
             dire_ratings = [id["mmr"] for id in dire]
 
             logger.info(f"Radiant ratings: {radiant_ratings}")
             logger.info(f"Dire ratings: {dire_ratings}")
-            
+
             # Calculate means
             r_radiant = DB.power_mean(radiant_ratings, 5)
             r_dire = DB.power_mean(dire_ratings, 5)
