@@ -1870,7 +1870,7 @@ class Master_Bot(commands.Bot):
                     await interaction.response.defer(thinking=True, ephemeral=True)
                 except Exception as e:
                     logger.exception(f"Error setting debug mode: {e}")
-            team_value = 2 if winning_team.lower() == "Radiant" else 3 if winning_team.lower() == "Dire" else None
+            team_value = 2 if winning_team.lower() == "radiant" else 3 if winning_team.lower() == "dire" else None
             all_players = self.get_players_by_match_id(match_id)
             columns = ["match_id", "discord_id", "steam_id", "rating", "team", "mmr", "role"]
             players = [dict(zip(columns, p)) for p in all_players]
@@ -1880,6 +1880,7 @@ class Master_Bot(commands.Bot):
 
             if len(all_players) < 10:
                 logger.info("Not a full game.  Match Should be updated but rest of logic skipped.")
+                logger.info(f"Updating match_id={match_id} with winning_team={team_value} ({winning_team.lower()})")
                 DB.execute("UPDATE matches SET winning_team = ? WHERE match_id = ?", (team_value, match_id))
                 await interaction.followup.send("Game wasn't real, less than 10 players. Setting winner to avoid filtering in the future.")
                 return
