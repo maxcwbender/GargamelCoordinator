@@ -1910,6 +1910,10 @@ class Master_Bot(commands.Bot):
 
             k = self.config.get("ELO_K")  # Use config or default
 
+            # Flagging winning team
+            logger.info(f"Updating match_id={match_id} with winning_team={team_value} ({winning_team.lower()})")
+            DB.execute("UPDATE matches SET winning_team = ? WHERE match_id = ?", (team_value, match_id))
+
             # Update radiant ratings
             for i, pid in enumerate(radiant):
                 new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
