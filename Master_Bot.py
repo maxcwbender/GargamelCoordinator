@@ -1916,11 +1916,12 @@ class Master_Bot(commands.Bot):
                 delta = new_rating - radiant_ratings[i]
                 adjusted = pid["rating"] + delta
                 logger.info(f"Old Rating for Player: {pid} was {radiant_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}. Current Rating: {pid["rating"]}. Adjusted: {adjusted}.")
+
                 # Hold DB change until the math is correct.
                 # Change rating by the delta
-                # DB.execute(
-                #     "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-                # )
+                DB.execute(
+                    "UPDATE users SET rating = ? WHERE discord_id = ?", (adjusted, pid["discord_id"])
+                )
 
             # Update dire ratings
             for i, pid in enumerate(dire):
@@ -1929,11 +1930,11 @@ class Master_Bot(commands.Bot):
                 adjusted = pid["rating"] + delta
                 logger.info(f"Old Rating for Player: {pid} was {dire_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}. Current Rating: {pid["rating"]}. Adjusted: {adjusted}.")
 
-                #Hold DB Chnge until the math is correct.
+                #Hold DB Change until the math is correct.
                 # Change rating by the delta.
-                # DB.execute(
-                #     "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-                # )
+                DB.execute(
+                    "UPDATE users SET rating = ? WHERE discord_id = ?", (adjusted, pid["discord_id"])
+                )
             await interaction.followup.send(
                 "Match results updated.")
 
