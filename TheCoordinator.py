@@ -4,7 +4,7 @@ import itertools
 import json
 import heapq
 from typing import List, Tuple, Set
-from DBFunctions import power_mean, unfun_score, fetch_rating
+from DBFunctions import power_mean, unfun_score, fetch_rating, fetch_steam_id
 import logging
 import time
 from datetime import datetime
@@ -130,7 +130,10 @@ class TheCoordinator:
             game_map[pid] = game_id
 
         # --- Step 5: Update Dota lobby teams ---
-        success = dota_talker.update_lobby_teams(game_id, radiant_users, dire_users)
+        radiant_steam = [fetch_steam_id(str(pid)) for pid in radiant_users]
+        dire_steam = [fetch_steam_id(str(pid)) for pid in dire_users]
+
+        success = dota_talker.update_lobby_teams(game_id, radiant_steam, dire_steam)
         if not success:
             logger.warning(f"[Coordinator] Failed to update Dota lobby for game {game_id}")
 
