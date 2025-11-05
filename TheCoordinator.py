@@ -132,7 +132,8 @@ class TheCoordinator:
         # --- Step 5: Update Dota lobby teams ---
         radiant_steam = [fetch_steam_id(str(pid)) for pid in radiant_users]
         dire_steam = [fetch_steam_id(str(pid)) for pid in dire_users]
-
+        logger.info(f"Radiant steam: {radiant_steam}")
+        logger.info(f"Dire steam: {dire_steam}")
         success = dota_talker.update_lobby_teams(game_id, radiant_steam, dire_steam)
         if not success:
             logger.warning(f"[Coordinator] Failed to update Dota lobby for game {game_id}")

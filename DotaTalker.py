@@ -421,6 +421,7 @@ class ClientWrapper:
         """Replace the intended team lists; if a lobby exists, kick mis-seated players to re-seat."""
         self.radiant = list(radiant)
         self.dire = list(dire)
+        logger.info(f"[Update_lobby_teams]: self.radiant: {self.radiant}, dire: {self.dire}")
 
         if self.dota and getattr(self.dota, "lobby", None):
             try:
