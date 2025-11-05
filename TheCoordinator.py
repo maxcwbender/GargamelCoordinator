@@ -6,6 +6,8 @@ import heapq
 from typing import List, Tuple, Set
 from DBFunctions import power_mean, unfun_score, fetch_rating
 import logging
+import time
+
 logger = logging.getLogger(__name__)
 
 with open("config.json") as configFile:
@@ -16,30 +18,44 @@ TEAM_SIZE = config["TEAM_SIZE"]
 
 class TheCoordinator:
     def __init__(self, discordBot, dota_talker):
-        self.queue = {}  # user -> (rating, priority)
+        # user_id -> (rating, join_time, random_tiebreaker)
+        self.queue = {}
         self.discordBot = discordBot
         self.dota_talker = dota_talker
 
+    # --- Queue Management ---
 
-    def in_queue(self, discord_id):
+    def in_queue(self, discord_id: int) -> bool:
         return discord_id in self.queue
 
     def add_player(self, user: int, rating: int) -> int:
+        """Add a player to the queue with their rating and join time."""
         if user not in self.queue:
-            self.queue[user] = (rating, random.random())
+            join_time = time.time()
+            self.queue[user] = (rating, join_time, random.random())
+            logger.info(f"[Coordinator] Added {user} to queue (rating={rating}, time={join_time})")
         return len(self.queue)
 
     def remove_player(self, user: int) -> bool:
-        return self.queue.pop(user, None) is not None
+        """Remove a player from the queue."""
+        removed = self.queue.pop(user, None) is not None
+        if removed:
+            logger.info(f"[Coordinator] Removed {user} from queue.")
+        return removed
 
     def get_queue(self) -> List[Tuple[int, int]]:
+        """Return a sorted list of (user_id, rating), oldest first."""
         return [
             (user, info[0])
-            for user, info in sorted(self.queue.items(), key=lambda x: -x[1][1])
+            for user, info in sorted(self.queue.items(), key=lambda x: (x[1][1], x[1][2]))
         ]
 
     def clear_queue(self):
+        """Clear all players from the queue."""
         self.queue.clear()
+        logger.info("[Coordinator] Queue cleared.")
+
+    # --- Game Logic ---
 
     async def balance_teams(self, game_id: int):
         """
@@ -131,28 +147,50 @@ class TheCoordinator:
         return True
 
     def make_game(self) -> Tuple[List[int], List[int], Set[int]]:
+        """Form two balanced teams using weighted fairness (older players have higher chance)."""
         if len(self.queue) < TEAM_SIZE * 2:
             raise ValueError("Not enough players to make a game.")
 
-        # Get top players by priority
-        top = sorted(self.queue.items(), key=lambda x: -x[1][1])[: TEAM_SIZE * 2]
-        users, user_infos = zip(*top)
-        ratings = [rating for rating, _ in user_infos]
+        now = time.time()
+        users = []
+        weights = []
 
-        
+        # --- Step 1: Calculate weights based on time waited ---
+        for user, (rating, join_time, rand) in self.queue.items():
+            wait_time = now - join_time
+            # Weight function: stronger bias for longer waits
+            weights.append(max(wait_time, 1.0) ** 2)
+            users.append(user)
+
+        # --- Step 2: Weighted random selection ---
+        chosen_users = random.choices(users, weights=weights, k=TEAM_SIZE * 2)
+
+        # Remove duplicates (choices() allows replacement)
+        chosen_users = list(dict.fromkeys(chosen_users))
+
+        # Fill remaining slots if duplicates reduced count
+        if len(chosen_users) < TEAM_SIZE * 2:
+            for u in users:
+                if u not in chosen_users:
+                    chosen_users.append(u)
+                if len(chosen_users) >= TEAM_SIZE * 2:
+                    break
+
+        ratings = [self.queue[u][0] for u in chosen_users]
+
+        # --- Step 3: Balance teams based on rating fairness ---
         heap: list[Tuple[int, list[int]]] = []  # stores (-diff, team1_indices)
 
         for team1_indices in itertools.combinations(range(TEAM_SIZE * 2), TEAM_SIZE):
             team1 = [ratings[i] for i in team1_indices]
             team2 = [ratings[i] for i in range(TEAM_SIZE * 2) if i not in team1_indices]
-            
+
             team1.sort()
             team2.sort()
 
             team1_rating = power_mean(team1)
             team2_rating = power_mean(team2)
             diff = abs(team1_rating - team2_rating)
-            
             badness = unfun_score(team1, team2, config["UNFUN_MOD"])
 
             heapq.heappush(heap, (-(badness + diff), team1_indices))
@@ -164,25 +202,21 @@ class TheCoordinator:
 
         selected_partition = random.choices(heap, weights=probs, k=1)[0][1]
 
-        team1_users = [users[i] for i in selected_partition]
-        team2_users = [users[i] for i in range(TEAM_SIZE * 2) if i not in selected_partition]
+        team1_users = [chosen_users[i] for i in selected_partition]
+        team2_users = [chosen_users[i] for i in range(TEAM_SIZE * 2) if i not in selected_partition]
 
-        # Remove players from the queue who were used
+        # --- Step 4: Remove selected players from queue ---
         for user in team1_users + team2_users:
             del self.queue[user]
 
-        cut_players = set()
-        # Increase priority of others
-        for user in self.queue:
-            rating, priority = self.queue[user]
-            self.queue[user] = (rating, priority + 1)
-            cut_players.add(user)
+        cut_players = set(self.queue.keys())
 
+        logger.info(f"[Coordinator] Formed game with weighted fairness. Cut players: {cut_players}")
         return team1_users, team2_users, cut_players
 
 
 if __name__ == "__main__":
-    coordinator = TheCoordinator()
+    coordinator = TheCoordinator(None, None)
 
     players = {}
 
@@ -191,25 +225,16 @@ if __name__ == "__main__":
         print(f"added player {str(i)} with skill {players[str(i)]}")
         coordinator.add_player(str(i), players[str(i)])
 
-    # ratings = [3017, 3958, 5762, 3998, 3043, 502, 4881, 5043, 4956, 1040]
-    # for i in range(len(ratings)):
-    #     players[str(i)] = ratings[i]
-    #     print(f"added player {str(i)} with skill {players[str(i)]}")
-    #     coordinator.add_player(str(i), players[str(i)])
-        
+    for player, (rating, join_time, rand) in coordinator.queue.items():
+        print(f"{player} : (rating={rating}, join_time={join_time}, rand={rand})")
 
-    for player, (rating, priority) in coordinator.queue.items():
-        print(f"{player} : ({rating, priority})")
-
-    (teamA, teamB, leftover) = coordinator.make_game()
+    teamA, teamB, leftover = coordinator.make_game()
     print(teamA)
     print(teamB)
-    teamA = [players[x] for x in teamA]
-    teamB = [players[x] for x in teamB]
-    teamA.sort()
-    teamB.sort()
-    print(teamA)
-    print(teamB)
-    print(f"teamA: {power_mean(teamA)}")
-    print(f"teamB: {power_mean(teamB)}")
-    print(f"unfun: {unfun_score(teamA, teamB, config["UNFUN_MOD"])}")
+    teamA_ratings = sorted(players[x] for x in teamA)
+    teamB_ratings = sorted(players[x] for x in teamB)
+    print(teamA_ratings)
+    print(teamB_ratings)
+    print(f"teamA: {power_mean(teamA_ratings)}")
+    print(f"teamB: {power_mean(teamB_ratings)}")
+    print(f"unfun: {unfun_score(teamA_ratings, teamB_ratings, config['UNFUN_MOD'])}")
