@@ -1646,7 +1646,7 @@ class Master_Bot(commands.Bot):
                 )
                 return
 
-            success = await self.coordinator.balance_teams(self,game_id)
+            success = await self.coordinator.balance_teams(game_id)
 
             if not success:
                 await interaction.followup.send(

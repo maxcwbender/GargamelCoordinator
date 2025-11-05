@@ -7,6 +7,7 @@ from typing import List, Tuple, Set
 from DBFunctions import power_mean, unfun_score, fetch_rating
 import logging
 import time
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,9 @@ class TheCoordinator:
         """Add a player to the queue with their rating and join time."""
         if user not in self.queue:
             join_time = time.time()
+            human_time = datetime.fromtimestamp(join_time).strftime("%Y-%m-%d %H:%M:%S")
             self.queue[user] = (rating, join_time, random.random())
-            logger.info(f"[Coordinator] Added {user} to queue (rating={rating}, time={join_time})")
+            logger.info(f"[Coordinator] Added {user} to queue (rating={rating}, time={human_time})")
         return len(self.queue)
 
     def remove_player(self, user: int) -> bool:
@@ -134,14 +136,15 @@ class TheCoordinator:
         if not success:
             logger.warning(f"[Coordinator] Failed to update Dota lobby for game {game_id}")
 
+        # Removed redundant message updating
         # --- Step 6: Update the Discord embed ---
-        message = lobby_messages.get(game_id)
-        if message:
-            embed = self.discordBot.build_game_embed(game_id)
-            await message.edit(embed=embed)
-            logger.info(f"[Coordinator] Updated Discord embed for rebalanced teams in game {game_id}")
-        else:
-            logger.warning(f"[Coordinator] No lobby message found for game {game_id}")
+        # message = lobby_messages.get(game_id)
+        # if message:
+        #     embed = self.discordBot.build_game_embed(game_id)
+        #     await message.edit(embed=embed)
+        #     logger.info(f"[Coordinator] Updated Discord embed for rebalanced teams in game {game_id}")
+        # else:
+        #     logger.warning(f"[Coordinator] No lobby message found for game {game_id}")
 
         logger.info(f"[Coordinator] Finished rebalancing teams for game {game_id}")
         return True
@@ -226,7 +229,8 @@ if __name__ == "__main__":
         coordinator.add_player(str(i), players[str(i)])
 
     for player, (rating, join_time, rand) in coordinator.queue.items():
-        print(f"{player} : (rating={rating}, join_time={join_time}, rand={rand})")
+        human_time = datetime.fromtimestamp(join_time).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{player} : (rating={rating}, join_time={human_time}, rand={rand})")
 
     teamA, teamB, leftover = coordinator.make_game()
     print(teamA)
