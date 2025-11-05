@@ -1646,6 +1646,21 @@ class Master_Bot(commands.Bot):
                 )
                 return
 
+            # Update coordinator’s in-memory game tracking
+            radiant_set, dire_set = self.game_map_inverse.get(game_id, (set(), set()))
+
+            if old_member.id in radiant_set:
+                radiant_set.remove(old_member.id)
+                radiant_set.add(new_member.id)
+            elif old_member.id in dire_set:
+                dire_set.remove(old_member.id)
+                dire_set.add(new_member.id)
+
+            # Update maps to reflect this
+            self.game_map_inverse[game_id] = (radiant_set, dire_set)
+            self.game_map.pop(old_member.id, None)
+            self.game_map[new_member.id] = game_id
+
             success = await self.coordinator.balance_teams(game_id)
 
             if not success:

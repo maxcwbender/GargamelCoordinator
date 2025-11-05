@@ -683,7 +683,7 @@ class ClientWrapper:
                                     (member.id in self.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
                                 correct += 1
                             logger.info(
-                                f"User found on team: {member.team} (SteamID: {member.id} Member.name: {member.name})")
+                                f"User found on team: {member.team} (SteamID: {sid32} Member.name: {member.name})")
 
                         if correct == len(self.radiant + self.dire):
                             if getattr(self, "polling_active", False):
