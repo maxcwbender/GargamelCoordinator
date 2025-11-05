@@ -14,8 +14,6 @@ logger = logging.getLogger(__name__)
 with open("config.json") as configFile:
     config: dict = json.load(configFile)
 
-TEAM_SIZE = config["TEAM_SIZE"]
-
 
 class TheCoordinator:
     def __init__(self, discordBot, dota_talker):
@@ -151,7 +149,7 @@ class TheCoordinator:
 
     def make_game(self) -> Tuple[List[int], List[int], Set[int]]:
         """Form two balanced teams using weighted fairness (older players have higher chance)."""
-        if len(self.queue) < TEAM_SIZE * 2:
+        if len(self.queue) < config["TEAM_SIZE"] * 2:
             raise ValueError("Not enough players to make a game.")
 
         now = time.time()
@@ -166,17 +164,17 @@ class TheCoordinator:
             users.append(user)
 
         # --- Step 2: Weighted random selection ---
-        chosen_users = random.choices(users, weights=weights, k=TEAM_SIZE * 2)
+        chosen_users = random.choices(users, weights=weights, k=config["TEAM_SIZE"] * 2)
 
         # Remove duplicates (choices() allows replacement)
         chosen_users = list(dict.fromkeys(chosen_users))
 
         # Fill remaining slots if duplicates reduced count
-        if len(chosen_users) < TEAM_SIZE * 2:
+        if len(chosen_users) < config["TEAM_SIZE"] * 2:
             for u in users:
                 if u not in chosen_users:
                     chosen_users.append(u)
-                if len(chosen_users) >= TEAM_SIZE * 2:
+                if len(chosen_users) >= config["TEAM_SIZE"] * 2:
                     break
 
         ratings = [self.queue[u][0] for u in chosen_users]
@@ -184,9 +182,9 @@ class TheCoordinator:
         # --- Step 3: Balance teams based on rating fairness ---
         heap: list[Tuple[int, list[int]]] = []  # stores (-diff, team1_indices)
 
-        for team1_indices in itertools.combinations(range(TEAM_SIZE * 2), TEAM_SIZE):
+        for team1_indices in itertools.combinations(range(config["TEAM_SIZE"] * 2), config["TEAM_SIZE"]):
             team1 = [ratings[i] for i in team1_indices]
-            team2 = [ratings[i] for i in range(TEAM_SIZE * 2) if i not in team1_indices]
+            team2 = [ratings[i] for i in range(config["TEAM_SIZE"] * 2) if i not in team1_indices]
 
             team1.sort()
             team2.sort()
@@ -206,7 +204,7 @@ class TheCoordinator:
         selected_partition = random.choices(heap, weights=probs, k=1)[0][1]
 
         team1_users = [chosen_users[i] for i in selected_partition]
-        team2_users = [chosen_users[i] for i in range(TEAM_SIZE * 2) if i not in selected_partition]
+        team2_users = [chosen_users[i] for i in range(config["TEAM_SIZE"] * 2) if i not in selected_partition]
 
         # --- Step 4: Remove selected players from queue ---
         for user in team1_users + team2_users:
@@ -223,7 +221,7 @@ if __name__ == "__main__":
 
     players = {}
 
-    for i in range(TEAM_SIZE * 2 * 2):
+    for i in range(config["TEAM_SIZE"] * 2 * 2):
         players[str(i)] = random.randint(1000, 6000)
         print(f"added player {str(i)} with skill {players[str(i)]}")
         coordinator.add_player(str(i), players[str(i)])
