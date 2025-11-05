@@ -161,8 +161,7 @@ class Master_Bot(commands.Bot):
                 logger.exception(f"Cleanup failed with exception: {e}")
 
         loop.create_task(shutdown_sequence())
-
-    async def clean_up_on_exit_helper(self):
+    async def clean_up_voice_channels(self):
         # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
         # clean them up and just assume it's fine.
         general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
@@ -172,28 +171,43 @@ class Master_Bot(commands.Bot):
 
         for channel in self.the_guild.voice_channels:
             if channel.name.startswith("Game"):
+                logger.info(f"Found Game channel: {channel.name}")
                 # Queue up move tasks for all members in the Game channel
                 for member in channel.members:
                     if member.voice and member.voice.channel == channel:
+                        logger.info(
+                            f"[clean_up_on_exit_helper] Moving Member: {member} from leftover voice channel added to queued tasks.")
                         move_tasks.append(member.move_to(general_channel))
 
                 # Queue up deletion of the Game channel
+                logger.info(f"[clean_up_on_exit_helper] Deleting channel:'{channel}' added to queued tasks.")
                 delete_tasks.append(channel.delete())
 
-        lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
-
         if move_tasks:
+            logger.info(
+                f"[clean_up_on_exit_helper] Running async task to move all players from leftover Game Voice channels.")
             await asyncio.gather(*move_tasks)
+
+
+        logger.info(
+            f"[clean_up_on_exit_helper] Running async task to delete leftover Game Voice channels.")
+        await asyncio.gather(*delete_tasks)
+
+    async def clean_up_on_exit_helper(self):
+        # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
+        # clean them up and just assume it's fine.
+
+        await self.clean_up_voice_channels()
+
+        lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
 
         if lobby_channel:
             purge_task = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"])).purge(
                 limit=100
             )
 
-            await asyncio.gather(*delete_tasks, purge_task)
+            await asyncio.gather(purge_task)
 
-        else:
-            await asyncio.gather(*delete_tasks)
 
         if hasattr(bot, "tcp_server") and bot.tcp_server:
             bot.tcp_server.close()
@@ -460,7 +474,7 @@ class Master_Bot(commands.Bot):
             self._lock = asyncio.Lock()
 
             # Build options, but keep select disabled until Start is pressed
-            options = [discord.SelectOption(label=n, value=n) for n in self.mode_name_to_enum.keys()]
+            options = self.build_mode_options()
             self.select = self.GameModeSelect(self, placeholder="Choose a game mode…", options=options)
             self.select.disabled = True
             self.add_item(self.select)
@@ -476,7 +490,25 @@ class Master_Bot(commands.Bot):
             return any(getattr(r, "name", None) == role_name for r in roles)
 
         def _options_in_order(self) -> list[str]:
-            return [opt.label for opt in self.select.options]
+            # Returns the list of values in the select options, so tally uses the correct keys
+            return [opt.value for opt in self.select.options]
+
+        def build_mode_options(self):
+            # Turns 'Single Draft' to 'Low Quality Game Mode' 10% of the time
+            easter_egg_active = random.random() < 0.10
+
+            options = []
+            for name in self.parent.dota_talker.mode_map.keys():
+                if name == "Low Quality Game Mode":
+                    continue
+                label = name
+
+                if easter_egg_active and name == "Single Draft":
+                    label = "Low Quality Game Mode"
+
+                options.append(discord.SelectOption(label=label, value=name))
+
+            return options
 
         # UI Components
         class GameModeSelect(discord.ui.Select):
@@ -694,8 +726,10 @@ class Master_Bot(commands.Bot):
             # Build results for embed
             options_in_order = self._options_in_order()
 
+            value_to_label = {opt.value: opt.label for opt in self.select.options}
+
             summary_lines_in = [
-                                   f"- {name}: **{tally_in.get(name, 0)}**"
+                                   f"- {value_to_label.get(name, name)}: **{tally_in.get(name, 0)}**"
                                    for name in options_in_order if tally_in.get(name, 0) > 0
                                ] or ["*No in-game votes*"]
             summary_in = "\n".join(summary_lines_in)
@@ -705,10 +739,13 @@ class Master_Bot(commands.Bot):
             summary_spec = ""
             if spectator_voted:
                 summary_lines_spec = [
-                    f"- {name}: **{tally_spec.get(name, 0)}**"
+                    f"- {value_to_label.get(name, name)}: **{tally_spec.get(name, 0)}**"
                     for name in options_in_order if tally_spec.get(name, 0) > 0
                 ]
                 summary_spec = "\n\n**Spectator votes:**\n" + "\n".join(summary_lines_spec)
+
+            # Build result text
+            winner_label = value_to_label.get(winner, winner) if winner else None
 
             # Update poll embed
             message = self.parent.lobby_messages.get(self.game_id)
@@ -719,10 +756,9 @@ class Master_Bot(commands.Bot):
 
                 result_text = (
                     f"**Poll closed ({'manually' if manual else 'automatically'}).**\n"
-                    f"{('Winner: **' + winner + '**' if winner else 'Mode unchanged.')}"
+                    f"{('Winner: **' + winner_label + '**' if winner else 'Mode unchanged.')}"
                     f"{(' — ' + reason) if reason else ''}\n\n"
-                    f"**In-game votes:**\n{summary_in}"
-                    f"{summary_spec}"  # only added if spectators voted
+                    f"**In-game votes:**\n{summary_in}{summary_spec}"
                 )
 
                 if idx is not None:
@@ -768,6 +804,7 @@ class Master_Bot(commands.Bot):
                     logger.exception(f"[Game {self.game_id}] Failed to send end-poll response: {e}")
 
         async def _update_poll_embed(self, interaction: discord.Interaction, transient_notice: str = ""):
+
             message = self.parent.lobby_messages.get(self.game_id)
             if not message:
                 try:
@@ -797,32 +834,33 @@ class Master_Bot(commands.Bot):
                     tally_spec[choice] = tally_spec.get(choice, 0) + 1
 
             options_in_order = self._options_in_order()
+            value_to_label = {opt.value: opt.label for opt in self.select.options}
 
             # Build in-game status
-            voted_in = [n for n in options_in_order if tally_in.get(n, 0) > 0]
-            top_in = sorted(voted_in, key=lambda n: (-tally_in[n], options_in_order.index(n)))[:3]
-            status_in = ", ".join(f"{n} ({tally_in[n]})" for n in top_in) or "No in-game votes yet"
+            voted_in = [val for val in options_in_order if tally_in.get(val, 0) > 0]
+            top_in = sorted(voted_in, key=lambda val: (-tally_in[val], options_in_order.index(val)))[:3]
+            status_in = ", ".join(
+                f"{value_to_label.get(val, val)} ({tally_in[val]})" for val in top_in) or "No in-game votes yet"
 
             # Build spectator status **only** if there are spectator votes
-            voted_spec = [n for n in options_in_order if tally_spec.get(n, 0) > 0]
+            voted_spec = [val for val in options_in_order if tally_spec.get(val, 0) > 0]
             status_spec = None
             if voted_spec:
-                top_spec = sorted(voted_spec, key=lambda n: (-tally_spec[n], options_in_order.index(n)))[:3]
-                status_spec = ", ".join(f"{n} ({tally_spec[n]})" for n in top_spec)
+                top_spec = sorted(voted_spec, key=lambda val: (-tally_spec[val], options_in_order.index(val)))[:3]
+                status_spec = ", ".join(f"{value_to_label.get(val, val)} ({tally_spec[val]})" for val in top_spec)
 
             embed = message.embeds[0]
             idx = next((i for i, f in enumerate(embed.fields) if f.name.startswith("🗳️ Game Mode Voting")), None)
+
             if idx is not None:
                 base = embed.fields[idx].value.split("\n\n")[0]
-                # Build new value
                 new_val = f"{base}\n\n**In-game votes:** {status_in}"
-                if status_spec is not None:
+                if status_spec:
                     new_val += f"\n**Spectator votes:** {status_spec}"
                 embed.set_field_at(idx, name=embed.fields[idx].name, value=new_val, inline=False)
             else:
-                # field not found: add new
                 new_val = f"**In-game votes:** {status_in}"
-                if status_spec is not None:
+                if status_spec:
                     new_val += f"\n**Spectator votes:** {status_spec}"
                 embed.add_field(name="🗳️ Game Mode Voting", value=new_val, inline=False)
 
@@ -1209,6 +1247,8 @@ class Master_Bot(commands.Bot):
         lobby_channel = self.get_channel(int(self.config["LOBBY_CHANNEL_ID"]))
         await lobby_channel.purge()
 
+        # Purging any leftover voice channels on boot, moving all members to General.
+        await self.clean_up_voice_channels()
         await self.update_queue_status_message(new_message=True)
 
         # --------------- #
@@ -1553,10 +1593,19 @@ class Master_Bot(commands.Bot):
 
             # Tearing down steam/dota client for game
             try:
-                self.dota_talker.teardown_lobby(game_id)
-                logger.info(f"[cancel_game] Torn down Dota client for canceled game {game_id}")
+                success = self.dota_talker.teardown_lobby(game_id)
+                if not success:
+                    logger.warning(f"[cancel_game] teardown_lobby() returned False for game {game_id}")
+                    channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+                    if channel:
+                        await channel.send(f"Game {game_id} teardown may have failed. Please verify manually.")
+                else:
+                    logger.info(f"[cancel_game] Torn down Dota client for canceled game {game_id}")
             except Exception:
-                logger.exception(f"[cancel_game] Failed to teardown Dota client for game {game_id}")
+                logger.exception(f"[cancel_game] Failed to teardown Dota client for game {game_id}: {e}")
+                channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+                if channel:
+                    await channel.send(f"Error while tearing down Game {game_id}: {e}")
 
             await interaction.followup.send(
                 f"Game {game_id} has been cancelled. ❌", ephemeral=True
@@ -1767,8 +1816,136 @@ class Master_Bot(commands.Bot):
             await interaction.followup.send(f"Success.  Gargamel Coordinator debug mode set to {debug_mode}. Restarting Coordinator", ephemeral=True)
             os.system("supervisorctl restart gargamel")
 
+        @app_commands.command(name="scan_for_unfinished_matches", description="Scan the database for unfinished matches and update accordingly")
+        @app_commands.checks.has_role("Mod")
+        async def scan_for_unfinished_matches(
+                interaction: discord.Interaction,
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error scanning for unfinished matches: {e}")
+            try:
+
+                unfinished = self.get_unfinished_matches()
+                matches = []
+                for match in unfinished:
+                    logger.info(f"Match found: {match}")
+                    all_players = self.get_players_by_match_id(match[0])
+                    columns = ["match_id", "discord_id", "steam_id", "rating", "team", "mmr", "role"]
+                    players = [dict(zip(columns, p)) for p in all_players]
+                    matches.append(match[0])
+                    # logger.info(f"Players: {players}")
+                    radiant = [p for p in players if p["team"] == 0]
+                    dire = [p for p in players if p["team"] == 1]
+                    # for player in radiant:
+                    #     logging.info(f"Radiant player: {player}")
+                    # for player in dire:
+                    #     logging.info(f"Dire Player: {player}")
+                await interaction.followup.send(
+                    f"List of matches without winners: {matches}", ephemeral=True
+                )
+            except Exception as e:
+                logger.exception(f"Error scanning for unfinished matches: {e}")
+
+
+
+
+
+        @app_commands.command(name="update_match_results",
+                              description="Update a match and all MMRs of players in the match to the new result historically.")
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(
+            match_id="Game ID",
+            winning_team="Radiant or Dire"
+        )
+        async def update_match_results(
+                interaction: discord.Interaction,
+                match_id: int,
+                winning_team: str
+        ):
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error setting debug mode: {e}")
+            team_value = 2 if winning_team.lower() == "radiant" else 3 if winning_team.lower() == "dire" else None
+            all_players = self.get_players_by_match_id(match_id)
+            columns = ["match_id", "discord_id", "steam_id", "rating", "team", "mmr", "role"]
+            players = [dict(zip(columns, p)) for p in all_players]
+            logger.info(f"Players: {players}")
+            radiant = [p for p in players if p["team"] == 0]
+            dire = [p for p in players if p["team"] == 1]
+
+            if len(all_players) < 10:
+                logger.info("Not a full game.  Match Should be updated but rest of logic skipped.")
+                logger.info(f"Updating match_id={match_id} with winning_team={team_value} ({winning_team.lower()})")
+                DB.execute("UPDATE matches SET winning_team = ? WHERE match_id = ?", (team_value, match_id))
+                await interaction.followup.send("Game wasn't real, less than 10 players. Setting winner to avoid filtering in the future.")
+                return
+
+            logger.info(f"All Players: {players}")
+            logger.info(f"Radiant: {radiant}")
+            logger.info(f"Dire: {dire}")
+
+            # Using Historical MMR, not current
+            radiant_ratings = [id["mmr"] for id in radiant]
+            dire_ratings = [id["mmr"] for id in dire]
+
+            logger.info(f"Radiant ratings: {radiant_ratings}")
+            logger.info(f"Dire ratings: {dire_ratings}")
+
+            # Calculate means
+            r_radiant = DB.power_mean(radiant_ratings, 5)
+            r_dire = DB.power_mean(dire_ratings, 5)
+
+            # Determine results
+            s_radiant = 1 if winning_team == "Radiant" else 0
+            s_dire = 1 - s_radiant
+
+            # ELO expected scores
+            e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
+            e_dire = 1 - e_radiant
+
+            k = self.config.get("ELO_K")  # Use config or default
+
+            # Flagging winning team
+            logger.info(f"Updating match_id={match_id} with winning_team={team_value} ({winning_team.lower()})")
+            DB.execute("UPDATE matches SET winning_team = ? WHERE match_id = ?", (team_value, match_id))
+
+            # Update radiant ratings
+            for i, pid in enumerate(radiant):
+                new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
+                delta = new_rating - radiant_ratings[i]
+                adjusted = pid["rating"] + delta
+                logger.info(f"Old Rating for Player: {pid} was {radiant_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}. Current Rating: {pid["rating"]}. Adjusted: {adjusted}.")
+
+                # Hold DB change until the math is correct.
+                # Change rating by the delta
+                DB.execute(
+                    "UPDATE users SET rating = ? WHERE discord_id = ?", (adjusted, pid["discord_id"])
+                )
+
+            # Update dire ratings
+            for i, pid in enumerate(dire):
+                new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
+                delta = new_rating - dire_ratings[i]
+                adjusted = pid["rating"] + delta
+                logger.info(f"Old Rating for Player: {pid} was {dire_ratings[i]}.  New rating would be: {new_rating}. Delta: {delta}. Current Rating: {pid["rating"]}. Adjusted: {adjusted}.")
+
+                #Hold DB Change until the math is correct.
+                # Change rating by the delta.
+                DB.execute(
+                    "UPDATE users SET rating = ? WHERE discord_id = ?", (adjusted, pid["discord_id"])
+                )
+            await interaction.followup.send(
+                "Match results updated.")
+
         @restart_bot.error
         @set_debug_mode.error
+        @scan_for_unfinished_matches.error
+        @update_match_results.error
         async def permissions_error(interaction: discord.Interaction, error):
             if isinstance(error, app_commands.MissingRole):
                 await interaction.response.send_message(
@@ -1795,10 +1972,12 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(check_mmr)
         self.tree.add_command(restart_bot)
         self.tree.add_command(set_debug_mode)
+        self.tree.add_command(scan_for_unfinished_matches)
+        self.tree.add_command(update_match_results)
 
-        if not self.config["DEBUG_MODE"]:
-            await self.tree.sync()  # Clears global commands from Discord
-            await self.tree.sync(guild=self.the_guild)
+        # if not self.config["DEBUG_MODE"]:
+        await self.tree.sync()  # Clears global commands from Discord
+        await self.tree.sync(guild=self.the_guild)
 
     async def on_game_started(self, game_id, game_info):
 
@@ -1885,47 +2064,51 @@ class Master_Bot(commands.Bot):
             await self.clear_game(game_id)
 
             # Retrieve player ratings
-            radiant_ratings = [DB.fetch_rating(id) for id in radiant]
-            dire_ratings = [DB.fetch_rating(id) for id in dire]
+            if not self.config["DEBUG_MODE"]:
+                radiant_ratings = [DB.fetch_rating(id) for id in radiant]
+                dire_ratings = [DB.fetch_rating(id) for id in dire]
 
-            # Calculate means
-            r_radiant = DB.power_mean(radiant_ratings, 5)
-            r_dire = DB.power_mean(dire_ratings, 5)
+                # Calculate means
+                r_radiant = DB.power_mean(radiant_ratings, 5)
+                r_dire = DB.power_mean(dire_ratings, 5)
 
-            # Determine results
-            s_radiant = 1 if game_info.match_outcome == 2 else 0
-            s_dire = 1 - s_radiant
+                # Determine results
+                s_radiant = 1 if game_info.match_outcome == 2 else 0
+                s_dire = 1 - s_radiant
 
-            # ELO expected scores
-            e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
-            e_dire = 1 - e_radiant
+                # ELO expected scores
+                e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
+                e_dire = 1 - e_radiant
 
-            k = self.config.get("ELO_K")  # Use config or default
+                k = self.config.get("ELO_K")  # Use config or default
 
-            # Update radiant ratings
-            for i, pid in enumerate(radiant):
-                new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
-                DB.execute(
-                    "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-                )
+                # Update radiant ratings
+                for i, pid in enumerate(radiant):
+                    new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
+                    DB.execute(
+                        "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                    )
 
-            # Update dire ratings
-            for i, pid in enumerate(dire):
-                new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
-                DB.execute(
-                    "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
-                )
+                # Update dire ratings
+                for i, pid in enumerate(dire):
+                    new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
+                    DB.execute(
+                        "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                    )
 
-            # Adding cute little emoji reaction to match card for the winner
-            try:
+                # Adding cute little emoji reaction to match card for the winner
+                try:
+                    lobby_msg = self.lobby_messages.get(game_id)
+                    if s_radiant:
+                        await lobby_msg.add_reaction("🌞")
+                    else:
+                        await lobby_msg.add_reaction("🌚")
+                except Exception as e:
+                    logger.exception(f"Failed to react to lobby message with winner with error: {e}")
+            else:
+                # Debug mode, react with Robot Emoji
                 lobby_msg = self.lobby_messages.get(game_id)
-                if s_radiant:
-                    await lobby_msg.add_reaction("🌞")
-                else:
-                    await lobby_msg.add_reaction("🌚")
-            except Exception as e:
-                logger.exception(f"Failed to react to lobby message with winner with error: {e}")
-
+                await lobby_msg.add_reaction(":BrokenRobot:1394750222940377218")
         except Exception as e:
             logger.exception(f"Error updating users table with ratings with err: {e}")
 
@@ -1944,10 +2127,19 @@ class Master_Bot(commands.Bot):
 
         # Teardown Steam/Dota client for this match
         try:
-            self.dota_talker.teardown_lobby(game_id)
-            logger.info(f"[on_game_ended] Torn down Dota client for game {game_id}")
-        except Exception:
-            logger.exception(f"[on_game_ended] Failed to teardown Dota client for game {game_id}")
+            success = self.dota_talker.teardown_lobby(game_id)
+            if not success:
+                logger.warning(f"[on_game_ended] teardown_lobby() returned False for game {game_id}")
+                channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+                if channel:
+                    await channel.send(f"Game {game_id} teardown may have failed. Please verify manually.")
+            else:
+                logger.info(f"[on_game_ended] Torn down Dota client for game {game_id}")
+        except Exception as e:
+            logger.exception(f"[on_game_ended] Failed to teardown Dota client for game {game_id}: {e}")
+            channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+            if channel:
+                await channel.send(f"Exception while tearing down Game {game_id}: {e}")
 
 
     async def clear_game(self, game_id: int):
@@ -1957,42 +2149,48 @@ class Master_Bot(commands.Bot):
         Args:
             game_id (int): The ID of the game to cancel.
         """
-
-        radiant, dire = self.game_map_inverse[game_id]
-        del self.game_map_inverse[game_id]
-
-        for player in radiant:
-            del self.game_map[player]
-        for player in dire:
-            del self.game_map[player]
-
-        players = self.game_map_inverse.get(game_id, set())
-        self.game_map_inverse.pop(game_id, None)
-
-        for player in players:
-            self.game_map.pop(player, None)
-
-        radiant_channel, dire_channel = self.game_channels.pop(game_id)
         try:
+            radiant, dire = self.game_map_inverse[game_id]
+            del self.game_map_inverse[game_id]
+
+            for player in radiant:
+                del self.game_map[player]
+            for player in dire:
+                del self.game_map[player]
+
+            players = self.game_map_inverse.get(game_id, set())
+            self.game_map_inverse.pop(game_id, None)
+
+            for player in players:
+                self.game_map.pop(player, None)
+
+            radiant_channel, dire_channel = self.game_channels.pop(game_id)
+
             target_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
             all_members = radiant_channel.members + dire_channel.members
+            move_tasks = []
             for member in all_members:
                 logger.info(
-                    f"{member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
-            move_tasks = [
-                member.move_to(target_channel)
-                for member in all_members
-                if member.voice and member.voice.channel != target_channel
-            ]
+                    f"[Game {game_id}] {member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
+                if not member.voice or not member.voice.channel:
+                    continue
+                if member.voice.channel.id == target_channel.id:
+                    continue
 
-            await asyncio.gather(*move_tasks)
+                try:
+                    move_tasks.append(member.move_to(target_channel))
+                except Exception as e:
+                    logger.exception(f"Failed to move {member.display_name} to {target_channel.name}: {e}")
+
+            await asyncio.gather(*move_tasks, return_exceptions=True)
             await asyncio.gather(
                 radiant_channel.delete(),
-                dire_channel.delete()
+                dire_channel.delete(),
+                return_exceptions=True
             )
 
-        except Exception as _:
-            logger.exception(f"Unexpected Exception: ")
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Error clearing game: ", e)
 
 
     async def on_steam_id_found(self, discord_id: int):
@@ -2016,6 +2214,35 @@ class Master_Bot(commands.Bot):
         if modsRemaining > 0:
             mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
             await mod_chan.send(f"<@{discord_id}> joined registration queue!")
+
+    def get_players_by_match_id(self, match_id: int):
+        """
+        Retrieve all players (and their user info) for a given match_id.
+
+        Args:
+            match_id (int): The match ID to look up.
+
+        Returns:
+            list[tuple]: All rows of players with their joined user data.
+        """
+        query = """
+            SELECT
+                mp.match_id,
+                mp.discord_id,
+                u.steam_id,
+                u.rating,
+                mp.team,
+                mp.mmr,
+                mp.role
+            FROM match_players AS mp
+            JOIN users AS u ON mp.discord_id = u.discord_id
+            WHERE mp.match_id = ?;
+        """
+        return DB.fetch_all(query, (match_id,))
+
+    def get_unfinished_matches(self) -> list[tuple]:
+        query = "SELECT * FROM matches WHERE winning_team IS NULL;"
+        return DB.fetch_all(query)
 
     def get_next_game_id(self):
         try:
@@ -2045,6 +2272,19 @@ class Master_Bot(commands.Bot):
 
         game_id = self.get_next_game_id()
         self.pending_matches.add(game_id)
+
+        password = await self.dota_talker.make_game(game_id, radiant, dire)
+        if password == "-1":
+            logger.error(f"[Game {game_id}] Failed to create Dota lobby. Aborting Discord setup.")
+
+            channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+            if channel:
+                await channel.send(f" **Game {game_id} failed to start.** Please re-queue for the next match.")
+            else:
+                logger.warning(f"[Game {game_id}] MATCH_CHANNEL_ID not found, could not notify players.")
+
+            self.pending_matches.discard(game_id)
+            return None  # or return False to signal caller
 
         create_tasks = [
             self.the_guild.create_voice_channel(f"Game {game_id} — Radiant"),
@@ -2106,7 +2346,7 @@ class Master_Bot(commands.Bot):
 
         self.game_channels[game_id] = (radiant_channel, dire_channel)
 
-        password = await self.dota_talker.make_game(game_id, radiant, dire)
+        # password = await self.dota_talker.make_game(game_id, radiant, dire)
 
         embed = self.build_game_embed(game_id, radiant, dire, password)
 

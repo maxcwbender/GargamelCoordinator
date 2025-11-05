@@ -304,6 +304,38 @@ class ClientWrapper:
 
         return filtered
 
+    # def _lobby_still_exists() -> bool:
+    #     """
+    #     Returns True if our current practice lobby is visible in GC's list.
+    #     Uses the lobby password (unique per game for you) to narrow the search.
+    #     """
+    #     try:
+    #         my = getattr(self.dota, "lobby", None)
+    #         my_id = getattr(my, "lobby_id", None)
+    #     except Exception:
+    #         my_id = None
+    #
+    #     pw = getattr(client, "password", "") or ""
+    #     try:
+    #         entries = client.get_practice_lobby_list(password=pw) or []
+    #     except Exception as e:
+    #         logger.error(f"[Game {game_id}] Error requesting lobby list: {e}")
+    #         return False
+    #
+    #     if not my_id:
+    #         # If we don't have a lobby_id locally, treat as missing.
+    #         return False
+    #
+    #     for entry in entries:
+    #         # Be tolerant of structure differences
+    #         lid = getattr(entry, "lobby_id", None)
+    #         if lid is None:
+    #             lid = getattr(entry, "id", None)
+    #         if lid == my_id:
+    #             logger.info(f"{prefix} Refreshed lobby list: found={lid}, my_lobby_id={my_id}")
+    #             return True
+    #     return False
+
     async def change_lobby_mode(self, game_mode: int) -> None:
         """Change lobby game mode without blocking the asyncio loop."""
         if not self.dota:
@@ -460,8 +492,74 @@ class ClientWrapper:
                     if rel == EFriendRelationship.RequestRecipient:
                         steam.friends.add(sid)
                         # If lobby exists, auto-invite
-                        if dota.gameID and sid in (set(self.radiant) | set(self.dire)):
-                            dota.invite_to_lobby(sid)
+                        # This is causing one source of duplicate invites, I believe
+                        # if dota.gameID and sid in (set(self.radiant) | set(self.dire)):
+                        #     dota.invite_to_lobby(sid)
+
+            @steam.on("disconnected")
+            def _on_steam_disconnected():
+
+                if self._stop_evt.is_set():
+                    self.logger.info(f"[Game {self.game_id}] Steam disconnected intentionally (shutdown in progress).")
+                    return
+
+                """Triggered when Steam socket drops entirely."""
+                self.logger.info(f"[Game {self.game_id}] Steam disconnected — attempting reconnect.")
+                gevent.spawn(_attempt_steam_reconnect)
+
+            @steam.on("reconnect")
+            def _reconnect(delay):
+                self.logger.info(f"[Game {self.game_id}] Steam scheduling reconnect in {delay}s")
+
+            @steam.on("connected")
+            def _connected():
+                self.logger.info(f"[Client {self.game_id}] Steam TCP connected")
+
+            def _attempt_steam_reconnect(self, max_retries: int = 3):
+                """Reconnect to Steam CM if underlying connection drops."""
+                for attempt in range(1, max_retries + 1):
+                    if self._stop_evt.is_set():
+                        return
+                    try:
+                        if self.steam:
+                            self.logger.info(
+                                f"[Game {self.game_id}] Reconnecting to Steam (attempt {attempt}/{max_retries})...")
+                            self.steam.reconnect(maxdelay=15)
+                            return
+                    except Exception as e:
+                        self.logger.exception(f"[Game {self.game_id}] Steam reconnect attempt {attempt} failed: {e}")
+                    if self._stop_evt.wait(15 * attempt):
+                        break
+                self.logger.error(f"[Game {self.game_id}] Failed to reconnect to Steam after {max_retries} attempts.")
+
+            def _attempt_gc_reconnect(self, max_retries: int = 5):
+                """Try to relaunch the Dota GC session if it goes notready."""
+                for attempt in range(1, max_retries + 1):
+                    if self._stop_evt.is_set():
+                        return
+                    try:
+                        if self.dota:
+                            self.logger.info(
+                                f"[Game {self.game_id}] Reconnecting to GC (attempt {attempt}/{max_retries})...")
+                            self.dota.launch()
+                            return  # If launch succeeds, stop trying
+                    except Exception as e:
+                        self.logger.exception(f"[Game {self.game_id}] GC reconnect attempt {attempt} failed: {e}")
+                    # Backoff before retry
+                    if self._stop_evt.wait(10 * attempt):
+                        break
+                self.logger.error(f"[Game {self.game_id}] Failed to reconnect to GC after {max_retries} attempts.")
+
+            @dota.on("notready")
+            def _on_gc_notready():
+                if self._stop_evt.is_set():
+                    self.logger.info(f"[Game {self.game_id}] Dota client disconnected intentionally (shutdown in progress).")
+                    return
+
+                """Triggered when GC session drops but Steam remains connected."""
+                self.logger.info(f"[Game {self.game_id}] Dota GC became NOT READY — attempting reconnect.")
+                gevent.spawn(_attempt_gc_reconnect)
+
 
             @dota.on("ready")
             def _on_dota_ready():
@@ -474,6 +572,28 @@ class ClientWrapper:
                 finally:
                     self._ready_evt.set()
 
+                # --- GC KEEPALIVE LOOP ---
+                def _gc_keepalive_loop():
+                    """Ping the Game Coordinator every 60s to prevent idle disconnects."""
+                    while not self._stop_evt.is_set():
+                        try:
+                            # send a harmless protobuf to GC to keep session alive
+                            dota.request_profile_card(steam.steam_id.as_32)
+                            self.logger.debug(f"[Game {self.game_id}] GC heartbeat sent.")
+                        except Exception as e:
+                            self.logger.exception(f"[Game {self.game_id}] GC heartbeat failed: {e}")
+                        # wait 60 seconds or exit early if stop flag is set
+                        if self._stop_evt.wait(60):
+                            break
+
+                self._keepalive_thread = threading.Thread(
+                    target=_gc_keepalive_loop,
+                    name=f"gc-keepalive-{self.game_id}",
+                    daemon=True,
+                )
+                self._keepalive_thread.start()
+                self.logger.info(f"[Game {self.game_id}] GC heartbeat thread started. Heartbeat messages visible on debug logging level only.")
+
             @dota.steam.on("persona_state")
             def _persona_update(persona):
                 # lightweight visibility; avoid heavy logging spam
@@ -484,6 +604,8 @@ class ClientWrapper:
                 # Invite all designated players
                 # self._setup_chat()
 
+                # Remove this if it's a problem
+                self.dota.lobby = lobby
                 for sid in (self.radiant + self.dire):
                     try:
                         if sid not in steam.friends:
@@ -580,9 +702,14 @@ class ClientWrapper:
                             )
                         finally:
                             try:
+                                self._stop_evt.set()
+                                if getattr(self, "_keepalive_thread", None):
+                                    self.logger.info(
+                                        f"[Game {self.game_id}] Stopping GC keepalive thread after game end.")
+                                    self._keepalive_thread.join(timeout=5)
                                 dota.leave_practice_lobby()
-                            except Exception:
-                                pass
+                            except Exception as err:
+                                logger.exception(f"[Game {self.game_id}] Error in POSTGAME Processing: {err}")
                             # allow outer manager to recycle account
                             self._stop_evt.set()
                 except Exception:
@@ -617,6 +744,10 @@ class ClientWrapper:
         """
         Called via asyncio.to_thread. Runs on wrapper thread. Creates the lobby.
         """
+        if getattr(self.dota, "lobby", None):
+            self.logger.warning(f"[Game {self.game_id}] Lobby already exists — skipping create.")
+            return
+
         if not self.dota:
             raise RuntimeError("Dota client not initialized")
         # configure default options
@@ -661,9 +792,9 @@ class DotaTalker:
         self.mode_map = {
             # "All Pick": int(DOTA_GameMode.DOTA_GAMEMODE_AP),
             "Ranked All Pick": int(DOTA_GameMode.DOTA_GAMEMODE_ALL_DRAFT),  # 22
-            "Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_CM),
             "Random Draft": int(DOTA_GameMode.DOTA_GAMEMODE_RD),
             "Single Draft": int(DOTA_GameMode.DOTA_GAMEMODE_SD),
+            "Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_CM),
             "All Random": int(DOTA_GameMode.DOTA_GAMEMODE_AR),
             # "Reverse Captains Mode": int(DOTA_GameMode.DOTA_GAMEMODE_REVERSE_CM),
             # "Mid Only": int(DOTA_GameMode.DOTA_GAMEMODE_MO),
@@ -672,6 +803,7 @@ class DotaTalker:
             # "Ability Draft": int(DOTA_GameMode.DOTA_GAMEMODE_ABILITY_DRAFT),
             # "All Random Deathmatch": int(DOTA_GameMode.DOTA_GAMEMODE_ARDM),
             # "Turbo": int(DOTA_GameMode.DOTA_GAMEMODE_TURBO),
+            "Low Quality Game Mode": int(DOTA_GameMode.DOTA_GAMEMODE_SD),
         }
 
         logger.info("DotaTalker ready — on-demand client per lobby")
@@ -691,6 +823,10 @@ class DotaTalker:
         Async: spins up a per-lobby client (in a thread), waits for 'ready',
         creates the lobby, and returns the lobby password.
         """
+        if gameID in self.lobby_clients:
+            logger.warning(f"[Game {gameID}] Wrapper already exists — skipping duplicate make_game() call.")
+            return self.lobby_clients[gameID].password
+
         radiant_steam_ids = [DB.fetch_steam_id(did) for did in radiant_discord_ids]
         dire_steam_ids = [DB.fetch_steam_id(did) for did in dire_discord_ids]
 
@@ -731,13 +867,27 @@ class DotaTalker:
 
     def teardown_lobby(self, game_id: int):
         wrapper = getattr(self, "lobby_clients", {}).pop(game_id, None)
-        if wrapper:
-            acct = getattr(wrapper, "account_index", None)
-            try:
-                wrapper.shutdown()
-            finally:
-                if hasattr(self, "_release_account") and acct is not None:
+
+        if not wrapper:
+            logger.warning(f"[teardown_lobby] No active lobby wrapper found for game {game_id}")
+            return True
+
+        acct = getattr(wrapper, "account_index", None)
+        try:
+            wrapper.shutdown()
+            logger.info(f"[teardown_lobby] Successfully tore down Dota client for game {game_id}")
+        except Exception as e:
+            logger.exception(f"[teardown_lobby] Exception while tearing down wrapper for game {game_id}: {e}")
+            return False
+        finally:
+            if hasattr(self, "_release_account") and acct is not None:
+                try:
                     self._release_account(acct)
+                    logger.debug(f"[teardown_lobby] Released account index {acct} for game {game_id}")
+                except Exception as e:
+                    logger.exception(f"[teardown_lobby] Failed to release account {acct} for game {game_id}: {e}")
+                    return False
+        return True
 
     def get_password(self, game_id: int) -> str:
         wrapper = self.lobby_clients.get(game_id)
