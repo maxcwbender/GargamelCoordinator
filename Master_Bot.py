@@ -74,7 +74,7 @@ class Master_Bot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
         self.con = sqlite3.connect("allUsers.db")
-        self.coordinator = TC.TheCoordinator()
+
 
         self.the_guild: discord.Guild = None
         self.game_channels: dict[
@@ -86,6 +86,7 @@ class Master_Bot(commands.Bot):
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
         self.dota_talker: DotaTalker.DotaTalker = None
+        self.coordinator = TC.TheCoordinator(self, self.dota_talker)
         self.pending_matches = set()
         self.ready_check_lock = asyncio.Lock()
         self.ready_check_status = False
@@ -1641,6 +1642,15 @@ class Master_Bot(commands.Bot):
             if not success:
                 await interaction.followup.send(
                     f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>.",
+                    ephemeral=True,
+                )
+                return
+
+            success = await self.coordinator.balance_teams(self,game_id)
+
+            if not success:
+                await interaction.followup.send(
+                    f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>. Issue Balancing Teams after replace.",
                     ephemeral=True,
                 )
                 return
