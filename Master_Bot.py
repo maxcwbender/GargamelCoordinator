@@ -1180,10 +1180,10 @@ class Master_Bot(commands.Bot):
         Only exits when player count drops below threshold.
         """
         try:
-            while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
+            while len(self.coordinator.queue) >= config["TEAM_SIZE"] * 2:
                 await asyncio.sleep(seconds)
 
-                if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
+                if len(self.coordinator.queue) < config["TEAM_SIZE"] * 2:
                     await self.update_queue_status_message(
                         new_message=True,
                         content="Not enough players anymore. Game cancelled. ❌"
@@ -1197,7 +1197,7 @@ class Master_Bot(commands.Bot):
 
                 await self.make_game(radiant, dire, cut_players)
 
-                if len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
+                if len(self.coordinator.queue) >= config["TEAM_SIZE"] * 2:
                     await self.update_queue_status_message(
                         content="@here Still enough players! Starting another game in **15 seconds** ⏳"
                     )
@@ -1473,7 +1473,7 @@ class Master_Bot(commands.Bot):
             Args:
                 interaction (discord.Interaction): The command invoker.
             """
-            if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
+            if len(self.coordinator.queue) < config["TEAM_SIZE"] * 2:
                 return await interaction.response.send_message(
                     "Not enough players to start a game.", ephemeral=True
                 )
