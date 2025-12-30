@@ -421,16 +421,25 @@ class ClientWrapper:
         """Replace the intended team lists; if a lobby exists, kick mis-seated players to re-seat."""
         self.radiant = list(radiant)
         self.dire = list(dire)
+        logger.info(f"[Update_lobby_teams]: self.radiant: {self.radiant}, dire: {self.dire}")
 
         if self.dota and getattr(self.dota, "lobby", None):
             try:
                 # kick anyone currently in teams but not in our intended lists to force re-seat
                 for m in getattr(self.dota.lobby, "all_members", []):
                     sid64 = m.id
-                    on_team = m.team in (DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS)
-                    should_be = (sid64 in self.radiant) or (sid64 in self.dire)
-                    if on_team and not should_be:
+
+                    if sid64 not in self.radiant and m.team == DOTA_GC_TEAM_GOOD_GUYS:
                         self.dota.practice_lobby_kick_from_team(SteamID(sid64).as_32)
+                        logger.info(f"[Game ID {self.game_id}] {m.id}: wrong team (should not be Radiant)")
+                    if sid64 not in self.dire and m.team == DOTA_GC_TEAM_BAD_GUYS:
+                        self.dota.practice_lobby_kick_from_team(SteamID(sid64).as_32)
+                        logger.info(f"[Game ID {self.game_id}] {m.id}: wrong team (should not be Dire)")
+                    if sid64 not in self.radiant and sid64 not in self.dire and \
+                            m.team in (DOTA_GC_TEAM_GOOD_GUYS, DOTA_GC_TEAM_BAD_GUYS):
+                        self.dota.practice_lobby_kick_from_team(SteamID(sid64).as_32)
+                        logger.info(f"[Game {self.game_id}] {m.id}: not in either team, kicked.")
+
             except Exception:
                 self.logger.exception(f"[Game {self.game_id}] update_lobby_teams kick failed")
         return True
@@ -682,7 +691,7 @@ class ClientWrapper:
                                     (member.id in self.dire and member.team == DOTA_GC_TEAM_BAD_GUYS):
                                 correct += 1
                             logger.info(
-                                f"User found on team: {member.team} (SteamID: {member.id} Member.name: {member.name})")
+                                f"User found on team: {member.team} (SteamID: {sid32} Member.name: {member.name})")
 
                         if correct == len(self.radiant + self.dire):
                             if getattr(self, "polling_active", False):

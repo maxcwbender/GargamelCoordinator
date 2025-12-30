@@ -74,7 +74,7 @@ class Master_Bot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
         self.con = sqlite3.connect("allUsers.db")
-        self.coordinator = TC.TheCoordinator()
+
 
         self.the_guild: discord.Guild = None
         self.game_channels: dict[
@@ -86,6 +86,7 @@ class Master_Bot(commands.Bot):
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
         self.dota_talker: DotaTalker.DotaTalker = None
+        self.coordinator = TC.TheCoordinator(self, self.dota_talker)
         self.pending_matches = set()
         self.ready_check_lock = asyncio.Lock()
         self.ready_check_status = False
@@ -1179,10 +1180,10 @@ class Master_Bot(commands.Bot):
         Only exits when player count drops below threshold.
         """
         try:
-            while len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
+            while len(self.coordinator.queue) >= self.config["TEAM_SIZE"] * 2:
                 await asyncio.sleep(seconds)
 
-                if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
+                if len(self.coordinator.queue) < self.config["TEAM_SIZE"] * 2:
                     await self.update_queue_status_message(
                         new_message=True,
                         content="Not enough players anymore. Game cancelled. ❌"
@@ -1196,7 +1197,7 @@ class Master_Bot(commands.Bot):
 
                 await self.make_game(radiant, dire, cut_players)
 
-                if len(self.coordinator.queue) >= TC.TEAM_SIZE * 2:
+                if len(self.coordinator.queue) >= self.config["TEAM_SIZE"] * 2:
                     await self.update_queue_status_message(
                         content="@here Still enough players! Starting another game in **15 seconds** ⏳"
                     )
@@ -1472,7 +1473,7 @@ class Master_Bot(commands.Bot):
             Args:
                 interaction (discord.Interaction): The command invoker.
             """
-            if len(self.coordinator.queue) < TC.TEAM_SIZE * 2:
+            if len(self.coordinator.queue) < self.config["TEAM_SIZE"] * 2:
                 return await interaction.response.send_message(
                     "Not enough players to start a game.", ephemeral=True
                 )
@@ -1641,6 +1642,30 @@ class Master_Bot(commands.Bot):
             if not success:
                 await interaction.followup.send(
                     f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>.",
+                    ephemeral=True,
+                )
+                return
+
+            # Update coordinator’s in-memory game tracking
+            radiant_set, dire_set = self.game_map_inverse.get(game_id, (set(), set()))
+
+            if old_member.id in radiant_set:
+                radiant_set.remove(old_member.id)
+                radiant_set.add(new_member.id)
+            elif old_member.id in dire_set:
+                dire_set.remove(old_member.id)
+                dire_set.add(new_member.id)
+
+            # Update maps to reflect this
+            self.game_map_inverse[game_id] = (radiant_set, dire_set)
+            self.game_map.pop(old_member.id, None)
+            self.game_map[new_member.id] = game_id
+
+            success = await self.coordinator.balance_teams(game_id)
+
+            if not success:
+                await interaction.followup.send(
+                    f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>. Issue Balancing Teams after replace.",
                     ephemeral=True,
                 )
                 return
