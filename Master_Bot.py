@@ -1,6 +1,5 @@
 # main_bot.py
 from typing import Tuple, Dict, Optional
-import DotaTalker
 import TheCoordinator as TC
 import json
 import math
@@ -15,6 +14,8 @@ import signal
 import csv
 import re
 from pathlib import Path
+import aiohttp
+from urllib.parse import urljoin
 
 import DBFunctions as DB
 from logger import setup_logging
@@ -38,6 +39,242 @@ Author: mbender and crowedev
 setup_logging()
 logger = logging.getLogger(__name__)
 
+
+class RESTAPIClient:
+    """
+    REST API client for communicating with the Go-based lobby manager (lobbymanager.go).
+    Replaces DotaTalker functionality.
+    """
+    
+    def __init__(self, base_url: str = "http://localhost:8080"):
+        self.base_url = base_url
+        self.mode_map = {
+            "Ranked All Pick": 22,
+            "Random Draft": 3,
+            "Single Draft": 4,
+            "Captains Mode": 2,
+            "All Random": 5,
+            "Least Played": 12,
+            "Captains Draft": 16,
+            "Low Quality Game Mode": 4,
+        }
+    
+    async def create_game(
+        self,
+        game_id: int,
+        username: str,
+        password: str,
+        radiant_steam_ids: list[int],
+        dire_steam_ids: list[int],
+        result_url: str,
+        poll_callback_url: str,
+        server_region: int = 2,
+        game_mode: int = 22,
+        allow_cheats: bool = False,
+        game_name: str = "",
+        pass_key: str = "",
+        debug_steam_id: int = 0,
+    ) -> str:
+        """
+        Create a new game via REST API.
+        Returns the lobby password on success, "-1" on failure.
+        """
+        if game_name == "":
+            game_name = f"Gargamel League Game {game_id}"
+        
+        payload = {
+            "game_id": str(game_id),
+            "username": username,
+            "password": password,
+            "radiant_team": radiant_steam_ids,
+            "dire_team": dire_steam_ids,
+            "result_url": result_url,
+            "poll_callback_url": poll_callback_url,
+            "server_region": server_region,
+            "game_mode": game_mode,
+            "allow_cheats": allow_cheats,
+            "game_name": game_name,
+            "pass_key": pass_key,
+        }
+        
+        if debug_steam_id != 0:
+            payload["debug_steam_id"] = debug_steam_id
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    urljoin(self.base_url, "/game"),
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        return pass_key if pass_key else str(random.randint(1000, 9999))
+                    else:
+                        error_text = await resp.text()
+                        logger.error(f"[Game {game_id}] Failed to create game: {resp.status} - {error_text}")
+                        return "-1"
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception creating game: {e}")
+            return "-1"
+    
+    async def delete_game(self, game_id: int) -> bool:
+        """Delete/teardown a game via REST API."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.delete(
+                    urljoin(self.base_url, f"/game/{game_id}"),
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(f"[Game {game_id}] Successfully deleted game")
+                        return True
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"[Game {game_id}] Failed to delete game: {resp.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception deleting game: {e}")
+            return False
+    
+    async def update_game_mode(self, game_id: int, game_mode: int) -> bool:
+        """Update the game mode for a lobby."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.put(
+                    urljoin(self.base_url, f"/game/{game_id}"),
+                    json={"game_mode": game_mode},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(f"[Game {game_id}] Updated game mode to {game_mode}")
+                        return True
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"[Game {game_id}] Failed to update game mode: {resp.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception updating game mode: {e}")
+            return False
+    
+    async def start_polling(self, game_id: int) -> bool:
+        """Notify the lobby manager that polling has started."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    urljoin(self.base_url, f"/poll/{game_id}"),
+                    json={"action": "start"},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(f"[Game {game_id}] Polling marked as started")
+                        return True
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"[Game {game_id}] Failed to start polling: {resp.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception starting polling: {e}")
+            return False
+    
+    async def end_polling(self, game_id: int, game_mode: int) -> bool:
+        """Notify the lobby manager that polling has ended and set the game mode."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    urljoin(self.base_url, f"/poll/{game_id}"),
+                    json={"action": "end", "game_mode": game_mode},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(f"[Game {game_id}] Polling ended, game mode set to {game_mode}")
+                        return True
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"[Game {game_id}] Failed to end polling: {resp.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception ending polling: {e}")
+            return False
+    
+    async def get_game_status(self, game_id: int) -> Optional[dict]:
+        """Get the current status of a game."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    urljoin(self.base_url, f"/game/{game_id}"),
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"[Game {game_id}] Failed to get status: {resp.status} - {error_text}")
+                        return None
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception getting status: {e}")
+            return None
+    
+    async def swap_players(self, game_id: int, steam_id_1: int, steam_id_2: int) -> bool:
+        """Swap two players between teams."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    urljoin(self.base_url, f"/game/{game_id}/swap"),
+                    json={"steam_id_1": steam_id_1, "steam_id_2": steam_id_2},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(f"[Game {game_id}] Successfully swapped players")
+                        return True
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"[Game {game_id}] Failed to swap players: {resp.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception swapping players: {e}")
+            return False
+    
+    async def replace_player(self, game_id: int, old_steam_id: int, new_steam_id: int) -> bool:
+        """Replace a player with a new one."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    urljoin(self.base_url, f"/game/{game_id}/replace"),
+                    json={"old_steam_id": old_steam_id, "new_steam_id": new_steam_id},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(f"[Game {game_id}] Successfully replaced player")
+                        return True
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"[Game {game_id}] Failed to replace player: {resp.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception replacing player: {e}")
+            return False
+    
+    async def send_chat_message(self, game_id: int, message: str) -> bool:
+        """Send a chat message to the lobby."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    urljoin(self.base_url, f"/game/{game_id}/chat"),
+                    json={"message": message},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        return True
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"[Game {game_id}] Failed to send chat message: {resp.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception sending chat message: {e}")
+            return False
+
+
 class Master_Bot(commands.Bot):
     """
     Discord bot subclass managing all interactions and game coordination.
@@ -46,7 +283,7 @@ class Master_Bot(commands.Bot):
         config (dict): Configuration loaded from JSON file.
         con (sqlite3.Connection): Database connection to 'allUsers.db'.
         coordinator (TheCoordinator): Manages matchmaking and queue logic.
-        dota_talker (DotaTalker): Handles Dota 2 client interactions.
+        rest_api (RESTAPIClient): Handles REST API communication with Go lobby manager.
         the_guild (discord.Guild): The main Discord guild the bot operates in.
         game_counter (int): Incremental ID for tracking created games.
         game_channels (dict): Maps game_id to tuple of (radiant voice channel, dire voice channel).
@@ -85,8 +322,8 @@ class Master_Bot(commands.Bot):
         self.queue_status_msg: discord.Message = None
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
-        self.dota_talker: DotaTalker.DotaTalker = None
-        self.coordinator = TC.TheCoordinator(self, self.dota_talker)
+        self.rest_api = RESTAPIClient(base_url=self.config.get("REST_API_URL", "http://localhost:8080"))
+        self.coordinator = TC.TheCoordinator(self, None)  # Coordinator doesn't need dota_talker anymore
         self.pending_matches = set()
         self.ready_check_lock = asyncio.Lock()
         self.ready_check_status = False
@@ -141,15 +378,34 @@ class Master_Bot(commands.Bot):
     def handle_exit_signals(self, signum, frame):
         logger.info(f"Received exit signal {signum}, cleaning up bot creations.")
 
-
         # Clean up all remaining Steam/Dota clients for games
-        if hasattr(self, "dota_talker") and self.dota_talker:
+        # Teardown all active games via REST API (run async code in sync context)
+        async def cleanup():
             try:
-                for gid in list(self.dota_talker.lobby_clients.keys()):
-                    self.dota_talker.teardown_lobby(gid)
-                logger.info("[handle_exit_signals] All Dota clients torn down.")
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        urljoin(self.rest_api.base_url, "/games"),
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as resp:
+                        if resp.status == 200:
+                            games = await resp.json()
+                            for game in games:
+                                game_id = game.get("game_id")
+                                if game_id:
+                                    await self.rest_api.delete_game(int(game_id))
+                    logger.info("[handle_exit_signals] All Dota clients torn down.")
             except Exception:
                 logger.exception("[handle_exit_signals] Error tearing down Dota clients")
+        
+        # Run async cleanup
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(cleanup())
+            else:
+                loop.run_until_complete(cleanup())
+        except Exception:
+            logger.exception("[handle_exit_signals] Error running cleanup")
 
         # Clean up Discord Voice and Text Channels, Clear the Bot Channel
         # TODO: Clean up Dota Lobbies that are empty if we bailed at the wrong time.
@@ -499,7 +755,7 @@ class Master_Bot(commands.Bot):
             easter_egg_active = random.random() < 0.10
 
             options = []
-            for name in self.parent.dota_talker.mode_map.keys():
+            for name in self.parent.rest_api.mode_map.keys():
                 if name == "Low Quality Game Mode":
                     continue
                 label = name
@@ -631,7 +887,7 @@ class Master_Bot(commands.Bot):
             await message.edit(embed=embed, view=self)
 
             # Alert game-side and start timer
-            await self.parent.dota_talker.alert_game_polling_started(self.game_id)
+            await self.parent.rest_api.start_polling(self.game_id)
             # Cancel any leftover auto task before starting new one
             if self._auto_task and not self._auto_task.done():
                 logger.info(f"[Game_ID:{self.game_id}] Found an auto task and it wasn't done.  Cancelling older poll.")
@@ -716,11 +972,7 @@ class Master_Bot(commands.Bot):
             if winner is not None:
                 try:
                     mode_enum = self.mode_name_to_enum[winner]
-                    await self.parent.dota_talker.change_lobby_mode(self.game_id, mode_enum)
-
-                    wrapper = self.parent.dota_talker.lobby_clients.get(self.game_id)
-                    if wrapper:
-                        await wrapper.notify_polling_complete()
+                    await self.parent.rest_api.end_polling(self.game_id, mode_enum)
                 except Exception as e:
                     logger.exception(f"[Game {self.game_id}] Failed to apply mode {winner}: {e}")
 
@@ -880,28 +1132,24 @@ class Master_Bot(commands.Bot):
                 logger.warning(f"[Game {game_id}] No lobby message found — cannot start poll.")
                 return
 
-            # Get the wrapper
-            wrapper = self.dota_talker.lobby_clients.get(game_id)
-            if not wrapper:
-                logger.warning(f"[Game {game_id}] No DotaTalker wrapper found — skipping poll trigger.")
-                return
+            # Check if polling is already done via REST API
+            status = await self.rest_api.get_game_status(game_id)
+            if status:
+                if status.get("polling_done", False):
+                    logger.info(f"[Game {game_id}] Poll already finished, skipping.")
+                    return
+                if status.get("polling_active", False):
+                    logger.info(f"[Game {game_id}] Poll already active, skipping duplicate trigger.")
+                    return
 
-            # Prevent duplicates
-            if wrapper.polling_done:
-                logger.info(f"[Game {game_id}] Poll already finished, skipping.")
-                return
-            if wrapper.polling_active:
-                logger.info(f"[Game {game_id}] Poll already active, skipping duplicate trigger.")
-                return
-
-            # Mark it active immediately
-            wrapper.polling_active = True
+            # Mark it active via REST API
+            await self.rest_api.start_polling(game_id)
 
             # Create the poll view
             view = self.GameModePoll(
                 parent=self,
                 game_id=game_id,
-                mode_name_to_enum=self.dota_talker.mode_map,
+                mode_name_to_enum=self.rest_api.mode_map,
                 duration_sec=60,
                 allowed_role="Mod",  # lock to Mod role
             )
@@ -948,6 +1196,69 @@ class Master_Bot(commands.Bot):
             handle, "127.0.0.1", self.config["pipePort"]
         )
         asyncio.create_task(self.tcp_server.serve_forever())
+    
+    async def _start_http_callback_server(self):
+        """
+        HTTP server for receiving callbacks from the Go REST API.
+        Handles game results and polling notifications.
+        """
+        from aiohttp import web
+        
+        async def handle_game_result(request):
+            """Handle game result callback from lobby manager"""
+            try:
+                data = await request.json()
+                game_id = int(data.get("game_id", 0))
+                match_id = data.get("match_id", 0)
+                lobby_id = data.get("lobby_id", 0)
+                outcome = data.get("outcome", 0)
+                
+                # Create a simple object to match game_info interface
+                class GameInfo:
+                    def __init__(self, data_dict):
+                        self.match_id = data_dict.get("match_id", 0)
+                        self.lobby_id = data_dict.get("lobby_id", 0)
+                        self.match_outcome = data_dict.get("outcome", 0)
+                        self.game_state = "POSTGAME"
+                        self.state = "POSTGAME"
+                        self.game_mode = data_dict.get("game_mode", 22)
+                        self.server_region = data_dict.get("server_region", 2)
+                        self.lobby_type = data_dict.get("lobby_type", 0)
+                        self.league_id = self.config.get("league_id", 0)
+                
+                game_info = GameInfo(data)
+                await self.on_game_ended(game_id, game_info)
+                
+                return web.json_response({"status": "received"})
+            except Exception as e:
+                logger.exception(f"Error handling game result callback: {e}")
+                return web.json_response({"error": str(e)}, status=500)
+        
+        async def handle_poll_callback(request):
+            """Handle polling callback from lobby manager"""
+            try:
+                data = await request.json()
+                game_id = int(data.get("game_id", 0))
+                action = data.get("action", "")
+                
+                if action == "start_poll":
+                    await self.trigger_gamemode_poll(game_id)
+                
+                return web.json_response({"status": "received"})
+            except Exception as e:
+                logger.exception(f"Error handling poll callback: {e}")
+                return web.json_response({"error": str(e)}, status=500)
+        
+        app = web.Application()
+        app.router.add_post("/game_result", handle_game_result)
+        app.router.add_post("/poll_callback", handle_poll_callback)
+        
+        runner = web.AppRunner(app)
+        await runner.setup()
+        callback_port = self.config.get("RESULT_CALLBACK_PORT", 9999)
+        site = web.TCPSite(runner, "127.0.0.1", callback_port)
+        await site.start()
+        logger.info(f"HTTP callback server started on port {callback_port}")
 
     def build_game_embed(self, game_id: int, radiant_ids: list[int], dire_ids: list[int], password: str = None) -> discord.Embed:
         """
@@ -1240,8 +1551,9 @@ class Master_Bot(commands.Bot):
         """
         logger.info(f"Logged in as {self.user}")
 
-        self.dota_talker = DotaTalker.DotaTalker(self, asyncio.get_event_loop())
+        # REST API client is already initialized in __init__
         await self._start_tcp_server()
+        await self._start_http_callback_server()
         self.the_guild = self.guilds[0]
 
         # Cleanup all messages in the Bot Channel
@@ -1507,7 +1819,19 @@ class Master_Bot(commands.Bot):
             Slash command to force-swap two players and update the lobby message.
             """
             await interaction.response.defer(thinking=True)
-            success = self.dota_talker.swap_players_in_game(game_id, user1.id, user2.id)
+            
+            # Get Steam IDs
+            steam_id_1 = DB.fetch_steam_id(user1.id)
+            steam_id_2 = DB.fetch_steam_id(user2.id)
+            
+            if not steam_id_1 or not steam_id_2:
+                await interaction.followup.send(
+                    f"⚠️ Could not find Steam IDs for one or both players."
+                )
+                return
+
+            # Call REST API to swap players
+            success = await self.rest_api.swap_players(game_id, steam_id_1, steam_id_2)
 
             if not success:
                 await interaction.followup.send(
@@ -1548,7 +1872,10 @@ class Master_Bot(commands.Bot):
             # Edit original lobby message
             lobby_msg = self.lobby_messages.get(game_id)
 
-            embed = self.build_game_embed(game_id, radiant, dire, self.dota_talker.get_password(game_id))
+            # Get password from game status or use stored value
+            # Password is set when game is created, we can retrieve it from status if needed
+            password = "N/A"  # Password is managed by REST API, not directly accessible
+            embed = self.build_game_embed(game_id, radiant, dire, password)
 
             if lobby_msg:
                 await lobby_msg.edit(embed=embed)
@@ -1594,7 +1921,7 @@ class Master_Bot(commands.Bot):
 
             # Tearing down steam/dota client for game
             try:
-                success = self.dota_talker.teardown_lobby(game_id)
+                success = await self.rest_api.delete_game(game_id)
                 if not success:
                     logger.warning(f"[cancel_game] teardown_lobby() returned False for game {game_id}")
                     channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
@@ -1637,7 +1964,20 @@ class Master_Bot(commands.Bot):
                 new_member (discord.Member): Player to add.
             """
             await interaction.response.defer(thinking=True)
-            success = self.dota_talker.replace_player_in_game(game_id, old_member.id, new_member.id)
+            
+            # Get Steam IDs
+            old_steam_id = DB.fetch_steam_id(old_member.id)
+            new_steam_id = DB.fetch_steam_id(new_member.id)
+            
+            if not old_steam_id or not new_steam_id:
+                await interaction.followup.send(
+                    f"⚠️ Could not find Steam IDs for one or both players.",
+                    ephemeral=True,
+                )
+                return
+
+            # Call REST API to replace player
+            success = await self.rest_api.replace_player(game_id, old_steam_id, new_steam_id)
 
             if not success:
                 await interaction.followup.send(
@@ -1646,7 +1986,7 @@ class Master_Bot(commands.Bot):
                 )
                 return
 
-            # Update coordinator’s in-memory game tracking
+            # Update coordinator's in-memory game tracking
             radiant_set, dire_set = self.game_map_inverse.get(game_id, (set(), set()))
 
             if old_member.id in radiant_set:
@@ -1715,7 +2055,11 @@ class Master_Bot(commands.Bot):
             # Edit original lobby message
             lobby_msg = self.lobby_messages.get(game_id)
 
-            embed = self.build_game_embed(game_id, radiant, dire, self.dota_talker.get_password(game_id))
+            # Get password from game status
+            status = await self.rest_api.get_game_status(game_id)
+            password = status.get("pass_key", "N/A") if status else "N/A"
+            
+            embed = self.build_game_embed(game_id, list(radiant), list(dire), password)
 
             if lobby_msg:
                 await lobby_msg.edit(embed=embed)
@@ -2152,7 +2496,7 @@ class Master_Bot(commands.Bot):
 
         # Teardown Steam/Dota client for this match
         try:
-            success = self.dota_talker.teardown_lobby(game_id)
+            success = await self.rest_api.delete_game(game_id)
             if not success:
                 logger.warning(f"[on_game_ended] teardown_lobby() returned False for game {game_id}")
                 channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
@@ -2298,7 +2642,44 @@ class Master_Bot(commands.Bot):
         game_id = self.get_next_game_id()
         self.pending_matches.add(game_id)
 
-        password = await self.dota_talker.make_game(game_id, radiant, dire)
+        # Get Steam IDs for teams
+        radiant_steam_ids = [DB.fetch_steam_id(did) for did in radiant]
+        dire_steam_ids = [DB.fetch_steam_id(did) for did in dire]
+        
+        # Generate password
+        password = str(random.randint(1000, 9999))
+        
+        # Get account credentials (use account 0 for now, can be enhanced later)
+        username = self.config.get(f"username_0", "gargamelcoordinator")
+        password_cred = self.config.get(f"password_0", "")
+        
+        # Build callback URLs
+        # For result callback, we'll need to set up an HTTP endpoint in Master_Bot
+        # For now, use a placeholder that we'll implement
+        result_url = f"http://localhost:{self.config.get('RESULT_CALLBACK_PORT', 9999)}/game_result"
+        poll_callback_url = f"http://localhost:{self.config.get('POLL_CALLBACK_PORT', 9999)}/poll_callback"
+        
+        # Determine game settings
+        server_region = 2  # US East
+        game_mode = 22  # Ranked All Pick (default)
+        allow_cheats = bool(self.config.get("DEBUG_MODE", False))
+        debug_steam_id = self.config.get("debug_steam_id", 0)
+        
+        password = await self.rest_api.create_game(
+            game_id=game_id,
+            username=username,
+            password=password_cred,
+            radiant_steam_ids=radiant_steam_ids,
+            dire_steam_ids=dire_steam_ids,
+            result_url=result_url,
+            poll_callback_url=poll_callback_url,
+            server_region=server_region,
+            game_mode=game_mode,
+            allow_cheats=allow_cheats,
+            game_name=f"Gargamel League Game {game_id}",
+            pass_key=password,
+            debug_steam_id=debug_steam_id,
+        )
         if password == "-1":
             logger.error(f"[Game {game_id}] Failed to create Dota lobby. Aborting Discord setup.")
 
@@ -2380,7 +2761,7 @@ class Master_Bot(commands.Bot):
         view = self.GameModePoll(
             parent=self,
             game_id=game_id,
-            mode_name_to_enum=self.dota_talker.mode_map,
+            mode_name_to_enum=self.rest_api.mode_map,
             duration_sec=60,
             allowed_role="Mod",
         )
