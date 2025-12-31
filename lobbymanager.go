@@ -987,7 +987,12 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte) {
 		if wasCreating {
 			h.setState("waiting")
 			// Send invites when lobby is first created
-			go h.sendInvitesToPlayers()
+			// Wait for GC to be ready and lobby to be fully established
+			go func() {
+				// Wait longer for GC to be fully ready
+				time.Sleep(5 * time.Second)
+				h.sendInvitesToPlayers()
+			}()
 		}
 	}
 	if gameName != "" {
@@ -1331,7 +1336,29 @@ func (h *gcHandler) sendInvitesToPlayers() {
 	h.invitesSent = true
 	h.invitesMutex.Unlock()
 
-	if h.dota == nil || h.currentLobbyID == 0 {
+	if h.dota == nil {
+		log.Printf("[Game %s] Cannot send invites: dota client is nil", h.gameID)
+		// Retry after delay
+		go func() {
+			time.Sleep(3 * time.Second)
+			h.invitesMutex.Lock()
+			h.invitesSent = false
+			h.invitesMutex.Unlock()
+			h.sendInvitesToPlayers()
+		}()
+		return
+	}
+
+	if h.currentLobbyID == 0 {
+		log.Printf("[Game %s] Cannot send invites: lobbyID is 0", h.gameID)
+		// Retry after delay
+		go func() {
+			time.Sleep(3 * time.Second)
+			h.invitesMutex.Lock()
+			h.invitesSent = false
+			h.invitesMutex.Unlock()
+			h.sendInvitesToPlayers()
+		}()
 		return
 	}
 
@@ -1341,31 +1368,28 @@ func (h *gcHandler) sendInvitesToPlayers() {
 	allSteamIDs = append(allSteamIDs, h.gameConfig.DireTeam...)
 
 	if len(allSteamIDs) == 0 {
+		log.Printf("[Game %s] No players to invite", h.gameID)
 		return
 	}
 
-	// Wait a bit for lobby to be fully ready
-	time.Sleep(2 * time.Second)
+	log.Printf("[Game %s] Sending invites to %d players (lobbyID=%d)", h.gameID, len(allSteamIDs), h.currentLobbyID)
 
-	log.Printf("[Game %s] Sending invites to %d players", h.gameID, len(allSteamIDs))
-
-	// Add friends and send invites
+	// Send invites directly - no need to add friends first
+	// Players can be invited to lobbies without being friends
 	for _, steamID64 := range allSteamIDs {
 		if steamID64 == 0 {
 			continue
 		}
 
-		// Convert uint64 to SteamId (SteamId is a type alias for uint64)
 		steamID := steamid.SteamId(steamID64)
 
-		// Add as friend first (if not already)
-		if h.client != nil {
-			h.client.Social.AddFriend(steamID)
+		// Send invite directly
+		if h.dota != nil {
+			h.dota.InviteLobbyMember(steamID)
+			log.Printf("[Game %s] Sent invite to Steam ID %d", h.gameID, steamID64)
+		} else {
+			log.Printf("[Game %s] ERROR: Cannot send invite to Steam ID %d - dota client is nil", h.gameID, steamID64)
 		}
-
-		// Send invite
-		h.dota.InviteLobbyMember(steamID)
-		log.Printf("[Game %s] Sent invite to Steam ID %d", h.gameID, steamID64)
 	}
 
 	log.Printf("[Game %s] Finished sending invites", h.gameID)
@@ -1579,7 +1603,7 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 							selectionPriority := protocol.DOTASelectionPriorityRules_k_DOTASelectionPriorityRules_Manual.Enum()
 
 							fillWithBots := false
-							allowSpectating := false
+							allowSpectating := true
 							allChat := true
 							lan := false
 
