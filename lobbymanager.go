@@ -982,9 +982,14 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte) {
 	gameName := lobby.GetGameName()
 
 	if lobbyID != 0 {
-		wasCreating := h.getState() == "creating"
 		h.currentLobbyID = lobbyID
-		if wasCreating {
+
+		// Check if we should send invites (first time we get a lobby ID and haven't sent invites yet)
+		h.invitesMutex.Lock()
+		shouldSendInvites := !h.invitesSent && h.currentLobbyID != 0
+		h.invitesMutex.Unlock()
+
+		if shouldSendInvites {
 			h.setState("waiting")
 			// Send invites when lobby is first created
 			// Wait for GC to be ready and lobby to be fully established
@@ -993,6 +998,9 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte) {
 				time.Sleep(5 * time.Second)
 				h.sendInvitesToPlayers()
 			}()
+		} else if h.getState() == "creating" {
+			// State transition if we're still creating
+			h.setState("waiting")
 		}
 	}
 	if gameName != "" {
@@ -1328,8 +1336,11 @@ func (h *gcHandler) launchGame() {
 
 // sendInvitesToPlayers sends Steam invites to all players in both teams
 func (h *gcHandler) sendInvitesToPlayers() {
+	log.Printf("[Game %s] DEBUG: sendInvitesToPlayers() called", h.gameID)
+
 	h.invitesMutex.Lock()
 	if h.invitesSent {
+		log.Printf("[Game %s] DEBUG: Invites already sent, skipping", h.gameID)
 		h.invitesMutex.Unlock()
 		return
 	}
