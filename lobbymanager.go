@@ -984,22 +984,8 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte) {
 	if lobbyID != 0 {
 		h.currentLobbyID = lobbyID
 
-		// Check if we should send invites (first time we get a lobby ID and haven't sent invites yet)
-		h.invitesMutex.Lock()
-		shouldSendInvites := !h.invitesSent && h.currentLobbyID != 0
-		h.invitesMutex.Unlock()
-
-		if shouldSendInvites {
-			h.setState("waiting")
-			// Send invites when lobby is first created
-			// Wait for GC to be ready and lobby to be fully established
-			go func() {
-				// Wait longer for GC to be fully ready
-				time.Sleep(5 * time.Second)
-				h.sendInvitesToPlayers()
-			}()
-		} else if h.getState() == "creating" {
-			// State transition if we're still creating
+		// State transition if we're still creating
+		if h.getState() == "creating" {
 			h.setState("waiting")
 		}
 	}
@@ -1201,8 +1187,8 @@ func (h *gcHandler) setAllLobbySettings() {
 		PassKey:         &passKey,
 	})
 
-	log.Printf("[Game %s] Set all lobby settings: GameName=%s, Server=%d, GameMode=%d, AllowCheats=%v",
-		h.gameID, gameName, serverRegion, gameMode, allowCheats)
+	log.Printf("[Game %s] Set all lobby settings: GameName=%s, Server=%d, GameMode=%d, AllowCheats=%v, PassKey=%s",
+		h.gameID, gameName, serverRegion, gameMode, allowCheats, passKey)
 }
 
 func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetDetails) {
@@ -1430,6 +1416,12 @@ func (h *gcHandler) handleLobbyUpdate(payload []byte) {
 	lobbyID := lobby.GetLobbyId()
 	if lobbyID != 0 {
 		h.currentLobbyID = lobbyID
+
+		// State transition if we're still creating
+		if h.getState() == "creating" {
+			h.setState("waiting")
+		}
+
 		h.setAllLobbySettings()
 	}
 
@@ -1639,7 +1631,14 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 
 							handler.lobbyShouldExist = true
 							handler.setState("waiting")
-							log.Printf("[Game %s] Lobby creation request sent", config.GameID)
+							log.Printf("[Game %s] Lobby creation request sent (PassKey: %s)", config.GameID, passKey)
+
+							// Schedule invites 10 seconds after lobby creation, regardless of lobby ID response
+							go func() {
+								time.Sleep(10 * time.Second)
+								log.Printf("[Game %s] Sending invites after 10 second delay", config.GameID)
+								handler.sendInvitesToPlayers()
+							}()
 						}
 					}()
 				}
