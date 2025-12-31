@@ -109,7 +109,8 @@ class RESTAPIClient:
                 ) as resp:
                     if resp.status == 200:
                         result = await resp.json()
-                        return pass_key if pass_key else str(random.randint(1000, 9999))
+                        # Return password from response, or fall back to pass_key parameter
+                        return result.get("password", pass_key) if pass_key else str(random.randint(1000, 9999))
                     else:
                         error_text = await resp.text()
                         logger.error(f"[Game {game_id}] Failed to create game: {resp.status} - {error_text}")

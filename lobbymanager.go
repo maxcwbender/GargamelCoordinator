@@ -18,6 +18,7 @@ import (
 	"github.com/paralin/go-steam"
 	"github.com/paralin/go-steam/protocol/gamecoordinator"
 	"github.com/paralin/go-steam/protocol/steamlang"
+	"github.com/paralin/go-steam/steamid"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 )
@@ -157,6 +158,8 @@ type gcHandler struct {
 	pollingDone          bool
 	pollingMutex         sync.Mutex
 	pollCallbackURL      string // URL to notify when polling should be triggered
+	invitesSent          bool   // Track if invites have been sent
+	invitesMutex         sync.Mutex
 }
 
 // GameManager manages multiple concurrent games
@@ -392,8 +395,9 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"game_id": req.GameID,
-		"status":  "creating",
+		"game_id":  req.GameID,
+		"status":   "creating",
+		"password": config.PassKey,
 	})
 }
 
@@ -978,9 +982,12 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte) {
 	gameName := lobby.GetGameName()
 
 	if lobbyID != 0 {
+		wasCreating := h.getState() == "creating"
 		h.currentLobbyID = lobbyID
-		if h.getState() == "creating" {
+		if wasCreating {
 			h.setState("waiting")
+			// Send invites when lobby is first created
+			go h.sendInvitesToPlayers()
 		}
 	}
 	if gameName != "" {
@@ -1166,6 +1173,7 @@ func (h *gcHandler) setAllLobbySettings() {
 	allowSpectating := false
 	allChat := true
 	lan := false
+	passKey := h.gameConfig.PassKey
 
 	h.dota.SetLobbyDetails(&protocol.CMsgPracticeLobbySetDetails{
 		LobbyId:         &h.currentLobbyID,
@@ -1177,6 +1185,7 @@ func (h *gcHandler) setAllLobbySettings() {
 		AllowSpectating: &allowSpectating,
 		Allchat:         &allChat,
 		Lan:             &lan,
+		PassKey:         &passKey,
 	})
 
 	log.Printf("[Game %s] Set all lobby settings: GameName=%s, Server=%d, GameMode=%d, AllowCheats=%v",
@@ -1250,17 +1259,6 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 	radiantCount := len(radiantPlayers)
 	direCount := len(direPlayers)
 
-	if h.gameConfig.DebugSteamID != 0 {
-		debugOnRadiant := radiantPlayers[h.gameConfig.DebugSteamID]
-		debugOnDire := direPlayers[h.gameConfig.DebugSteamID]
-
-		if debugOnRadiant || debugOnDire {
-			log.Printf("[Game %s] DEBUG MODE: Developer on team - launching", h.gameID)
-			h.launchGame()
-			return
-		}
-	}
-
 	expectedRadiantCount := len(h.gameConfig.RadiantTeam)
 	expectedDireCount := len(h.gameConfig.DireTeam)
 
@@ -1277,8 +1275,9 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 	}
 
 	if radiantCount == expectedRadiantCount && direCount == expectedDireCount {
-		if expectedRadiantCount == 5 && expectedDireCount == 5 {
-			log.Printf("[Game %s] All players assigned - launching", h.gameID)
+		// Launch when all expected players are seated (works for any team size)
+		if expectedRadiantCount > 0 && expectedDireCount > 0 {
+			log.Printf("[Game %s] All players assigned (%d Radiant, %d Dire) - launching", h.gameID, expectedRadiantCount, expectedDireCount)
 			h.launchGame()
 		}
 	}
@@ -1320,6 +1319,56 @@ func (h *gcHandler) launchGame() {
 	h.gameLaunched = true
 	h.gameInProgress = true
 	h.setState("in_progress")
+}
+
+// sendInvitesToPlayers sends Steam invites to all players in both teams
+func (h *gcHandler) sendInvitesToPlayers() {
+	h.invitesMutex.Lock()
+	if h.invitesSent {
+		h.invitesMutex.Unlock()
+		return
+	}
+	h.invitesSent = true
+	h.invitesMutex.Unlock()
+
+	if h.dota == nil || h.currentLobbyID == 0 {
+		return
+	}
+
+	// Collect all Steam IDs to invite
+	allSteamIDs := make([]uint64, 0)
+	allSteamIDs = append(allSteamIDs, h.gameConfig.RadiantTeam...)
+	allSteamIDs = append(allSteamIDs, h.gameConfig.DireTeam...)
+
+	if len(allSteamIDs) == 0 {
+		return
+	}
+
+	// Wait a bit for lobby to be fully ready
+	time.Sleep(2 * time.Second)
+
+	log.Printf("[Game %s] Sending invites to %d players", h.gameID, len(allSteamIDs))
+
+	// Add friends and send invites
+	for _, steamID64 := range allSteamIDs {
+		if steamID64 == 0 {
+			continue
+		}
+
+		// Convert uint64 to SteamId (SteamId is a type alias for uint64)
+		steamID := steamid.SteamId(steamID64)
+
+		// Add as friend first (if not already)
+		if h.client != nil {
+			h.client.Social.AddFriend(steamID)
+		}
+
+		// Send invite
+		h.dota.InviteLobbyMember(steamID)
+		log.Printf("[Game %s] Sent invite to Steam ID %d", h.gameID, steamID64)
+	}
+
+	log.Printf("[Game %s] Finished sending invites", h.gameID)
 }
 
 func (h *gcHandler) moveBotToUnassigned() {
