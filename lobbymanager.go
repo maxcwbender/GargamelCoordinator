@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/paralin/go-dota2"
+	"github.com/paralin/go-dota2/cso"
 	devents "github.com/paralin/go-dota2/events"
 	"github.com/paralin/go-dota2/protocol"
+	"github.com/paralin/go-dota2/socache"
 	"github.com/paralin/go-steam"
 	"github.com/paralin/go-steam/protocol/gamecoordinator"
 	"github.com/paralin/go-steam/protocol/steamlang"
@@ -62,6 +64,7 @@ type GameConfig struct {
 	PassKey         string   `json:"pass_key"`                    // Optional lobby password
 	DebugSteamID    uint64   `json:"debug_steam_id"`              // Optional: for debug mode
 	PollCallbackURL string   `json:"poll_callback_url,omitempty"` // Optional: URL to notify when polling should be triggered
+	LeagueID        uint32   `json:"league_id"`                   // League ID from config.json
 }
 
 // GameStatus represents the current status of a game
@@ -352,6 +355,20 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		gameName = fmt.Sprintf("gargamel_game_%s", req.GameID)
 	}
 
+	// Read league_id from config.json
+	leagueID := uint32(0)
+	if configData, err := os.ReadFile("config.json"); err == nil {
+		var configJSON map[string]interface{}
+		if err := json.Unmarshal(configData, &configJSON); err == nil {
+			if leagueIDVal, ok := configJSON["league_id"]; ok {
+				if leagueIDFloat, ok := leagueIDVal.(float64); ok {
+					leagueID = uint32(leagueIDFloat)
+					log.Printf("[Game %s] Loaded league_id from config.json: %d", req.GameID, leagueID)
+				}
+			}
+		}
+	}
+
 	config := &GameConfig{
 		GameID:          req.GameID,
 		Username:        req.Username,
@@ -366,6 +383,7 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		PassKey:         req.PassKey,
 		DebugSteamID:    req.DebugSteamID,
 		PollCallbackURL: req.PollCallbackURL,
+		LeagueID:        leagueID,
 	}
 
 	// Create handler and start game
@@ -956,22 +974,14 @@ func (h *gcHandler) handleUpdateMultiple(payload []byte) {
 	}
 
 	const LobbyTypeID = 2004
-	log.Printf("[Game %s] handleUpdateMultiple called: %d objects added, %d objects modified",
-		h.gameID, len(updateMsg.GetObjectsAdded()), len(updateMsg.GetObjectsModified()))
-
-	// Process added objects (lobby_new event equivalent) - send invites only here
+	// Note: We're using cache subscription for lobby events now, so we don't process lobbies here
+	// to avoid duplicate processing. Only process non-lobby objects in UpdateMultiple.
+	// Silently skip lobby objects - they're handled by cache subscription
 	for _, obj := range updateMsg.GetObjectsAdded() {
-		if obj.GetTypeId() == LobbyTypeID {
-			log.Printf("[Game %s] Lobby object added (type %d) - equivalent to lobby_new event", h.gameID, obj.GetTypeId())
-			h.parseCSODOTALobbyFromObjectData(obj.GetObjectData(), true) // true = isNewLobby
-		}
+		_ = obj // Lobbies handled by cache subscription
 	}
-	// Process modified objects (lobby_changed event equivalent) - don't send invites
 	for _, obj := range updateMsg.GetObjectsModified() {
-		if obj.GetTypeId() == LobbyTypeID {
-			log.Printf("[Game %s] Lobby object modified (type %d) - equivalent to lobby_changed event", h.gameID, obj.GetTypeId())
-			h.parseCSODOTALobbyFromObjectData(obj.GetObjectData(), false) // false = not new lobby
-		}
+		_ = obj // Lobbies handled by cache subscription
 	}
 }
 
@@ -989,35 +999,60 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 	allowCheats := lobby.GetAllowCheats()
 	gameName := lobby.GetGameName()
 
-	log.Printf("[Game %s] Parsed lobby: ID=%d, PassKey=%s, GameName=%s, isNew=%v",
-		h.gameID, lobbyID, passKeyFromLobby, gameName, isNewLobby)
-
 	if lobbyID != 0 {
-		log.Printf("[Game %s] Received lobby ID: %d", h.gameID, lobbyID)
-		h.currentLobbyID = lobbyID
+		// Check if this is the first time we're seeing this lobby ID
+		// (regardless of whether it came as "added" or "modified" - GC cache might send it as modified)
+		wasLobbyIDZero := h.currentLobbyID == 0
+		isNewLobbyForThisGame := wasLobbyIDZero || h.currentLobbyID != lobbyID
 
-		// Only send invites when lobby is first created (isNewLobby = true), not on modifications
-		if isNewLobby {
-			// Check if we should send invites (first time we get a lobby ID and haven't sent invites yet)
-			h.invitesMutex.Lock()
-			shouldSendInvites := !h.invitesSent && h.currentLobbyID != 0
-			if shouldSendInvites {
-				// Set this immediately to prevent duplicate invites if called multiple times
-				h.invitesSent = true
+		// Only process if this is a new lobby for this game instance
+		if isNewLobbyForThisGame {
+			log.Printf("[Game %s] New lobby detected: ID=%d, PassKey=%s, GameName=%s",
+				h.gameID, lobbyID, passKeyFromLobby, gameName)
+
+			// If we had a different lobby ID, we're switching to a new lobby
+			if !wasLobbyIDZero && h.currentLobbyID != lobbyID {
+				log.Printf("[Game %s] Switching from lobby %d to lobby %d", h.gameID, h.currentLobbyID, lobbyID)
+				// Reset invite flag when switching lobbies
+				h.invitesMutex.Lock()
+				h.invitesSent = false
+				h.invitesMutex.Unlock()
 			}
-			h.invitesMutex.Unlock()
 
-			if shouldSendInvites {
-				h.setState("waiting")
-				// Send invites when lobby is first created (equivalent to lobby_new event in Python)
-				// Wait a short time for GC to be fully ready
-				go func() {
-					time.Sleep(2 * time.Second)
-					log.Printf("[Game %s] Sending invites after receiving new lobby ID", h.gameID)
-					h.sendInvitesToPlayers()
-				}()
+			h.currentLobbyID = lobbyID
+
+			// Send invites when we first receive the lobby ID (first time currentLobbyID transitions from 0 to non-zero)
+			// This handles both "added" and "modified" cases, since GC might send it as modified if it's in cache
+			if wasLobbyIDZero {
+				// Check if we should send invites (first time we get a lobby ID and haven't sent invites yet)
+				h.invitesMutex.Lock()
+				shouldSendInvites := !h.invitesSent && h.currentLobbyID != 0
+				if shouldSendInvites {
+					// Set this immediately to prevent duplicate invites if called multiple times
+					h.invitesSent = true
+				}
+				h.invitesMutex.Unlock()
+
+				if shouldSendInvites {
+					h.setState("waiting")
+					// Send invites when lobby is first created (equivalent to lobby_new event in Python)
+					// Wait a short time for GC to be fully ready
+					// Capture the lobby ID to avoid race conditions
+					lobbyIDForInvites := lobbyID
+					go func() {
+						time.Sleep(2 * time.Second)
+						log.Printf("[Game %s] Sending invites for lobby ID %d", h.gameID, lobbyIDForInvites)
+						// Verify lobby ID is still valid before sending
+						if h.currentLobbyID == lobbyIDForInvites {
+							h.sendInvitesToPlayers()
+						} else {
+							log.Printf("[Game %s] Skipping invites - lobby ID changed from %d to %d", h.gameID, lobbyIDForInvites, h.currentLobbyID)
+						}
+					}()
+				}
 			}
 		}
+		// Silently ignore duplicate lobby updates (same lobby ID)
 
 		// State transition if we're still creating
 		if h.getState() == "creating" {
@@ -1206,10 +1241,11 @@ func (h *gcHandler) setAllLobbySettings() {
 	serverRegion := h.gameConfig.ServerRegion
 	gameMode := h.gameConfig.GameMode
 	fillWithBots := false
-	allowSpectating := false
+	allowSpectating := true // Allow spectators
 	allChat := true
 	lan := false
 	passKey := h.gameConfig.PassKey
+	leagueID := h.gameConfig.LeagueID
 
 	h.dota.SetLobbyDetails(&protocol.CMsgPracticeLobbySetDetails{
 		LobbyId:         &h.currentLobbyID,
@@ -1222,6 +1258,7 @@ func (h *gcHandler) setAllLobbySettings() {
 		Allchat:         &allChat,
 		Lan:             &lan,
 		PassKey:         &passKey,
+		Leagueid:        &leagueID,
 	})
 
 	log.Printf("[Game %s] Set all lobby settings: GameName=%s, Server=%d, GameMode=%d, AllowCheats=%v, PassKey=%s",
@@ -1613,10 +1650,73 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 						handler.dota = dota
 						client.GC.RegisterPacketHandler(handler)
 
+						// Subscribe to lobby cache events to detect when lobby is created
+						lobbyEventCh, lobbyEventCancel, err := dota.GetCache().SubscribeType(cso.Lobby)
+						if err != nil {
+							log.Printf("[Game %s] Failed to subscribe to lobby cache events: %v", config.GameID, err)
+						} else {
+							log.Printf("[Game %s] Subscribed to lobby cache events", config.GameID)
+							// Handle lobby cache events in background
+							go func() {
+								defer lobbyEventCancel()
+								for event := range lobbyEventCh {
+									if event == nil {
+										continue
+									}
+									lobby, ok := event.Object.(*protocol.CSODOTALobby)
+									if !ok {
+										continue
+									}
+
+									lobbyID := lobby.GetLobbyId()
+									if lobbyID == 0 {
+										continue
+									}
+
+									// Handle lobby destruction
+									if event.EventType == socache.EventTypeDestroy {
+										// Only reset if this is the lobby we're currently tracking
+										if handler.currentLobbyID == lobbyID {
+											log.Printf("[Game %s] Lobby %d was destroyed, resetting state", config.GameID, lobbyID)
+											handler.currentLobbyID = 0
+											handler.invitesMutex.Lock()
+											handler.invitesSent = false
+											handler.invitesMutex.Unlock()
+										}
+										continue
+									}
+
+									// Only log Create events, not every Update event
+									if event.EventType == socache.EventTypeCreate {
+										log.Printf("[Game %s] Lobby cache event: Type=Create, LobbyID=%d",
+											config.GameID, lobbyID)
+									}
+
+									// Process the lobby update (Create or Update)
+									objectData, err := proto.Marshal(lobby)
+									if err == nil {
+										isNew := event.EventType == socache.EventTypeCreate
+										handler.parseCSODOTALobbyFromObjectData(objectData, isNew)
+									}
+								}
+							}()
+						}
+
 						dota.SetPlaying(true)
 						time.Sleep(1 * time.Second)
 						dota.SayHello()
 						time.Sleep(3 * time.Second)
+
+						// Leave any existing lobbies before creating a new one
+						log.Printf("[Game %s] Leaving any existing lobbies before creating new one...", config.GameID)
+						dota.AbandonLobby()
+						dota.LeaveLobby()
+						// Reset lobby ID and invite flag so we know when a new lobby is created
+						handler.currentLobbyID = 0
+						handler.invitesMutex.Lock()
+						handler.invitesSent = false
+						handler.invitesMutex.Unlock()
+						time.Sleep(2 * time.Second)
 
 						// Create lobby
 						if !lobbyCreated {
@@ -1626,6 +1726,7 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 							passKey := config.PassKey
 							serverRegion := config.ServerRegion
 							seriesType := uint32(46)
+							leagueID := config.LeagueID
 
 							cmPick := protocol.DOTA_CM_PICK_DOTA_CM_RANDOM.Enum()
 							tvDelay := protocol.LobbyDotaTVDelay_LobbyDotaTV_10.Enum()
@@ -1634,7 +1735,7 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 							selectionPriority := protocol.DOTASelectionPriorityRules_k_DOTASelectionPriorityRules_Manual.Enum()
 
 							fillWithBots := false
-							allowSpectating := true
+							allowSpectating := true // Allow spectators
 							allChat := true
 							lan := false
 
@@ -1656,6 +1757,7 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 								SelectionPriorityRules: selectionPriority,
 								DotaTvDelay:            tvDelay,
 								SeriesType:             &seriesType,
+								Leagueid:               &leagueID,
 							})
 
 							handler.lobbyShouldExist = true
@@ -1674,6 +1776,8 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 				if handler != nil {
 					log.Printf("[Game %s] GC Client Welcomed", config.GameID)
 					// Start keepalive when GC welcomes us (session established)
+					// Note: We don't leave lobbies here - ClientWelcomed fires on keepalive/heartbeat
+					// Lobbies are only left once at startup when initializing the Dota client
 					handler.startGCKeepalive()
 					go func() {
 						time.Sleep(2 * time.Second)
@@ -1827,6 +1931,7 @@ func (h *gcHandler) recreateLobbyIfNeeded() {
 	passKey := h.gameConfig.PassKey
 	serverRegion := h.gameConfig.ServerRegion
 	seriesType := uint32(46)
+	leagueID := h.gameConfig.LeagueID
 
 	cmPick := protocol.DOTA_CM_PICK_DOTA_CM_RANDOM.Enum()
 	tvDelay := protocol.LobbyDotaTVDelay_LobbyDotaTV_10.Enum()
@@ -1835,7 +1940,7 @@ func (h *gcHandler) recreateLobbyIfNeeded() {
 	selectionPriority := protocol.DOTASelectionPriorityRules_k_DOTASelectionPriorityRules_Manual.Enum()
 
 	fillWithBots := false
-	allowSpectating := false
+	allowSpectating := true // Allow spectators
 	allChat := true
 	lan := false
 
@@ -1857,5 +1962,6 @@ func (h *gcHandler) recreateLobbyIfNeeded() {
 		SelectionPriorityRules: selectionPriority,
 		DotaTvDelay:            tvDelay,
 		SeriesType:             &seriesType,
+		Leagueid:               &leagueID,
 	})
 }
