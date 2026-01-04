@@ -956,19 +956,26 @@ func (h *gcHandler) handleUpdateMultiple(payload []byte) {
 	}
 
 	const LobbyTypeID = 2004
+	log.Printf("[Game %s] handleUpdateMultiple called: %d objects added, %d objects modified",
+		h.gameID, len(updateMsg.GetObjectsAdded()), len(updateMsg.GetObjectsModified()))
+
+	// Process added objects (lobby_new event equivalent) - send invites only here
 	for _, obj := range updateMsg.GetObjectsAdded() {
 		if obj.GetTypeId() == LobbyTypeID {
-			h.parseCSODOTALobbyFromObjectData(obj.GetObjectData())
+			log.Printf("[Game %s] Lobby object added (type %d) - equivalent to lobby_new event", h.gameID, obj.GetTypeId())
+			h.parseCSODOTALobbyFromObjectData(obj.GetObjectData(), true) // true = isNewLobby
 		}
 	}
+	// Process modified objects (lobby_changed event equivalent) - don't send invites
 	for _, obj := range updateMsg.GetObjectsModified() {
 		if obj.GetTypeId() == LobbyTypeID {
-			h.parseCSODOTALobbyFromObjectData(obj.GetObjectData())
+			log.Printf("[Game %s] Lobby object modified (type %d) - equivalent to lobby_changed event", h.gameID, obj.GetTypeId())
+			h.parseCSODOTALobbyFromObjectData(obj.GetObjectData(), false) // false = not new lobby
 		}
 	}
 }
 
-func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte) {
+func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobby bool) {
 	var lobby protocol.CSODOTALobby
 	if err := proto.Unmarshal(objectData, &lobby); err != nil {
 		return
@@ -977,17 +984,47 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte) {
 	state := lobby.GetState()
 	gameState := lobby.GetGameState()
 	lobbyID := lobby.GetLobbyId()
+	passKeyFromLobby := lobby.GetPassKey()
 	serverRegion := lobby.GetServerRegion()
 	allowCheats := lobby.GetAllowCheats()
 	gameName := lobby.GetGameName()
 
+	log.Printf("[Game %s] Parsed lobby: ID=%d, PassKey=%s, GameName=%s, isNew=%v",
+		h.gameID, lobbyID, passKeyFromLobby, gameName, isNewLobby)
+
 	if lobbyID != 0 {
+		log.Printf("[Game %s] Received lobby ID: %d", h.gameID, lobbyID)
 		h.currentLobbyID = lobbyID
+
+		// Only send invites when lobby is first created (isNewLobby = true), not on modifications
+		if isNewLobby {
+			// Check if we should send invites (first time we get a lobby ID and haven't sent invites yet)
+			h.invitesMutex.Lock()
+			shouldSendInvites := !h.invitesSent && h.currentLobbyID != 0
+			if shouldSendInvites {
+				// Set this immediately to prevent duplicate invites if called multiple times
+				h.invitesSent = true
+			}
+			h.invitesMutex.Unlock()
+
+			if shouldSendInvites {
+				h.setState("waiting")
+				// Send invites when lobby is first created (equivalent to lobby_new event in Python)
+				// Wait a short time for GC to be fully ready
+				go func() {
+					time.Sleep(2 * time.Second)
+					log.Printf("[Game %s] Sending invites after receiving new lobby ID", h.gameID)
+					h.sendInvitesToPlayers()
+				}()
+			}
+		}
 
 		// State transition if we're still creating
 		if h.getState() == "creating" {
 			h.setState("waiting")
 		}
+	} else {
+		log.Printf("[Game %s] Received lobby object but lobbyID is 0", h.gameID)
 	}
 	if gameName != "" {
 		h.currentGameName = gameName
@@ -1321,17 +1358,9 @@ func (h *gcHandler) launchGame() {
 }
 
 // sendInvitesToPlayers sends Steam invites to all players in both teams
+// Note: h.invitesSent should be set to true before calling this function
 func (h *gcHandler) sendInvitesToPlayers() {
 	log.Printf("[Game %s] DEBUG: sendInvitesToPlayers() called", h.gameID)
-
-	h.invitesMutex.Lock()
-	if h.invitesSent {
-		log.Printf("[Game %s] DEBUG: Invites already sent, skipping", h.gameID)
-		h.invitesMutex.Unlock()
-		return
-	}
-	h.invitesSent = true
-	h.invitesMutex.Unlock()
 
 	if h.dota == nil {
 		log.Printf("[Game %s] Cannot send invites: dota client is nil", h.gameID)
@@ -1593,7 +1622,6 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 						if !lobbyCreated {
 							lobbyCreated = true
 							log.Printf("[Game %s] Creating lobby...", config.GameID)
-							lobbyID := uint64(29215682103463821)
 							gameName := config.GameName
 							passKey := config.PassKey
 							serverRegion := config.ServerRegion
@@ -1612,8 +1640,9 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 
 							handler.currentGameName = gameName
 
+							// Don't set LobbyId - server will assign it
 							dota.CreateLobby(&protocol.CMsgPracticeLobbySetDetails{
-								LobbyId:                &lobbyID,
+								LobbyId:                nil,
 								GameName:               &gameName,
 								ServerRegion:           &serverRegion,
 								CmPick:                 cmPick,
@@ -1632,13 +1661,6 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 							handler.lobbyShouldExist = true
 							handler.setState("waiting")
 							log.Printf("[Game %s] Lobby creation request sent (PassKey: %s)", config.GameID, passKey)
-
-							// Schedule invites 10 seconds after lobby creation, regardless of lobby ID response
-							go func() {
-								time.Sleep(10 * time.Second)
-								log.Printf("[Game %s] Sending invites after 10 second delay", config.GameID)
-								handler.sendInvitesToPlayers()
-							}()
 						}
 					}()
 				}
@@ -1801,7 +1823,6 @@ func (h *gcHandler) recreateLobbyIfNeeded() {
 		return
 	}
 
-	lobbyID := uint64(29215682103463821)
 	gameName := h.gameConfig.GameName
 	passKey := h.gameConfig.PassKey
 	serverRegion := h.gameConfig.ServerRegion
@@ -1820,8 +1841,9 @@ func (h *gcHandler) recreateLobbyIfNeeded() {
 
 	h.currentGameName = gameName
 
+	// Don't set LobbyId - server will assign it
 	h.dota.CreateLobby(&protocol.CMsgPracticeLobbySetDetails{
-		LobbyId:                &lobbyID,
+		LobbyId:                nil,
 		GameName:               &gameName,
 		ServerRegion:           &serverRegion,
 		CmPick:                 cmPick,
