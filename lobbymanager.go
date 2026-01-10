@@ -291,6 +291,8 @@ type gcHandler struct {
 	lobbyReadyMutex      sync.Mutex
 	invitesSent          bool // Track if invites have been sent
 	invitesMutex         sync.Mutex
+	playersInvited       map[uint64]bool // Track which players have been invited (per lobby)
+	playersInvitedMutex  sync.Mutex
 	resultSent           bool // Track if result has been sent to prevent duplicates
 	resultSentMutex      sync.Mutex
 	accountIndex         int // Index of the account assigned to this game (-1 if not allocated)
@@ -547,6 +549,7 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		pollCallbackURL:    req.PollCallbackURL,
 		lobbyReadyURL:      req.LobbyReadyURL,
 		lobbyReadyNotified: false,
+		playersInvited:     make(map[uint64]bool),
 	}
 
 	gameManager.AddGame(req.GameID, handler)
@@ -1099,7 +1102,13 @@ func (h *gcHandler) notifyLobbyReady() {
 		return
 	}
 
-	if h.lobbyReadyNotified || h.lobbyReadyURL == "" {
+	if h.lobbyReadyNotified {
+		log.Printf("[Game %s] Lobby ready already notified, skipping", h.gameID)
+		return
+	}
+
+	if h.lobbyReadyURL == "" {
+		log.Printf("[Game %s] Cannot notify lobby ready - lobbyReadyURL is empty", h.gameID)
 		return
 	}
 
@@ -1117,6 +1126,8 @@ func (h *gcHandler) notifyLobbyReady() {
 		return
 	}
 
+	log.Printf("[Game %s] Calling notifyLobbyReady: URL=%s, lobbyID=%d, gameID=%s", h.gameID, h.lobbyReadyURL, h.currentLobbyID, h.gameID)
+
 	resp, err := http.Post(h.lobbyReadyURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Printf("[Game %s] Failed to notify lobby ready: %v", h.gameID, err)
@@ -1124,10 +1135,11 @@ func (h *gcHandler) notifyLobbyReady() {
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		log.Printf("[Game %s] Lobby ready notification returned status: %d", h.gameID, resp.StatusCode)
+		log.Printf("[Game %s] Lobby ready notification returned status: %d, body: %s", h.gameID, resp.StatusCode, string(body))
 	} else {
-		log.Printf("[Game %s] Notified Master_Bot that lobby is ready (lobby_id=%d)", h.gameID, h.currentLobbyID)
+		log.Printf("[Game %s] Successfully notified Master_Bot that lobby is ready (lobby_id=%d, status=%d)", h.gameID, h.currentLobbyID, resp.StatusCode)
 	}
 }
 
@@ -1233,10 +1245,13 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 			// If we had a different lobby ID, we're switching to a new lobby
 			if !wasLobbyIDZero && h.currentLobbyID != lobbyID {
 				log.Printf("[Game %s] Switching from lobby %d to lobby %d", h.gameID, h.currentLobbyID, lobbyID)
-				// Reset invite flag when switching lobbies
+				// Reset invite flag and invited players when switching lobbies
 				h.invitesMutex.Lock()
 				h.invitesSent = false
 				h.invitesMutex.Unlock()
+				h.playersInvitedMutex.Lock()
+				h.playersInvited = make(map[uint64]bool) // Clear invited players for new lobby
+				h.playersInvitedMutex.Unlock()
 			}
 
 			h.currentLobbyID = lobbyID
@@ -1255,6 +1270,10 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 
 				if shouldSendInvites {
 					h.setState("waiting")
+					// Notify Master_Bot that lobby is ready (only when we have a valid lobbyID)
+					// This must be called when we first receive the lobby ID
+					h.notifyLobbyReady()
+
 					// Send invites when lobby is first created (equivalent to lobby_new event in Python)
 					// Wait a short time for GC to be fully ready
 					// Capture the lobby ID to avoid race conditions
@@ -1275,10 +1294,11 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 		// Silently ignore duplicate lobby updates (same lobby ID)
 
 		// State transition if we're still creating AND we have a valid lobby ID
-		// Only notify lobby ready when we actually have a lobby (lobbyID != 0)
+		// (This handles cases where state wasn't already updated above)
 		if h.getState() == "creating" && lobbyID != 0 {
 			h.setState("waiting")
 			// Notify Master_Bot that lobby is ready (only when we have a valid lobbyID)
+			// Note: This is a fallback in case notifyLobbyReady wasn't called above
 			h.notifyLobbyReady()
 		}
 	} else {
@@ -1672,6 +1692,16 @@ func (h *gcHandler) sendInvitesToPlayers() {
 			continue
 		}
 
+		// Check if we've already invited this player for this lobby
+		h.playersInvitedMutex.Lock()
+		if h.playersInvited[steamID64] {
+			h.playersInvitedMutex.Unlock()
+			log.Printf("[Game %s] Skipping invite to Steam ID %d - already invited for this lobby", h.gameID, steamID64)
+			continue
+		}
+		h.playersInvited[steamID64] = true
+		h.playersInvitedMutex.Unlock()
+
 		steamID := steamid.SteamId(steamID64)
 
 		// Send invite directly
@@ -1986,10 +2016,20 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 										continue
 									}
 
+									// Filter: Only process lobbies that match this game's name
+									// This prevents processing old lobbies from previous games
+									expectedGameName := fmt.Sprintf("Gargamel League Game %s", config.GameID)
+									lobbyGameName := lobby.GetGameName()
+									if lobbyGameName != expectedGameName {
+										log.Printf("[Game %s] Ignoring lobby %d - game name mismatch: expected '%s', got '%s'",
+											config.GameID, lobbyID, expectedGameName, lobbyGameName)
+										continue
+									}
+
 									// Only log Create events, not every Update event
 									if event.EventType == socache.EventTypeCreate {
-										log.Printf("[Game %s] Lobby cache event: Type=Create, LobbyID=%d",
-											config.GameID, lobbyID)
+										log.Printf("[Game %s] Lobby cache event: Type=Create, LobbyID=%d, GameName=%s",
+											config.GameID, lobbyID, lobbyGameName)
 									}
 
 									// Process the lobby update (Create or Update)
@@ -2016,10 +2056,13 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 						handler.invitesMutex.Lock()
 						handler.invitesSent = false
 						handler.invitesMutex.Unlock()
+						handler.playersInvitedMutex.Lock()
+						handler.playersInvited = make(map[uint64]bool) // Clear invited players
+						handler.playersInvitedMutex.Unlock()
 						time.Sleep(2 * time.Second)
 
-						// Create lobby
-						if !lobbyCreated {
+						// Create lobby - only if we don't already have one
+						if !lobbyCreated && handler.currentLobbyID == 0 {
 							lobbyCreated = true
 							log.Printf("[Game %s] Creating lobby...", config.GameID)
 							gameName := config.GameName

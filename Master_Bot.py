@@ -2981,6 +2981,129 @@ class Master_Bot(commands.Bot):
         else:
             await self.update_queue_status_message()
 
+    async def setup_discord_for_game(self, game_id: int, password: str):
+        """
+        Sets up Discord channels, messages, and moves players after lobby is established.
+        Called by lobby_ready callback.
+        """
+        if game_id not in self._pending_discord_setup:
+            logger.warning(f"[Game {game_id}] No pending Discord setup found")
+            return
+        
+        setup_info = self._pending_discord_setup.pop(game_id)
+        radiant = setup_info['radiant']
+        dire = setup_info['dire']
+        cut_players = setup_info['cut_players']
+        # Use password from callback (may be updated)
+        if password:
+            setup_info['password'] = password
+        password = setup_info['password']
+        
+        logger.info(f"[Game {game_id}] Setting up Discord channels and messages (lobby established)")
+        
+        try:
+            # Create voice channels
+            create_tasks = [
+                self.the_guild.create_voice_channel(f"Game {game_id} — Radiant"),
+                self.the_guild.create_voice_channel(f"Game {game_id} — Dire")
+            ]
+
+            radiant_channel, dire_channel = await asyncio.gather(*create_tasks)
+
+            self.game_map_inverse[game_id] = (set(), set())
+
+            send_tasks = []
+            for member_id in radiant:
+                m = self.the_guild.get_member(member_id)
+
+                if m:
+                    async def send_message(member=m, channel_id=radiant_channel.id, pwd=password):
+                        try:
+                            await member.send(
+                                f"You were placed in a match! Join your channel: <#{channel_id}> Password: {pwd} Enjoy 🎮"
+                            )
+                        except Exception as e:
+                            logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
+
+                    send_tasks.append(send_message())
+                    self.game_map[member_id] = game_id
+                    self.game_map_inverse[game_id][0].add(member_id)
+            for member_id in dire:
+                m = self.the_guild.get_member(member_id)
+                if m:
+                    async def send_message(member=m, channel_id=dire_channel.id, pwd=password):
+                        try:
+                            await member.send(
+                                f"You were placed in a match! Join your channel: <#{channel_id}> Password: {pwd} Enjoy 🎮"
+                            )
+                        except Exception as e:
+                            logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
+
+                    send_tasks.append(send_message())
+                    self.game_map[member_id] = game_id
+                    self.game_map_inverse[game_id][1].add(member_id)
+
+            for member_id in cut_players:
+                m = self.the_guild.get_member(member_id)
+                if m:
+                    async def send_message(member=m):
+                        try:
+                            await member.send(
+                                f"You queued for a Gargamel game, but were put in the cuck chair until next game. 🪑 Your priority has been increased, "
+                                f"and if you remain in the queue your chances of joining the next game are higher. "
+                            )
+                        except Exception as e:
+                            logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
+
+                    send_tasks.append(send_message())
+                    self.game_map[member_id] = game_id
+                    self.game_map_inverse[game_id][1].add(member_id)
+
+            await asyncio.gather(*send_tasks)
+
+            self.game_channels[game_id] = (radiant_channel, dire_channel)
+
+            embed = self.build_game_embed(game_id, radiant, dire, password)
+
+            channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+
+            view = self.GameModePoll(
+                parent=self,
+                game_id=game_id,
+                mode_name_to_enum=self.rest_api.mode_map,
+                duration_sec=60,
+                allowed_role="Mod",
+            )
+            message = await channel.send(embed=embed, view=view)
+
+            try:
+                tasks = [
+                    self.the_guild.get_member(member).move_to(radiant_channel)
+                    for member in radiant
+                    if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
+                ] + [
+                    self.the_guild.get_member(member).move_to(dire_channel)
+                    for member in dire
+                    if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
+                ]
+                await asyncio.gather(*tasks)
+            except Exception as e:
+                logger.exception(f"Unexpected Exception: {e}")
+
+            self.lobby_messages[game_id] = message
+            if cut_players:
+                content = {
+                    "name": f"** 🪑 Players who got put in the cuck chair last game (Selection Priority Increased for next game): 🪑**",
+                    "value": "\n".join(f"<@{user_id}>" for user_id in cut_players),
+                }
+                await self.update_queue_status_message(content=content)
+            else:
+                await self.update_queue_status_message()
+                
+            logger.info(f"[Game {game_id}] Discord setup completed")
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Error setting up Discord: {e}")
+
 
 # Run the bot
 if __name__ == "__main__":
