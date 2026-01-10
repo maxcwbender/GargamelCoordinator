@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -64,6 +65,7 @@ type GameConfig struct {
 	PassKey         string   `json:"pass_key"`                    // Optional lobby password
 	DebugSteamID    uint64   `json:"debug_steam_id"`              // Optional: for debug mode
 	PollCallbackURL string   `json:"poll_callback_url,omitempty"` // Optional: URL to notify when polling should be triggered
+	LobbyReadyURL   string   `json:"lobby_ready_url,omitempty"`   // Optional: URL to notify when lobby is established
 	LeagueID        uint32   `json:"league_id"`                   // League ID from config.json
 }
 
@@ -117,6 +119,7 @@ type CreateGameRequest struct {
 	PassKey         string   `json:"pass_key,omitempty"`          // Optional
 	DebugSteamID    uint64   `json:"debug_steam_id,omitempty"`    // Optional
 	PollCallbackURL string   `json:"poll_callback_url,omitempty"` // Optional: URL to notify when polling should be triggered
+	LobbyReadyURL   string   `json:"lobby_ready_url,omitempty"`   // Optional: URL to notify when lobby is established
 }
 
 // UpdateLobbySettingsRequest represents a request to update lobby settings
@@ -125,6 +128,128 @@ type UpdateLobbySettingsRequest struct {
 	ServerRegion *uint32 `json:"server_region,omitempty"`
 	AllowCheats  *bool   `json:"allow_cheats,omitempty"`
 	GameName     string  `json:"game_name,omitempty"`
+}
+
+// AccountInfo holds credentials for a single Steam account
+type AccountInfo struct {
+	Username string
+	Password string
+}
+
+// AccountPool manages allocation and release of Steam accounts
+type AccountPool struct {
+	accounts []AccountInfo
+	inUse    map[int]string // account index -> game ID
+	mutex    sync.RWMutex
+}
+
+// NewAccountPool creates a new account pool by loading accounts from config.json
+func NewAccountPool() (*AccountPool, error) {
+	pool := &AccountPool{
+		accounts: make([]AccountInfo, 0),
+		inUse:    make(map[int]string),
+	}
+
+	// Read config.json
+	configData, err := os.ReadFile("config.json")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config.json: %v", err)
+	}
+
+	var configJSON map[string]interface{}
+	if err := json.Unmarshal(configData, &configJSON); err != nil {
+		return nil, fmt.Errorf("failed to parse config.json: %v", err)
+	}
+
+	// Load accounts (username_0/password_0, username_1/password_1, etc.)
+	// Support up to 10 accounts for scalability
+	for i := 0; i < 10; i++ {
+		usernameKey := fmt.Sprintf("username_%d", i)
+		passwordKey := fmt.Sprintf("password_%d", i)
+
+		usernameVal, usernameOk := configJSON[usernameKey]
+		passwordVal, passwordOk := configJSON[passwordKey]
+
+		if usernameOk && passwordOk {
+			username, ok1 := usernameVal.(string)
+			password, ok2 := passwordVal.(string)
+			if ok1 && ok2 && username != "" && password != "" {
+				pool.accounts = append(pool.accounts, AccountInfo{
+					Username: username,
+					Password: password,
+				})
+				log.Printf("Loaded account %d: %s", i, username)
+			}
+		}
+	}
+
+	if len(pool.accounts) == 0 {
+		return nil, fmt.Errorf("no accounts found in config.json")
+	}
+
+	log.Printf("Account pool initialized with %d account(s)", len(pool.accounts))
+	return pool, nil
+}
+
+// Allocate assigns an available account to a game
+// Returns account index and credentials, or error if all accounts are busy
+func (p *AccountPool) Allocate(gameID string) (int, AccountInfo, error) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	for i := range p.accounts {
+		if _, inUse := p.inUse[i]; !inUse {
+			p.inUse[i] = gameID
+			log.Printf("[AccountPool] Allocated account %d to game %s", i, gameID)
+			return i, p.accounts[i], nil
+		}
+	}
+
+	return -1, AccountInfo{}, fmt.Errorf("all accounts are currently in use")
+}
+
+// Release frees an account when a game ends
+func (p *AccountPool) Release(accountIndex int, gameID string) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	if assignedGameID, exists := p.inUse[accountIndex]; exists {
+		if assignedGameID == gameID {
+			delete(p.inUse, accountIndex)
+			log.Printf("[AccountPool] Released account %d from game %s", accountIndex, gameID)
+		} else {
+			log.Printf("[AccountPool] Warning: account %d was assigned to game %s, not %s", accountIndex, assignedGameID, gameID)
+		}
+	} else {
+		log.Printf("[AccountPool] Warning: account %d was not in use", accountIndex)
+	}
+}
+
+// GetAccountInfo returns account info for a given index (for debugging)
+func (p *AccountPool) GetAccountInfo(accountIndex int) (AccountInfo, bool) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	if accountIndex >= 0 && accountIndex < len(p.accounts) {
+		return p.accounts[accountIndex], true
+	}
+	return AccountInfo{}, false
+}
+
+// GetAvailableCount returns the number of available accounts
+func (p *AccountPool) GetAvailableCount() int {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	return len(p.accounts) - len(p.inUse)
+}
+
+// GetTotalCount returns the total number of accounts
+func (p *AccountPool) GetTotalCount() int {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	return len(p.accounts)
 }
 
 type gcHandler struct {
@@ -161,8 +286,14 @@ type gcHandler struct {
 	pollingDone          bool
 	pollingMutex         sync.Mutex
 	pollCallbackURL      string // URL to notify when polling should be triggered
-	invitesSent          bool   // Track if invites have been sent
+	lobbyReadyURL        string // URL to notify when lobby is established
+	lobbyReadyNotified   bool   // Track if lobby ready callback has been sent
+	lobbyReadyMutex      sync.Mutex
+	invitesSent          bool // Track if invites have been sent
 	invitesMutex         sync.Mutex
+	resultSent           bool // Track if result has been sent to prevent duplicates
+	resultSentMutex      sync.Mutex
+	accountIndex         int // Index of the account assigned to this game (-1 if not allocated)
 }
 
 // GameManager manages multiple concurrent games
@@ -227,6 +358,7 @@ const (
 )
 
 var gameManager = NewGameManager()
+var accountPool *AccountPool
 
 func (h *gcHandler) HandleGCPacket(p *gamecoordinator.GCPacket) {
 	h.dota.HandleGCPacket(p)
@@ -283,6 +415,13 @@ func (h *gcHandler) getError() string {
 func main() {
 	log.Println("Starting Gargamel Lobby Manager REST API server...")
 
+	// Initialize account pool
+	var err error
+	accountPool, err = NewAccountPool()
+	if err != nil {
+		log.Fatalf("Failed to initialize account pool: %v", err)
+	}
+
 	// Start HTTP server
 	http.HandleFunc("/game", handleCreateGame)
 	http.HandleFunc("/game/", handleGameOperations)
@@ -315,10 +454,6 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "game_id is required", http.StatusBadRequest)
 		return
 	}
-	if req.Username == "" || req.Password == "" {
-		http.Error(w, "username and password are required", http.StatusBadRequest)
-		return
-	}
 	if req.ResultURL == "" {
 		http.Error(w, "result_url is required", http.StatusBadRequest)
 		return
@@ -333,6 +468,15 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Game %s already exists", req.GameID), http.StatusConflict)
 		return
 	}
+
+	// Allocate an account from the pool
+	accountIndex, accountInfo, err := accountPool.Allocate(req.GameID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("No available accounts: %v", err), http.StatusServiceUnavailable)
+		log.Printf("[Game %s] Failed to allocate account: %v", req.GameID, err)
+		return
+	}
+	log.Printf("[Game %s] Allocated account %d (%s)", req.GameID, accountIndex, accountInfo.Username)
 
 	// Create game config with defaults
 	serverRegion := uint32(2) // US East
@@ -371,8 +515,8 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 
 	config := &GameConfig{
 		GameID:          req.GameID,
-		Username:        req.Username,
-		Password:        req.Password,
+		Username:        accountInfo.Username, // Use allocated account
+		Password:        accountInfo.Password, // Use allocated account
 		RadiantTeam:     req.RadiantTeam,
 		DireTeam:        req.DireTeam,
 		ResultURL:       req.ResultURL,
@@ -383,22 +527,26 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		PassKey:         req.PassKey,
 		DebugSteamID:    req.DebugSteamID,
 		PollCallbackURL: req.PollCallbackURL,
+		LobbyReadyURL:   req.LobbyReadyURL,
 		LeagueID:        leagueID,
 	}
 
 	// Create handler and start game
 	ctx, cancel := context.WithCancel(context.Background())
 	handler := &gcHandler{
-		gameID:          req.GameID,
-		gameConfig:      config,
-		pendingResults:  make(map[uint64]*GameResult),
-		lobbyMembers:    make(map[uint64]*LobbyMember),
-		ctx:             ctx,
-		cancel:          cancel,
-		state:           "creating",
-		pollingActive:   false,
-		pollingDone:     false,
-		pollCallbackURL: req.PollCallbackURL,
+		gameID:             req.GameID,
+		gameConfig:         config,
+		accountIndex:       accountIndex, // Store account index for later release
+		pendingResults:     make(map[uint64]*GameResult),
+		lobbyMembers:       make(map[uint64]*LobbyMember),
+		ctx:                ctx,
+		cancel:             cancel,
+		state:              "creating",
+		pollingActive:      false,
+		pollingDone:        false,
+		pollCallbackURL:    req.PollCallbackURL,
+		lobbyReadyURL:      req.LobbyReadyURL,
+		lobbyReadyNotified: false,
 	}
 
 	gameManager.AddGame(req.GameID, handler)
@@ -408,6 +556,11 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		if err := createDotaLobby(ctx, handler, config); err != nil {
 			handler.setError(err.Error())
 			log.Printf("Error creating game %s: %v", req.GameID, err)
+			// Release account if game creation fails
+			if accountPool != nil && handler.accountIndex >= 0 {
+				accountPool.Release(handler.accountIndex, req.GameID)
+				log.Printf("[Game %s] Released account %d due to creation failure", req.GameID, handler.accountIndex)
+			}
 		}
 	}()
 
@@ -586,9 +739,16 @@ func handlePollOperations(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Game %s] Polling marked as active", gameID)
 
 		// Send chat notification
-		if handler.dota != nil && handler.currentLobbyID != 0 {
-			handler.dota.SendChannelMessage(handler.currentLobbyID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
-		}
+		// Wait a bit for lobby to be fully ready, then send message
+		go func() {
+			time.Sleep(2 * time.Second) // Give lobby time to be ready
+			if handler.dota != nil && handler.currentLobbyID != 0 {
+				handler.dota.SendChannelMessage(handler.currentLobbyID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
+				log.Printf("[Game %s] Sent polling start message to lobby", gameID)
+			} else {
+				log.Printf("[Game %s] Could not send polling message - dota=%v, lobbyID=%d", gameID, handler.dota != nil, handler.currentLobbyID)
+			}
+		}()
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "polling_started"})
@@ -833,6 +993,11 @@ func handleDeleteGame(w http.ResponseWriter, r *http.Request, handler *gcHandler
 		handler.client.Disconnect()
 	}
 
+	// Release account back to pool
+	if accountPool != nil && handler.accountIndex >= 0 {
+		accountPool.Release(handler.accountIndex, gameID)
+	}
+
 	// Remove from manager
 	gameManager.RemoveGame(gameID)
 
@@ -923,12 +1088,61 @@ func (h *gcHandler) notifyPollingStarted() {
 	}
 }
 
+// notifyLobbyReady notifies Master_Bot that the lobby has been established
+func (h *gcHandler) notifyLobbyReady() {
+	h.lobbyReadyMutex.Lock()
+	defer h.lobbyReadyMutex.Unlock()
+
+	// Only notify if we have a valid lobby ID
+	if h.currentLobbyID == 0 {
+		log.Printf("[Game %s] Cannot notify lobby ready - lobbyID is 0", h.gameID)
+		return
+	}
+
+	if h.lobbyReadyNotified || h.lobbyReadyURL == "" {
+		return
+	}
+
+	h.lobbyReadyNotified = true
+
+	reqBody := map[string]interface{}{
+		"game_id":  h.gameID,
+		"lobby_id": h.currentLobbyID,
+		"pass_key": h.gameConfig.PassKey,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		log.Printf("[Game %s] Failed to marshal lobby ready notification: %v", h.gameID, err)
+		return
+	}
+
+	resp, err := http.Post(h.lobbyReadyURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("[Game %s] Failed to notify lobby ready: %v", h.gameID, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		log.Printf("[Game %s] Lobby ready notification returned status: %d", h.gameID, resp.StatusCode)
+	} else {
+		log.Printf("[Game %s] Notified Master_Bot that lobby is ready (lobby_id=%d)", h.gameID, h.currentLobbyID)
+	}
+}
+
 // sendResultToMasterBot sends game result to the master bot via HTTP POST
 func (h *gcHandler) sendResultToMasterBot(result *GameResult) error {
+	if h.gameConfig.ResultURL == "" {
+		return fmt.Errorf("ResultURL is not set")
+	}
+
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("failed to marshal result: %v", err)
 	}
+
+	log.Printf("[Game %s] Sending result to %s: MatchID=%d, Outcome=%d", h.gameID, h.gameConfig.ResultURL, result.MatchID, result.Outcome)
 
 	resp, err := http.Post(h.gameConfig.ResultURL, "application/json",
 		bytes.NewBuffer(resultJSON))
@@ -938,10 +1152,11 @@ func (h *gcHandler) sendResultToMasterBot(result *GameResult) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
-	log.Printf("[Game %s] Successfully sent result to master bot", h.gameID)
+	log.Printf("[Game %s] Successfully sent result to master bot (status: %d)", h.gameID, resp.StatusCode)
 	return nil
 }
 
@@ -958,6 +1173,11 @@ func (h *gcHandler) teardownGame() {
 	// Disconnect Steam client
 	if h.client != nil {
 		h.client.Disconnect()
+	}
+
+	// Release account back to pool
+	if accountPool != nil && h.accountIndex >= 0 {
+		accountPool.Release(h.accountIndex, h.gameID)
 	}
 
 	// Remove from manager
@@ -1054,9 +1274,12 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 		}
 		// Silently ignore duplicate lobby updates (same lobby ID)
 
-		// State transition if we're still creating
-		if h.getState() == "creating" {
+		// State transition if we're still creating AND we have a valid lobby ID
+		// Only notify lobby ready when we actually have a lobby (lobbyID != 0)
+		if h.getState() == "creating" && lobbyID != 0 {
 			h.setState("waiting")
+			// Notify Master_Bot that lobby is ready (only when we have a valid lobbyID)
+			h.notifyLobbyReady()
 		}
 	} else {
 		log.Printf("[Game %s] Received lobby object but lobbyID is 0", h.gameID)
@@ -1437,8 +1660,13 @@ func (h *gcHandler) sendInvitesToPlayers() {
 
 	log.Printf("[Game %s] Sending invites to %d players (lobbyID=%d)", h.gameID, len(allSteamIDs), h.currentLobbyID)
 
-	// Send invites directly - no need to add friends first
-	// Players can be invited to lobbies without being friends
+	// Get lobby password for messages
+	passKey := h.gameConfig.PassKey
+	if passKey == "" {
+		passKey = "No password"
+	}
+
+	// Send invites and Steam messages
 	for _, steamID64 := range allSteamIDs {
 		if steamID64 == 0 {
 			continue
@@ -1453,9 +1681,35 @@ func (h *gcHandler) sendInvitesToPlayers() {
 		} else {
 			log.Printf("[Game %s] ERROR: Cannot send invite to Steam ID %d - dota client is nil", h.gameID, steamID64)
 		}
+
+		// Send Steam friend message with password
+		if h.client != nil {
+			// Add as friend and send message (in background, don't block)
+			go func(sid steamid.SteamId, sid64 uint64) {
+				// Try sending message first - if user is already a friend, this will work
+				// If not, we'll add them as friend and retry
+				message := fmt.Sprintf("Invited to 'Gargamel League Game %s'. Password: %s", h.gameID, passKey)
+
+				// Attempt to send message (may fail if not friends)
+				h.client.Social.SendMessage(sid, steamlang.EChatEntryType_ChatMsg, message)
+
+				// Add as friend (idempotent - safe to call even if already a friend)
+				// This ensures they're added if they weren't already, and won't cause issues if they were
+				h.client.Social.AddFriend(sid)
+
+				// Wait a bit for friend request to be processed (if it was needed)
+				time.Sleep(1 * time.Second)
+
+				// Retry sending message in case it failed the first time
+				h.client.Social.SendMessage(sid, steamlang.EChatEntryType_ChatMsg, message)
+				log.Printf("[Game %s] Sent Steam message with password to Steam ID %d", h.gameID, sid64)
+			}(steamID, steamID64)
+		} else {
+			log.Printf("[Game %s] ERROR: Cannot send Steam message to %d - client is nil", h.gameID, steamID64)
+		}
 	}
 
-	log.Printf("[Game %s] Finished sending invites", h.gameID)
+	log.Printf("[Game %s] Finished sending invites and messages", h.gameID)
 }
 
 func (h *gcHandler) moveBotToUnassigned() {
@@ -1554,9 +1808,12 @@ func (h *gcHandler) processMatchInfo(match *protocol.CMsgDOTAMatch) {
 	}
 
 	if pendingResult == nil {
+		// Create new result, preserving lobby info from handler state
 		pendingResult = &GameResult{
 			GameID:       h.gameID,
 			MatchID:      matchID,
+			LobbyID:      h.currentLobbyID,
+			GameName:     h.currentGameName,
 			Duration:     match.GetDuration(),
 			Outcome:      int32(match.GetMatchOutcome()),
 			RadiantScore: match.GetRadiantTeamScore(),
@@ -1564,9 +1821,13 @@ func (h *gcHandler) processMatchInfo(match *protocol.CMsgDOTAMatch) {
 			StartTime:    match.GetStarttime(),
 			LobbyType:    match.GetLobbyType(),
 			GameMode:     uint32(match.GetGameMode()),
+			ServerRegion: h.gameConfig.ServerRegion,
 			Timestamp:    time.Now(),
 		}
+		log.Printf("[Game %s] Created new result from match info: MatchID=%d, LobbyID=%d, Outcome=%d",
+			h.gameID, matchID, h.currentLobbyID, match.GetMatchOutcome())
 	} else {
+		// Update existing result with match details
 		pendingResult.MatchID = matchID
 		pendingResult.Duration = match.GetDuration()
 		pendingResult.Outcome = int32(match.GetMatchOutcome())
@@ -1575,6 +1836,15 @@ func (h *gcHandler) processMatchInfo(match *protocol.CMsgDOTAMatch) {
 		pendingResult.StartTime = match.GetStarttime()
 		pendingResult.LobbyType = match.GetLobbyType()
 		pendingResult.GameMode = uint32(match.GetGameMode())
+		// Preserve LobbyID and GameName if not already set
+		if pendingResult.LobbyID == 0 {
+			pendingResult.LobbyID = h.currentLobbyID
+		}
+		if pendingResult.GameName == "" {
+			pendingResult.GameName = h.currentGameName
+		}
+		log.Printf("[Game %s] Updated existing result from match info: MatchID=%d, Outcome=%d",
+			h.gameID, matchID, match.GetMatchOutcome())
 	}
 
 	h.processCompleteGameResult(pendingResult)
@@ -1592,13 +1862,40 @@ func (h *gcHandler) getOutcomeString(outcome int32) string {
 }
 
 func (h *gcHandler) processCompleteGameResult(result *GameResult) {
-	log.Printf("[Game %s] Processing complete game result: MatchID=%d, Outcome=%d",
-		h.gameID, result.MatchID, result.Outcome)
+	// Check if result has already been sent
+	h.resultSentMutex.Lock()
+	if h.resultSent {
+		log.Printf("[Game %s] Result already sent, skipping duplicate processing", h.gameID)
+		h.resultSentMutex.Unlock()
+		return
+	}
+	h.resultSentMutex.Unlock()
+
+	// Validate result before processing
+	if result.MatchID == 0 {
+		log.Printf("[Game %s] WARNING: Cannot process result - MatchID is 0", h.gameID)
+		return
+	}
+
+	if result.Outcome == 0 || result.Outcome == int32(protocol.EMatchOutcome_k_EMatchOutcome_Unknown) {
+		log.Printf("[Game %s] WARNING: Cannot process result - Outcome is Unknown (value: %d)", h.gameID, result.Outcome)
+		return
+	}
+
+	log.Printf("[Game %s] Processing complete game result: MatchID=%d, LobbyID=%d, Outcome=%d, Duration=%d, RadiantScore=%d, DireScore=%d",
+		h.gameID, result.MatchID, result.LobbyID, result.Outcome, result.Duration, result.RadiantScore, result.DireScore)
+
+	// Mark as sent before sending to prevent duplicates
+	h.resultSentMutex.Lock()
+	h.resultSent = true
+	h.resultSentMutex.Unlock()
 
 	// Send result to master bot
 	if err := h.sendResultToMasterBot(result); err != nil {
-		log.Printf("[Game %s] Error sending result: %v", h.gameID, err)
+		log.Printf("[Game %s] Error sending result to master bot: %v", h.gameID, err)
 		// Still teardown even if send fails
+	} else {
+		log.Printf("[Game %s] Successfully sent result to master bot", h.gameID)
 	}
 
 	// Teardown the game handler
@@ -1614,6 +1911,9 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 
 	var gcInitialized bool
 	var lobbyCreated bool
+	var connectionRetries int
+	const maxConnectionRetries = 3
+	retryDelay := 5 * time.Second
 
 	// Start event loop in background - it must keep running
 	// The event loop must continue running to maintain the Steam connection
@@ -1787,11 +2087,60 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 
 			case error:
 				log.Printf("[Game %s] Steam error: %v", config.GameID, e)
+				// Check if it's a connection error that we should retry
+				errStr := e.Error()
+				if strings.Contains(errStr, "connect: no route to host") ||
+					strings.Contains(errStr, "connection refused") ||
+					strings.Contains(errStr, "timeout") ||
+					strings.Contains(errStr, "Connect failed") {
+					connectionRetries++
+					if connectionRetries <= maxConnectionRetries {
+						log.Printf("[Game %s] Connection error (attempt %d/%d), will retry in %v...",
+							config.GameID, connectionRetries, maxConnectionRetries, retryDelay)
+						time.Sleep(retryDelay)
+						// Try to reconnect
+						client.Disconnect()
+						time.Sleep(1 * time.Second)
+						client.Connect()
+						retryDelay *= 2 // Exponential backoff
+					} else {
+						log.Printf("[Game %s] Connection failed after %d retries, giving up", config.GameID, maxConnectionRetries)
+						handler.setError(fmt.Sprintf("Failed to connect to Steam after %d retries: %v", maxConnectionRetries, e))
+						// Release account on failure
+						if accountPool != nil && handler.accountIndex >= 0 {
+							accountPool.Release(handler.accountIndex, config.GameID)
+						}
+						return
+					}
+				} else {
+					// Non-connection error, don't retry
+					handler.setError(fmt.Sprintf("Steam error: %v", e))
+				}
 
 			case *steam.DisconnectedEvent:
 				log.Printf("[Game %s] Disconnected from Steam", config.GameID)
-				handler.setError("Disconnected from Steam")
-				return
+				// Only set error if we haven't successfully created a lobby yet
+				if handler.currentLobbyID == 0 {
+					connectionRetries++
+					if connectionRetries <= maxConnectionRetries {
+						log.Printf("[Game %s] Disconnected (attempt %d/%d), will retry in %v...",
+							config.GameID, connectionRetries, maxConnectionRetries, retryDelay)
+						time.Sleep(retryDelay)
+						client.Connect()
+						retryDelay *= 2 // Exponential backoff
+					} else {
+						log.Printf("[Game %s] Disconnected after %d retries, giving up", config.GameID, maxConnectionRetries)
+						handler.setError("Disconnected from Steam after multiple retries")
+						// Release account on failure
+						if accountPool != nil && handler.accountIndex >= 0 {
+							accountPool.Release(handler.accountIndex, config.GameID)
+						}
+						return
+					}
+				} else {
+					// Lobby was created, this might be a temporary disconnect - log but don't fail
+					log.Printf("[Game %s] Disconnected but lobby exists (ID: %d), will attempt to reconnect", config.GameID, handler.currentLobbyID)
+				}
 			}
 		}
 	}()

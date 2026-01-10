@@ -90,6 +90,7 @@ class RESTAPIClient:
             "dire_team": dire_steam_ids,
             "result_url": result_url,
             "poll_callback_url": poll_callback_url,
+            "lobby_ready_url": lobby_ready_url,
             "server_region": server_region,
             "game_mode": game_mode,
             "allow_cheats": allow_cheats,
@@ -1214,9 +1215,23 @@ class Master_Bot(commands.Bot):
                 lobby_id = data.get("lobby_id", 0)
                 outcome = data.get("outcome", 0)
                 
+                # Validate required fields
+                if game_id == 0:
+                    logger.error(f"Invalid game_id in result callback: {game_id}")
+                    return web.json_response({"error": "Invalid game_id"}, status=400)
+                
+                if match_id == 0:
+                    logger.error(f"Invalid match_id in result callback for game {game_id}: {match_id}")
+                    return web.json_response({"error": "Invalid match_id"}, status=400)
+                
+                if outcome == 0:
+                    logger.warning(f"Outcome is 0 (Unknown) in result callback for game {game_id}, match_id {match_id}")
+                
+                logger.info(f"Received game result callback: game_id={game_id}, match_id={match_id}, outcome={outcome}")
+                
                 # Create a simple object to match game_info interface
                 class GameInfo:
-                    def __init__(self, data_dict):
+                    def __init__(self, data_dict, bot_config):
                         self.match_id = data_dict.get("match_id", 0)
                         self.lobby_id = data_dict.get("lobby_id", 0)
                         self.match_outcome = data_dict.get("outcome", 0)
@@ -1225,9 +1240,9 @@ class Master_Bot(commands.Bot):
                         self.game_mode = data_dict.get("game_mode", 22)
                         self.server_region = data_dict.get("server_region", 2)
                         self.lobby_type = data_dict.get("lobby_type", 0)
-                        self.league_id = self.config.get("league_id", 0)
+                        self.league_id = bot_config.get("league_id", 0)
                 
-                game_info = GameInfo(data)
+                game_info = GameInfo(data, self.config)
                 await self.on_game_ended(game_id, game_info)
                 
                 return web.json_response({"status": "received"})
@@ -1250,9 +1265,28 @@ class Master_Bot(commands.Bot):
                 logger.exception(f"Error handling poll callback: {e}")
                 return web.json_response({"error": str(e)}, status=500)
         
+        async def handle_lobby_ready(request):
+            """Handle lobby ready callback from lobby manager"""
+            try:
+                data = await request.json()
+                game_id = int(data.get("game_id", 0))
+                lobby_id = data.get("lobby_id", 0)
+                pass_key = data.get("pass_key", "")
+                
+                logger.info(f"Received lobby ready callback: game_id={game_id}, lobby_id={lobby_id}")
+                
+                # Now that lobby is established, do Discord setup
+                await self.setup_discord_for_game(game_id, pass_key)
+                
+                return web.json_response({"status": "received"})
+            except Exception as e:
+                logger.exception(f"Error handling lobby ready callback: {e}")
+                return web.json_response({"error": str(e)}, status=500)
+        
         app = web.Application()
         app.router.add_post("/game_result", handle_game_result)
         app.router.add_post("/poll_callback", handle_poll_callback)
+        app.router.add_post("/lobby_ready", handle_lobby_ready)
         
         runner = web.AppRunner(app)
         await runner.setup()
@@ -2312,10 +2346,235 @@ class Master_Bot(commands.Bot):
             await interaction.followup.send(
                 "Match results updated.")
 
+        @app_commands.command(name="end_match_manual",
+                              description="Manually end a match by game ID with a result (use if GC disconnects during match)")
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(
+            game_id="The game ID to end",
+            winning_team="Radiant or Dire"
+        )
+        async def end_match_manual(
+                interaction: discord.Interaction,
+                game_id: int,
+                winning_team: str
+        ):
+            """
+            Manually end a match by game ID. Useful when Game Coordinator disconnects during a match.
+            
+            Args:
+                interaction: The Discord interaction
+                game_id: The internal game ID
+                winning_team: "Radiant" or "Dire"
+            """
+            if interaction and not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                except Exception as e:
+                    logger.exception(f"Error in end_match_manual: {e}")
+            
+            # Validate winning_team
+            winning_team_lower = winning_team.lower()
+            if winning_team_lower not in ["radiant", "dire"]:
+                return await interaction.followup.send(
+                    "Invalid winning_team. Must be 'Radiant' or 'Dire'.", ephemeral=True
+                )
+            
+            team_value = 2 if winning_team_lower == "radiant" else 3
+            match_outcome = 2 if winning_team_lower == "radiant" else 3
+            
+            # Try to get teams from game_map_inverse (if game is still active)
+            radiant = None
+            dire = None
+            match_id = None
+            
+            if game_id in self.game_map_inverse:
+                radiant_set, dire_set = self.game_map_inverse[game_id]
+                radiant = list(radiant_set)
+                dire = list(dire_set)
+                logger.info(f"[end_match_manual] Found active game {game_id} with {len(radiant)} radiant and {len(dire)} dire players")
+            else:
+                # Game not in memory, try to get match_id from database
+                # We'll need to query match_players to find the match_id
+                # First, try to get match_id from REST API status
+                try:
+                    status = await self.rest_api.get_game_status(game_id)
+                    if status and status.get("match_id"):
+                        match_id = status.get("match_id")
+                        logger.info(f"[end_match_manual] Got match_id {match_id} from REST API for game {game_id}")
+                except Exception as e:
+                    logger.exception(f"[end_match_manual] Failed to get status from REST API: {e}")
+                
+                # If we have match_id, get players from database
+                if match_id:
+                    try:
+                        all_players = self.get_players_by_match_id(match_id)
+                        columns = ["match_id", "discord_id", "steam_id", "rating", "team", "mmr", "role"]
+                        players = [dict(zip(columns, p)) for p in all_players]
+                        radiant = [p["discord_id"] for p in players if p["team"] == 0]
+                        dire = [p["discord_id"] for p in players if p["team"] == 1]
+                        logger.info(f"[end_match_manual] Got {len(radiant)} radiant and {len(dire)} dire players from database")
+                    except Exception as e:
+                        logger.exception(f"[end_match_manual] Failed to get players from database: {e}")
+            
+            # If we still don't have teams, try to get match_id and update database only
+            if not radiant or not dire:
+                logger.warning(f"[end_match_manual] Could not get teams for game {game_id}. Will try to update database if match_id is available.")
+                # Try to get match_id from REST API if we don't have it
+                if not match_id:
+                    try:
+                        status = await self.rest_api.get_game_status(game_id)
+                        if status and status.get("match_id"):
+                            match_id = status.get("match_id")
+                            logger.info(f"[end_match_manual] Got match_id {match_id} from REST API (retry)")
+                    except Exception as e:
+                        logger.exception(f"[end_match_manual] Failed to get status from REST API (retry): {e}")
+                
+                # If we still don't have match_id, we can't proceed
+                if not match_id:
+                    return await interaction.followup.send(
+                        f"⚠️ Could not find active game {game_id} or retrieve match information. "
+                        f"Please use `/update_match_results` with the match_id instead, or ensure the game is still active.",
+                        ephemeral=True
+                    )
+            
+            # Process ratings if we have teams and not in debug mode
+            try:
+                if not self.config["DEBUG_MODE"] and radiant and dire:
+                    radiant_ratings = [DB.fetch_rating(id) for id in radiant]
+                    dire_ratings = [DB.fetch_rating(id) for id in dire]
+                    
+                    # Calculate means
+                    r_radiant = DB.power_mean(radiant_ratings, 5)
+                    r_dire = DB.power_mean(dire_ratings, 5)
+                    
+                    # Determine results
+                    s_radiant = 1 if winning_team_lower == "radiant" else 0
+                    s_dire = 1 - s_radiant
+                    
+                    # ELO expected scores
+                    e_radiant = 1 / (1 + 10 ** ((r_dire - r_radiant) / 3322))
+                    e_dire = 1 - e_radiant
+                    
+                    k = self.config.get("ELO_K", 40)
+                    
+                    # Update radiant ratings
+                    for i, pid in enumerate(radiant):
+                        new_rating = round(radiant_ratings[i] + k * (s_radiant - e_radiant))
+                        DB.execute(
+                            "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                        )
+                    
+                    # Update dire ratings
+                    for i, pid in enumerate(dire):
+                        new_rating = round(dire_ratings[i] + k * (s_dire - e_dire))
+                        DB.execute(
+                            "UPDATE users SET rating = ? WHERE discord_id = ?", (new_rating, pid)
+                        )
+                    
+                    logger.info(f"[end_match_manual] Updated ratings for game {game_id}")
+                    
+                    # Add emoji reaction to lobby message
+                    try:
+                        lobby_msg = self.lobby_messages.get(game_id)
+                        if lobby_msg:
+                            if s_radiant:
+                                await lobby_msg.add_reaction("🌞")
+                            else:
+                                await lobby_msg.add_reaction("🌚")
+                    except Exception as e:
+                        logger.exception(f"[end_match_manual] Failed to react to lobby message: {e}")
+                else:
+                    # Debug mode, react with Robot Emoji
+                    try:
+                        lobby_msg = self.lobby_messages.get(game_id)
+                        if lobby_msg:
+                            await lobby_msg.add_reaction(":BrokenRobot:1394750222940377218")
+                    except Exception as e:
+                        logger.exception(f"[end_match_manual] Failed to react to lobby message: {e}")
+            except Exception as e:
+                logger.exception(f"[end_match_manual] Error updating ratings: {e}")
+                await interaction.followup.send(
+                    f"⚠️ Updated database but failed to update ratings: {e}", ephemeral=True
+                )
+            
+            # Clear game if still active
+            if game_id in self.game_map_inverse:
+                try:
+                    await self.clear_game(game_id)
+                    logger.info(f"[end_match_manual] Cleared active game {game_id}")
+                except Exception as e:
+                    logger.exception(f"[end_match_manual] Error clearing game: {e}")
+            
+            # Update database
+            db_updated = False
+            try:
+                # Get match_id if we don't have it yet
+                if not match_id:
+                    # Try to get from REST API
+                    try:
+                        status = await self.rest_api.get_game_status(game_id)
+                        if status and status.get("match_id"):
+                            match_id = status.get("match_id")
+                    except Exception:
+                        pass
+                    
+                    # If still no match_id, try to find it from database
+                    if not match_id:
+                        # Query match_players to find match_id for players in this game
+                        if radiant and len(radiant) > 0:
+                            # Get match_id from first radiant player
+                            query = """
+                                SELECT DISTINCT match_id FROM match_players 
+                                WHERE discord_id = ? 
+                                ORDER BY match_id DESC LIMIT 1
+                            """
+                            match_id = DB.fetch_one(query, (radiant[0],))
+                
+                if match_id:
+                    logger.info(f"[end_match_manual] Updating database for match_id {match_id} with winner: {team_value}")
+                    DB.execute("""
+                        UPDATE matches
+                        SET winning_team = ?, state = ?
+                        WHERE match_id = ?
+                    """, (team_value, "POSTGAME", match_id))
+                    logger.info(f"[end_match_manual] Database updated successfully")
+                    db_updated = True
+                else:
+                    logger.warning(f"[end_match_manual] Could not find match_id for game {game_id}, database not updated")
+            except Exception as e:
+                logger.exception(f"[end_match_manual] Error updating database: {e}")
+                # Continue to teardown even if database update fails
+            
+            # Teardown Steam/Dota client for this match
+            try:
+                success = await self.rest_api.delete_game(game_id)
+                if not success:
+                    logger.warning(f"[end_match_manual] teardown returned False for game {game_id}")
+                    db_status = "Database updated. " if db_updated else "Database not updated (match_id not found). "
+                    await interaction.followup.send(
+                        f"✅ Game {game_id} ended manually. Winner: {winning_team}. {db_status}⚠️ Teardown may have failed - please verify.",
+                        ephemeral=True
+                    )
+                else:
+                    logger.info(f"[end_match_manual] Torn down Dota client for game {game_id}")
+                    db_status = "Database updated. " if db_updated else "Database not updated (match_id not found). "
+                    await interaction.followup.send(
+                        f"✅ Game {game_id} ended manually. Winner: {winning_team}. {db_status}Game torn down.",
+                        ephemeral=True
+                    )
+            except Exception as e:
+                logger.exception(f"[end_match_manual] Failed to teardown Dota client: {e}")
+                db_status = "Database updated. " if db_updated else "Database not updated (match_id not found). "
+                await interaction.followup.send(
+                    f"✅ Game {game_id} ended manually. Winner: {winning_team}. {db_status}⚠️ Teardown failed: {e}",
+                    ephemeral=True
+                )
+
         @restart_bot.error
         @set_debug_mode.error
         @scan_for_unfinished_matches.error
         @update_match_results.error
+        @end_match_manual.error
         async def permissions_error(interaction: discord.Interaction, error):
             if isinstance(error, app_commands.MissingRole):
                 await interaction.response.send_message(
@@ -2344,6 +2603,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(set_debug_mode)
         self.tree.add_command(scan_for_unfinished_matches)
         self.tree.add_command(update_match_results)
+        self.tree.add_command(end_match_manual)
 
         # if not self.config["DEBUG_MODE"]:
         await self.tree.sync()  # Clears global commands from Discord
@@ -2650,21 +2910,30 @@ class Master_Bot(commands.Bot):
         # Generate password
         password = str(random.randint(1000, 9999))
         
-        # Get account credentials (use account 0 for now, can be enhanced later)
-        username = self.config.get(f"username_0", "gargamelcoordinator")
-        password_cred = self.config.get(f"password_0", "")
+        # Account credentials are now managed by lobbymanager account pool
+        # We don't need to send username/password anymore
+        username = ""  # Will be ignored by lobbymanager
+        password_cred = ""  # Will be ignored by lobbymanager
         
         # Build callback URLs
-        # For result callback, we'll need to set up an HTTP endpoint in Master_Bot
-        # For now, use a placeholder that we'll implement
         result_url = f"http://localhost:{self.config.get('RESULT_CALLBACK_PORT', 9999)}/game_result"
         poll_callback_url = f"http://localhost:{self.config.get('POLL_CALLBACK_PORT', 9999)}/poll_callback"
+        lobby_ready_url = f"http://localhost:{self.config.get('RESULT_CALLBACK_PORT', 9999)}/lobby_ready"
         
         # Determine game settings
         server_region = 2  # US East
         game_mode = 22  # Ranked All Pick (default)
         allow_cheats = bool(self.config.get("DEBUG_MODE", False))
         debug_steam_id = self.config.get("debug_steam_id", 0)
+        
+        # Store game info for later Discord setup (when lobby is ready)
+        self._pending_discord_setup = getattr(self, '_pending_discord_setup', {})
+        self._pending_discord_setup[game_id] = {
+            'radiant': radiant,
+            'dire': dire,
+            'cut_players': cut_players,
+            'password': password,
+        }
         
         password = await self.rest_api.create_game(
             game_id=game_id,
@@ -2674,6 +2943,7 @@ class Master_Bot(commands.Bot):
             dire_steam_ids=dire_steam_ids,
             result_url=result_url,
             poll_callback_url=poll_callback_url,
+            lobby_ready_url=lobby_ready_url,
             server_region=server_region,
             game_mode=game_mode,
             allow_cheats=allow_cheats,
@@ -2691,98 +2961,16 @@ class Master_Bot(commands.Bot):
                 logger.warning(f"[Game {game_id}] MATCH_CHANNEL_ID not found, could not notify players.")
 
             self.pending_matches.discard(game_id)
+            # Clean up pending setup
+            self._pending_discord_setup.pop(game_id, None)
             return None  # or return False to signal caller
 
-        create_tasks = [
-            self.the_guild.create_voice_channel(f"Game {game_id} — Radiant"),
-            self.the_guild.create_voice_channel(f"Game {game_id} — Dire")
-        ]
-
-        radiant_channel, dire_channel = await asyncio.gather(*create_tasks)
-
-        self.game_map_inverse[game_id] = (set(), set())
-
-        send_tasks = []
-        for member_id in radiant:
-            m = self.the_guild.get_member(member_id)
-
-            if m:
-                async def send_message(member=m, channel_id=radiant_channel.id):
-                    try:
-                        await member.send(
-                            f"You were placed in a match! Join your channel: <#{channel_id}> Enjoy 🎮"
-                        )
-                    except Exception as e:
-                        logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
-
-                send_tasks.append(send_message())
-                self.game_map[member_id] = game_id
-                self.game_map_inverse[game_id][0].add(member_id)
-        for member_id in dire:
-            m = self.the_guild.get_member(member_id)
-            if m:
-                async def send_message(member=m, channel_id=dire_channel.id):
-                    try:
-                        await member.send(
-                            f"You were placed in a match! Join your channel: <#{channel_id}> Enjoy 🎮"
-                        )
-                    except Exception as e:
-                        logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
-
-                send_tasks.append(send_message())
-                self.game_map[member_id] = game_id
-                self.game_map_inverse[game_id][1].add(member_id)
-
-        for member_id in cut_players:
-            m = self.the_guild.get_member(member_id)
-            if m:
-                async def send_message(member=m, channel_id=radiant_channel.id):
-                    try:
-                        await member.send(
-                            f"You queued for a Gargamel game, but were put in the cuck chair until next game. 🪑 Your priority has been increased, "
-                            f"and if you remain in the queue your chances of joining the next game are higher. "
-                        )
-                    except Exception as e:
-                        logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
-
-                send_tasks.append(send_message())
-                self.game_map[member_id] = game_id
-                self.game_map_inverse[game_id][1].add(member_id)
-
-        await asyncio.gather(*send_tasks)
-
-        self.game_channels[game_id] = (radiant_channel, dire_channel)
-
-        # password = await self.dota_talker.make_game(game_id, radiant, dire)
-
-        embed = self.build_game_embed(game_id, radiant, dire, password)
-
-        channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-
-        view = self.GameModePoll(
-            parent=self,
-            game_id=game_id,
-            mode_name_to_enum=self.rest_api.mode_map,
-            duration_sec=60,
-            allowed_role="Mod",
-        )
-        message = await channel.send(embed=embed, view=view)
-
-        try:
-            tasks = [
-                self.the_guild.get_member(member).move_to(radiant_channel)
-                for member in radiant
-                if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
-            ] + [
-                self.the_guild.get_member(member).move_to(dire_channel)
-                for member in dire
-                if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
-            ]
-            await asyncio.gather(*tasks)
-        except Exception as e:
-            logger.exception(f"Unexpected Exception: {e}")
-
-        self.lobby_messages[game_id] = message
+        # Update password in pending setup
+        if game_id in self._pending_discord_setup:
+            self._pending_discord_setup[game_id]['password'] = password
+        
+        # Don't create Discord channels/messages yet - wait for lobby_ready callback
+        logger.info(f"[Game {game_id}] Game creation request sent. Waiting for lobby to be established before Discord setup.")
         if cut_players:
             content = {
                 "name": f"** 🪑 Players who got put in the cuck chair last game (Selection Priority Increased for next game): 🪑**",
