@@ -74,6 +74,7 @@ class RESTAPIClient:
         game_name: str = "",
         pass_key: str = "",
         debug_steam_id: int = 0,
+        lobby_ready_url: str = "",
     ) -> str:
         """
         Create a new game via REST API.
