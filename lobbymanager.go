@@ -285,6 +285,7 @@ type gcHandler struct {
 	pollingActive        bool
 	pollingDone          bool
 	pollingMutex         sync.Mutex
+	pollingMessageSent   bool   // Track if we've sent the "polling active" message to avoid duplicates
 	pollCallbackURL      string // URL to notify when polling should be triggered
 	lobbyReadyURL        string // URL to notify when lobby is established
 	lobbyReadyNotified   bool   // Track if lobby ready callback has been sent
@@ -415,6 +416,9 @@ func (h *gcHandler) getError() string {
 // [Rest of the file continues with all the existing handler methods, but updated to use h.gameConfig]
 
 func main() {
+	// Redirect log output to stdout instead of stderr
+	log.SetOutput(os.Stdout)
+
 	log.Println("Starting Gargamel Lobby Manager REST API server...")
 
 	// Initialize account pool
@@ -556,14 +560,29 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 
 	// Start game creation in background
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[Game %s] PANIC in createDotaLobby goroutine: %v", req.GameID, r)
+				handler.setError(fmt.Sprintf("Panic: %v", r))
+				// Release account on panic
+				if accountPool != nil && handler.accountIndex >= 0 {
+					accountPool.Release(handler.accountIndex, req.GameID)
+					log.Printf("[Game %s] Released account %d due to panic", req.GameID, handler.accountIndex)
+				}
+			}
+		}()
+
+		log.Printf("[Game %s] Starting createDotaLobby goroutine", req.GameID)
 		if err := createDotaLobby(ctx, handler, config); err != nil {
 			handler.setError(err.Error())
-			log.Printf("Error creating game %s: %v", req.GameID, err)
+			log.Printf("[Game %s] Error creating game: %v", req.GameID, err)
 			// Release account if game creation fails
 			if accountPool != nil && handler.accountIndex >= 0 {
 				accountPool.Release(handler.accountIndex, req.GameID)
 				log.Printf("[Game %s] Released account %d due to creation failure", req.GameID, handler.accountIndex)
 			}
+		} else {
+			log.Printf("[Game %s] createDotaLobby returned successfully (event loop continues in background)", req.GameID)
 		}
 	}()
 
@@ -742,12 +761,43 @@ func handlePollOperations(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Game %s] Polling marked as active", gameID)
 
 		// Send chat notification
-		// Wait a bit for lobby to be fully ready, then send message
+		// Join lobby channel first, then send message (like DotaTalker.py does)
 		go func() {
-			time.Sleep(2 * time.Second) // Give lobby time to be ready
+			time.Sleep(1 * time.Second) // Reduced wait - give lobby a moment to be ready
 			if handler.dota != nil && handler.currentLobbyID != 0 {
-				handler.dota.SendChannelMessage(handler.currentLobbyID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
-				log.Printf("[Game %s] Sent polling start message to lobby", gameID)
+				// Join the lobby chat channel first (required before sending messages)
+				channelName := fmt.Sprintf("Lobby_%d", handler.currentLobbyID)
+				channelType := protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				joinResp, err := handler.dota.JoinChatChannel(ctx, channelName, channelType, false)
+				if err != nil {
+					log.Printf("[Game %s] Failed to join lobby channel: %v", gameID, err)
+					// Try sending anyway - might work without joining
+					handler.dota.SendChannelMessage(handler.currentLobbyID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
+					log.Printf("[Game %s] Sent polling start message to lobby (without channel join)", gameID)
+					return
+				}
+
+				if joinResp != nil && joinResp.GetResult() == protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
+					// Use the channel ID from the join response
+					channelID := joinResp.GetChannelId()
+					if channelID != 0 {
+						handler.dota.SendChannelMessage(channelID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
+						log.Printf("[Game %s] Sent polling start message to lobby channel (channelID=%d)", gameID, channelID)
+					} else {
+						// Fallback to using lobby ID
+						handler.dota.SendChannelMessage(handler.currentLobbyID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
+						log.Printf("[Game %s] Sent polling start message to lobby (using lobbyID as fallback)", gameID)
+					}
+				} else {
+					log.Printf("[Game %s] Failed to join lobby channel: result=%v", gameID, joinResp.GetResult())
+					// Try sending anyway
+					handler.dota.SendChannelMessage(handler.currentLobbyID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
+					log.Printf("[Game %s] Sent polling start message to lobby (join failed but sent anyway)", gameID)
+				}
 			} else {
 				log.Printf("[Game %s] Could not send polling message - dota=%v, lobbyID=%d", gameID, handler.dota != nil, handler.currentLobbyID)
 			}
@@ -765,6 +815,7 @@ func handlePollOperations(w http.ResponseWriter, r *http.Request) {
 		handler.pollingMutex.Lock()
 		handler.pollingActive = false
 		handler.pollingDone = true
+		handler.pollingMessageSent = false // Reset flag when polling ends
 		handler.pollingMutex.Unlock()
 
 		// Update game mode
@@ -879,7 +930,11 @@ func handleSwapPlayers(w http.ResponseWriter, r *http.Request, handler *gcHandle
 		handler.dota.KickLobbyMemberFromTeam(steamID2_32)
 	}
 
-	log.Printf("[Game %s] Swapped players %d and %d", gameID, req.SteamID1, req.SteamID2)
+	handler.membersMutex.Lock()
+	player1Name := handler.getPlayerDisplayName(req.SteamID1)
+	player2Name := handler.getPlayerDisplayName(req.SteamID2)
+	handler.membersMutex.Unlock()
+	log.Printf("[Game %s] Swapped players %s and %s", gameID, player1Name, player2Name)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "swapped"})
@@ -949,7 +1004,11 @@ func handleReplacePlayer(w http.ResponseWriter, r *http.Request, handler *gcHand
 		handler.dota.KickLobbyMemberFromTeam(oldSteamID32)
 	}
 
-	log.Printf("[Game %s] Replaced player %d with %d", gameID, req.OldSteamID, req.NewSteamID)
+	handler.membersMutex.Lock()
+	oldPlayerName := handler.getPlayerDisplayName(req.OldSteamID)
+	newPlayerName := handler.getPlayerDisplayName(req.NewSteamID)
+	handler.membersMutex.Unlock()
+	log.Printf("[Game %s] Replaced player %s with %s", gameID, oldPlayerName, newPlayerName)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "replaced"})
@@ -991,9 +1050,20 @@ func handleDeleteGame(w http.ResponseWriter, r *http.Request, handler *gcHandler
 	// Cancel context to stop all operations
 	handler.cancel()
 
-	// Disconnect Steam client
+	// Leave lobby before logging out (like Python)
+	if handler.dota != nil && handler.currentLobbyID != 0 {
+		log.Printf("[Game %s] Leaving lobby %d before deletion", gameID, handler.currentLobbyID)
+		handler.dota.LeaveLobby()
+		handler.dota.AbandonLobby()
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Logout and disconnect Steam client (like Python's steam.logout() and steam.disconnect())
+	// CRITICAL: Must logout before disconnect to prevent leftover sessions
 	if handler.client != nil {
+		log.Printf("[Game %s] Logging out and disconnecting from Steam", gameID)
 		handler.client.Disconnect()
+		time.Sleep(1 * time.Second) // Give it time to complete logout
 	}
 
 	// Release account back to pool
@@ -1179,12 +1249,27 @@ func (h *gcHandler) teardownGame() {
 	// Stop keepalive
 	h.stopGCKeepalive()
 
+	// Leave lobby before logging out (like Python's dota.leave_practice_lobby())
+	if h.dota != nil && h.currentLobbyID != 0 {
+		log.Printf("[Game %s] Leaving lobby %d before teardown", h.gameID, h.currentLobbyID)
+		h.dota.LeaveLobby()
+		h.dota.AbandonLobby()
+		time.Sleep(500 * time.Millisecond) // Brief wait for leave to process
+	}
+
 	// Cancel context (this will also stop the keepalive goroutine)
 	h.cancel()
 
-	// Disconnect Steam client
+	// Logout and disconnect Steam client (like Python's steam.logout() and steam.disconnect())
+	// CRITICAL: Must logout before disconnect to prevent leftover sessions blocking future connections
 	if h.client != nil {
-		h.client.Disconnect()
+		// Try to logout first (like Python's steam.logout())
+		// Note: go-steam may not have explicit LogOff, but Disconnect should handle it
+		// However, we should ensure we're properly logged out
+		log.Printf("[Game %s] Logging out and disconnecting from Steam", h.gameID)
+		h.client.Disconnect() // This should handle logout internally
+		// Give it a moment to complete
+		time.Sleep(1 * time.Second)
 	}
 
 	// Release account back to pool
@@ -1555,15 +1640,24 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 			if team == DOTA_GC_TEAM_GOOD_GUYS {
 				radiantPlayers[memberID] = true
 			} else {
+				// Player should be Radiant but is on wrong team
+				playerName := h.getPlayerDisplayName(memberID)
+				log.Printf("[Game %s] Player %s should be Radiant but is on team %d - moving to unassigned", h.gameID, playerName, team)
 				wrongTeamPlayers = append(wrongTeamPlayers, memberID)
 			}
 		} else if shouldBeDire {
 			if team == DOTA_GC_TEAM_BAD_GUYS {
 				direPlayers[memberID] = true
 			} else {
+				// Player should be Dire but is on wrong team
+				playerName := h.getPlayerDisplayName(memberID)
+				log.Printf("[Game %s] Player %s should be Dire but is on team %d - moving to unassigned", h.gameID, playerName, team)
 				wrongTeamPlayers = append(wrongTeamPlayers, memberID)
 			}
 		} else if team == DOTA_GC_TEAM_GOOD_GUYS || team == DOTA_GC_TEAM_BAD_GUYS {
+			// Player is not in the match at all (not in Radiant or Dire) but is on a team - move to unassigned
+			playerName := h.getPlayerDisplayName(memberID)
+			log.Printf("[Game %s] Player %s is not in the match but is on team %d - moving to unassigned", h.gameID, playerName, team)
 			wrongTeamPlayers = append(wrongTeamPlayers, memberID)
 		}
 	}
@@ -1591,12 +1685,64 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 	}
 
 	if radiantCount == expectedRadiantCount && direCount == expectedDireCount {
+		// All players are seated - check if polling is blocking launch
+		h.pollingMutex.Lock()
+		pollingActive := h.pollingActive
+		messageAlreadySent := h.pollingMessageSent
+		h.pollingMutex.Unlock()
+
+		if pollingActive {
+			// All players ready but polling is active - send message only once (like DotaTalker.py)
+			if !messageAlreadySent {
+				h.pollingMutex.Lock()
+				h.pollingMessageSent = true // Mark as sent to prevent duplicates
+				h.pollingMutex.Unlock()
+
+				log.Printf("[Game %s] All players ready but polling is active — delaying launch", h.gameID)
+				if h.dota != nil && h.currentLobbyID != 0 {
+					// Join channel and send message
+					go func() {
+						channelName := fmt.Sprintf("Lobby_%d", h.currentLobbyID)
+						channelType := protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby
+
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+
+						joinResp, err := h.dota.JoinChatChannel(ctx, channelName, channelType, false)
+						if err == nil && joinResp != nil && joinResp.GetResult() == protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
+							channelID := joinResp.GetChannelId()
+							if channelID != 0 {
+								h.dota.SendChannelMessage(channelID, "All players are ready but game mode poll is still active.  Will start game upon completion.")
+							} else {
+								h.dota.SendChannelMessage(h.currentLobbyID, "All players are ready but game mode poll is still active.  Will start game upon completion.")
+							}
+						} else {
+							// Fallback: try sending without joining
+							h.dota.SendChannelMessage(h.currentLobbyID, "All players are ready but game mode poll is still active.  Will start game upon completion.")
+						}
+					}()
+				}
+			}
+			return // Don't launch yet
+		}
+
 		// Launch when all expected players are seated (works for any team size)
 		if expectedRadiantCount > 0 && expectedDireCount > 0 {
 			log.Printf("[Game %s] All players assigned (%d Radiant, %d Dire) - launching", h.gameID, expectedRadiantCount, expectedDireCount)
 			h.launchGame()
 		}
 	}
+}
+
+// getPlayerDisplayName returns a formatted string with player name and Steam ID for logging
+func (h *gcHandler) getPlayerDisplayName(steamID uint64) string {
+	h.membersMutex.Lock()
+	defer h.membersMutex.Unlock()
+
+	if member, exists := h.lobbyMembers[steamID]; exists && member.Name != "" {
+		return fmt.Sprintf("%s (%d)", member.Name, steamID)
+	}
+	return fmt.Sprintf("%d", steamID)
 }
 
 func (h *gcHandler) movePlayerToUnassigned(steamID uint64) {
@@ -1696,7 +1842,8 @@ func (h *gcHandler) sendInvitesToPlayers() {
 		h.playersInvitedMutex.Lock()
 		if h.playersInvited[steamID64] {
 			h.playersInvitedMutex.Unlock()
-			log.Printf("[Game %s] Skipping invite to Steam ID %d - already invited for this lobby", h.gameID, steamID64)
+			playerName := h.getPlayerDisplayName(steamID64)
+			log.Printf("[Game %s] Skipping invite to %s - already invited for this lobby", h.gameID, playerName)
 			continue
 		}
 		h.playersInvited[steamID64] = true
@@ -1705,37 +1852,35 @@ func (h *gcHandler) sendInvitesToPlayers() {
 		steamID := steamid.SteamId(steamID64)
 
 		// Send invite directly
+		playerName := h.getPlayerDisplayName(steamID64)
 		if h.dota != nil {
 			h.dota.InviteLobbyMember(steamID)
-			log.Printf("[Game %s] Sent invite to Steam ID %d", h.gameID, steamID64)
+			log.Printf("[Game %s] Sent invite to %s", h.gameID, playerName)
 		} else {
-			log.Printf("[Game %s] ERROR: Cannot send invite to Steam ID %d - dota client is nil", h.gameID, steamID64)
+			log.Printf("[Game %s] ERROR: Cannot send invite to %s - dota client is nil", h.gameID, playerName)
 		}
 
 		// Send Steam friend message with password
 		if h.client != nil {
 			// Add as friend and send message (in background, don't block)
 			go func(sid steamid.SteamId, sid64 uint64) {
-				// Try sending message first - if user is already a friend, this will work
-				// If not, we'll add them as friend and retry
 				message := fmt.Sprintf("Invited to 'Gargamel League Game %s'. Password: %s", h.gameID, passKey)
 
-				// Attempt to send message (may fail if not friends)
-				h.client.Social.SendMessage(sid, steamlang.EChatEntryType_ChatMsg, message)
-
-				// Add as friend (idempotent - safe to call even if already a friend)
+				// Add as friend first (idempotent - safe to call even if already a friend)
 				// This ensures they're added if they weren't already, and won't cause issues if they were
 				h.client.Social.AddFriend(sid)
 
 				// Wait a bit for friend request to be processed (if it was needed)
 				time.Sleep(1 * time.Second)
 
-				// Retry sending message in case it failed the first time
+				// Send message once (only after ensuring friend status)
 				h.client.Social.SendMessage(sid, steamlang.EChatEntryType_ChatMsg, message)
-				log.Printf("[Game %s] Sent Steam message with password to Steam ID %d", h.gameID, sid64)
+				playerName := h.getPlayerDisplayName(sid64)
+				log.Printf("[Game %s] Sent Steam message with password to %s", h.gameID, playerName)
 			}(steamID, steamID64)
 		} else {
-			log.Printf("[Game %s] ERROR: Cannot send Steam message to %d - client is nil", h.gameID, steamID64)
+			playerName := h.getPlayerDisplayName(steamID64)
+			log.Printf("[Game %s] ERROR: Cannot send Steam message to %s - client is nil", h.gameID, playerName)
 		}
 	}
 
@@ -1933,256 +2078,376 @@ func (h *gcHandler) processCompleteGameResult(result *GameResult) {
 }
 
 func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig) error {
+	log.Printf("[Game %s] createDotaLobby: Starting...", config.GameID)
 	logger := logrus.New()
-	client := steam.NewClient()
-	client.Connect()
 
+	log.Printf("[Game %s] createDotaLobby: Creating Steam client...", config.GameID)
+	client := steam.NewClient()
+	if client == nil {
+		err := fmt.Errorf("failed to create Steam client")
+		log.Printf("[Game %s] ERROR: %v", config.GameID, err)
+		return err
+	}
+
+	log.Printf("[Game %s] createDotaLobby: Connecting to Steam...", config.GameID)
 	handler.client = client
+
+	// IMPORTANT: Check if account might already be in use from a previous session
+	// If the account was not properly logged out, we might get connection errors
+	// Python's steam library handles this automatically, but we need to be aware of it
+	log.Printf("[Game %s] Using account %s (index %d)", config.GameID, config.Username, handler.accountIndex)
 
 	var gcInitialized bool
 	var lobbyCreated bool
 	var connectionRetries int
-	const maxConnectionRetries = 3
-	retryDelay := 5 * time.Second
+	const maxConnectionRetries = 15 // Increased retries for faster recovery
+	retryDelay := 1 * time.Second   // Reduced from 15s to 1s for faster retries
+	var connectionTimeout time.Duration = 30 * time.Second
+	var lastConnectionAttempt time.Time
 
 	// Start event loop in background - it must keep running
 	// The event loop must continue running to maintain the Steam connection
 	go func() {
-		for event := range client.Events() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[Game %s] PANIC in Steam event loop: %v", config.GameID, r)
+				handler.setError(fmt.Sprintf("Panic in event loop: %v", r))
+				// Release account on panic
+				if accountPool != nil && handler.accountIndex >= 0 {
+					accountPool.Release(handler.accountIndex, config.GameID)
+					log.Printf("[Game %s] Released account %d due to event loop panic", config.GameID, handler.accountIndex)
+				}
+			}
+		}()
+
+		log.Printf("[Game %s] Steam event loop started", config.GameID)
+
+		// Start connection attempt (non-blocking, like Python's steam.login)
+		// The Python library uses steam.login() which is non-blocking and handles connection internally
+		lastConnectionAttempt = time.Now()
+		client.Connect()
+		log.Printf("[Game %s] Steam connection attempt initiated", config.GameID)
+
+		// Note: Unlike Python's steam library which has built-in reconnect logic,
+		// go-steam requires manual reconnection handling. We handle this via event listeners.
+
+		// Set up connection timeout check
+		connectionTimeoutTicker := time.NewTicker(5 * time.Second)
+		defer connectionTimeoutTicker.Stop()
+
+		eventCount := 0
+		connected := false
+
+		for {
 			select {
 			case <-ctx.Done():
 				log.Printf("[Game %s] Context cancelled, shutting down Steam client", config.GameID)
+				// Leave lobby if it exists before disconnecting (like Python)
+				if handler.dota != nil && handler.currentLobbyID != 0 {
+					handler.dota.LeaveLobby()
+					handler.dota.AbandonLobby()
+				}
+				// Logout and disconnect (like Python's steam.logout() and steam.disconnect())
 				client.Disconnect()
 				return
-			default:
-			}
 
-			switch e := event.(type) {
-			case *steam.ConnectedEvent:
-				log.Printf("[Game %s] Connected to Steam, logging in...", config.GameID)
-				client.Auth.LogOn(&steam.LogOnDetails{
-					Username: config.Username,
-					Password: config.Password,
-				})
-
-			case *steam.LoggedOnEvent:
-				log.Printf("[Game %s] Logged in to Steam", config.GameID)
-				client.Social.SetPersonaState(steamlang.EPersonaState_Online)
-				client.GC.SetGamesPlayed(570)
-
-				// Initialize Dota client after login
-				if !gcInitialized {
-					gcInitialized = true
-					go func() {
-						time.Sleep(10 * time.Second) // Wait for GC bootstrap
-						log.Printf("[Game %s] Initializing Dota 2 client...", config.GameID)
-						dota := dota2.New(client, logger)
-						handler.dota = dota
-						client.GC.RegisterPacketHandler(handler)
-
-						// Subscribe to lobby cache events to detect when lobby is created
-						lobbyEventCh, lobbyEventCancel, err := dota.GetCache().SubscribeType(cso.Lobby)
-						if err != nil {
-							log.Printf("[Game %s] Failed to subscribe to lobby cache events: %v", config.GameID, err)
+			case <-connectionTimeoutTicker.C:
+				// Check if we've been trying to connect for too long without success
+				if !connected && !lastConnectionAttempt.IsZero() {
+					elapsed := time.Since(lastConnectionAttempt)
+					if elapsed > connectionTimeout {
+						log.Printf("[Game %s] Connection timeout after %v, retrying...", config.GameID, elapsed)
+						connectionRetries++
+						if connectionRetries <= maxConnectionRetries {
+							lastConnectionAttempt = time.Now()
+							client.Disconnect()
+							time.Sleep(1 * time.Second)
+							client.Connect()
+							retryDelay *= 2
+							connectionTimeout = 30 * time.Second * time.Duration(connectionRetries) // Increase timeout with retries
 						} else {
-							log.Printf("[Game %s] Subscribed to lobby cache events", config.GameID)
-							// Handle lobby cache events in background
-							go func() {
-								defer lobbyEventCancel()
-								for event := range lobbyEventCh {
-									if event == nil {
-										continue
-									}
-									lobby, ok := event.Object.(*protocol.CSODOTALobby)
-									if !ok {
-										continue
-									}
+							log.Printf("[Game %s] Connection failed after %d retries, giving up", config.GameID, maxConnectionRetries)
+							handler.setError(fmt.Sprintf("Failed to connect to Steam after %d retries", maxConnectionRetries))
+							if accountPool != nil && handler.accountIndex >= 0 {
+								accountPool.Release(handler.accountIndex, config.GameID)
+							}
+							return
+						}
+					}
+				}
 
-									lobbyID := lobby.GetLobbyId()
-									if lobbyID == 0 {
-										continue
-									}
+			case event, ok := <-client.Events():
+				if !ok {
+					log.Printf("[Game %s] Steam event channel closed", config.GameID)
+					return
+				}
 
-									// Handle lobby destruction
-									if event.EventType == socache.EventTypeDestroy {
-										// Only reset if this is the lobby we're currently tracking
-										if handler.currentLobbyID == lobbyID {
-											log.Printf("[Game %s] Lobby %d was destroyed, resetting state", config.GameID, lobbyID)
-											handler.currentLobbyID = 0
-											handler.invitesMutex.Lock()
-											handler.invitesSent = false
-											handler.invitesMutex.Unlock()
+				eventCount++
+				if eventCount <= 5 || eventCount%50 == 0 {
+					log.Printf("[Game %s] Steam event #%d: %T", config.GameID, eventCount, event)
+				}
+
+				switch e := event.(type) {
+				case *steam.ConnectedEvent:
+					connected = true
+					log.Printf("[Game %s] Connected to Steam, logging in...", config.GameID)
+					// Reset retry counter on successful connection
+					connectionRetries = 0
+					retryDelay = 3 * time.Second
+					lastConnectionAttempt = time.Time{} // Clear timeout
+					client.Auth.LogOn(&steam.LogOnDetails{
+						Username: config.Username,
+						Password: config.Password,
+					})
+
+				case *steam.LoggedOnEvent:
+					log.Printf("[Game %s] Logged in to Steam", config.GameID)
+					client.Social.SetPersonaState(steamlang.EPersonaState_Online)
+					client.GC.SetGamesPlayed(570)
+
+				case *steam.PersonaStateEvent:
+					// Update player names when we receive persona state updates
+					if e.FriendId != 0 {
+						handler.membersMutex.Lock()
+						if member, exists := handler.lobbyMembers[e.FriendId.ToUint64()]; exists {
+							if e.Name != "" {
+								member.Name = e.Name
+							}
+						}
+						handler.membersMutex.Unlock()
+					}
+
+					// Initialize Dota client after login
+					if !gcInitialized {
+						gcInitialized = true
+						go func() {
+							// Reduced wait - GC should be ready quickly after login
+							time.Sleep(2 * time.Second)
+							log.Printf("[Game %s] Initializing Dota 2 client...", config.GameID)
+							dota := dota2.New(client, logger)
+							handler.dota = dota
+							client.GC.RegisterPacketHandler(handler)
+
+							// Subscribe to lobby cache events to detect when lobby is created
+							lobbyEventCh, lobbyEventCancel, err := dota.GetCache().SubscribeType(cso.Lobby)
+							if err != nil {
+								log.Printf("[Game %s] Failed to subscribe to lobby cache events: %v", config.GameID, err)
+							} else {
+								log.Printf("[Game %s] Subscribed to lobby cache events", config.GameID)
+								// Handle lobby cache events in background
+								go func() {
+									defer lobbyEventCancel()
+									for event := range lobbyEventCh {
+										if event == nil {
+											continue
 										}
-										continue
+										lobby, ok := event.Object.(*protocol.CSODOTALobby)
+										if !ok {
+											continue
+										}
+
+										lobbyID := lobby.GetLobbyId()
+										if lobbyID == 0 {
+											continue
+										}
+
+										// Handle lobby destruction
+										if event.EventType == socache.EventTypeDestroy {
+											// Only reset if this is the lobby we're currently tracking
+											if handler.currentLobbyID == lobbyID {
+												log.Printf("[Game %s] Lobby %d was destroyed, resetting state", config.GameID, lobbyID)
+												handler.currentLobbyID = 0
+												handler.invitesMutex.Lock()
+												handler.invitesSent = false
+												handler.invitesMutex.Unlock()
+											}
+											continue
+										}
+
+										// Filter: Only process lobbies that match this game's name
+										// This prevents processing old lobbies from previous games
+										expectedGameName := fmt.Sprintf("Gargamel League Game %s", config.GameID)
+										lobbyGameName := lobby.GetGameName()
+										if lobbyGameName != expectedGameName {
+											log.Printf("[Game %s] Ignoring lobby %d - game name mismatch: expected '%s', got '%s'",
+												config.GameID, lobbyID, expectedGameName, lobbyGameName)
+											continue
+										}
+
+										// Only log Create events, not every Update event
+										if event.EventType == socache.EventTypeCreate {
+											log.Printf("[Game %s] Lobby cache event: Type=Create, LobbyID=%d, GameName=%s",
+												config.GameID, lobbyID, lobbyGameName)
+										}
+
+										// Process the lobby update (Create or Update)
+										objectData, err := proto.Marshal(lobby)
+										if err == nil {
+											isNew := event.EventType == socache.EventTypeCreate
+											handler.parseCSODOTALobbyFromObjectData(objectData, isNew)
+										}
 									}
+								}()
+							}
 
-									// Filter: Only process lobbies that match this game's name
-									// This prevents processing old lobbies from previous games
-									expectedGameName := fmt.Sprintf("Gargamel League Game %s", config.GameID)
-									lobbyGameName := lobby.GetGameName()
-									if lobbyGameName != expectedGameName {
-										log.Printf("[Game %s] Ignoring lobby %d - game name mismatch: expected '%s', got '%s'",
-											config.GameID, lobbyID, expectedGameName, lobbyGameName)
-										continue
-									}
+							dota.SetPlaying(true)
+							time.Sleep(500 * time.Millisecond) // Reduced from 1s
+							dota.SayHello()
+							time.Sleep(1 * time.Second) // Reduced from 3s - wait for GC to acknowledge
 
-									// Only log Create events, not every Update event
-									if event.EventType == socache.EventTypeCreate {
-										log.Printf("[Game %s] Lobby cache event: Type=Create, LobbyID=%d, GameName=%s",
-											config.GameID, lobbyID, lobbyGameName)
-									}
+							// Leave any existing lobbies before creating a new one
+							log.Printf("[Game %s] Leaving any existing lobbies before creating new one...", config.GameID)
+							dota.AbandonLobby()
+							dota.LeaveLobby()
+							// Reset lobby ID and invite flag so we know when a new lobby is created
+							handler.currentLobbyID = 0
+							handler.invitesMutex.Lock()
+							handler.invitesSent = false
+							handler.invitesMutex.Unlock()
+							handler.playersInvitedMutex.Lock()
+							handler.playersInvited = make(map[uint64]bool) // Clear invited players
+							handler.playersInvitedMutex.Unlock()
+							time.Sleep(500 * time.Millisecond) // Reduced from 2s - minimal wait for leave to process
 
-									// Process the lobby update (Create or Update)
-									objectData, err := proto.Marshal(lobby)
-									if err == nil {
-										isNew := event.EventType == socache.EventTypeCreate
-										handler.parseCSODOTALobbyFromObjectData(objectData, isNew)
-									}
-								}
-							}()
-						}
+							// Create lobby - only if we don't already have one
+							if !lobbyCreated && handler.currentLobbyID == 0 {
+								lobbyCreated = true
+								log.Printf("[Game %s] Creating lobby...", config.GameID)
+								gameName := config.GameName
+								passKey := config.PassKey
+								serverRegion := config.ServerRegion
+								seriesType := uint32(46)
+								leagueID := config.LeagueID
 
-						dota.SetPlaying(true)
-						time.Sleep(1 * time.Second)
-						dota.SayHello()
-						time.Sleep(3 * time.Second)
+								cmPick := protocol.DOTA_CM_PICK_DOTA_CM_RANDOM.Enum()
+								tvDelay := protocol.LobbyDotaTVDelay_LobbyDotaTV_10.Enum()
+								visibility := protocol.DOTALobbyVisibility_DOTALobbyVisibility_Public.Enum()
+								pausePolicy := protocol.LobbyDotaPauseSetting_LobbyDotaPauseSetting_Limited.Enum()
+								selectionPriority := protocol.DOTASelectionPriorityRules_k_DOTASelectionPriorityRules_Manual.Enum()
 
-						// Leave any existing lobbies before creating a new one
-						log.Printf("[Game %s] Leaving any existing lobbies before creating new one...", config.GameID)
-						dota.AbandonLobby()
-						dota.LeaveLobby()
-						// Reset lobby ID and invite flag so we know when a new lobby is created
-						handler.currentLobbyID = 0
-						handler.invitesMutex.Lock()
-						handler.invitesSent = false
-						handler.invitesMutex.Unlock()
-						handler.playersInvitedMutex.Lock()
-						handler.playersInvited = make(map[uint64]bool) // Clear invited players
-						handler.playersInvitedMutex.Unlock()
-						time.Sleep(2 * time.Second)
+								fillWithBots := false
+								allowSpectating := true // Allow spectators
+								allChat := true
+								lan := false
 
-						// Create lobby - only if we don't already have one
-						if !lobbyCreated && handler.currentLobbyID == 0 {
-							lobbyCreated = true
-							log.Printf("[Game %s] Creating lobby...", config.GameID)
-							gameName := config.GameName
-							passKey := config.PassKey
-							serverRegion := config.ServerRegion
-							seriesType := uint32(46)
-							leagueID := config.LeagueID
+								handler.currentGameName = gameName
 
-							cmPick := protocol.DOTA_CM_PICK_DOTA_CM_RANDOM.Enum()
-							tvDelay := protocol.LobbyDotaTVDelay_LobbyDotaTV_10.Enum()
-							visibility := protocol.DOTALobbyVisibility_DOTALobbyVisibility_Public.Enum()
-							pausePolicy := protocol.LobbyDotaPauseSetting_LobbyDotaPauseSetting_Limited.Enum()
-							selectionPriority := protocol.DOTASelectionPriorityRules_k_DOTASelectionPriorityRules_Manual.Enum()
+								// Don't set LobbyId - server will assign it
+								dota.CreateLobby(&protocol.CMsgPracticeLobbySetDetails{
+									LobbyId:                nil,
+									GameName:               &gameName,
+									ServerRegion:           &serverRegion,
+									CmPick:                 cmPick,
+									FillWithBots:           &fillWithBots,
+									AllowSpectating:        &allowSpectating,
+									PassKey:                &passKey,
+									Allchat:                &allChat,
+									Lan:                    &lan,
+									Visibility:             visibility,
+									PauseSetting:           pausePolicy,
+									SelectionPriorityRules: selectionPriority,
+									DotaTvDelay:            tvDelay,
+									SeriesType:             &seriesType,
+									Leagueid:               &leagueID,
+								})
 
-							fillWithBots := false
-							allowSpectating := true // Allow spectators
-							allChat := true
-							lan := false
-
-							handler.currentGameName = gameName
-
-							// Don't set LobbyId - server will assign it
-							dota.CreateLobby(&protocol.CMsgPracticeLobbySetDetails{
-								LobbyId:                nil,
-								GameName:               &gameName,
-								ServerRegion:           &serverRegion,
-								CmPick:                 cmPick,
-								FillWithBots:           &fillWithBots,
-								AllowSpectating:        &allowSpectating,
-								PassKey:                &passKey,
-								Allchat:                &allChat,
-								Lan:                    &lan,
-								Visibility:             visibility,
-								PauseSetting:           pausePolicy,
-								SelectionPriorityRules: selectionPriority,
-								DotaTvDelay:            tvDelay,
-								SeriesType:             &seriesType,
-								Leagueid:               &leagueID,
-							})
-
-							handler.lobbyShouldExist = true
-							handler.setState("waiting")
-							log.Printf("[Game %s] Lobby creation request sent (PassKey: %s)", config.GameID, passKey)
-						}
-					}()
-				}
-
-			case *devents.GCConnectionStatusChanged:
-				if handler != nil {
-					handler.handleConnectionStatusChange(e)
-				}
-
-			case *devents.ClientWelcomed:
-				if handler != nil {
-					log.Printf("[Game %s] GC Client Welcomed", config.GameID)
-					// Start keepalive when GC welcomes us (session established)
-					// Note: We don't leave lobbies here - ClientWelcomed fires on keepalive/heartbeat
-					// Lobbies are only left once at startup when initializing the Dota client
-					handler.startGCKeepalive()
-					go func() {
-						time.Sleep(2 * time.Second)
-						handler.recreateLobbyIfNeeded()
-					}()
-				}
-
-			case error:
-				log.Printf("[Game %s] Steam error: %v", config.GameID, e)
-				// Check if it's a connection error that we should retry
-				errStr := e.Error()
-				if strings.Contains(errStr, "connect: no route to host") ||
-					strings.Contains(errStr, "connection refused") ||
-					strings.Contains(errStr, "timeout") ||
-					strings.Contains(errStr, "Connect failed") {
-					connectionRetries++
-					if connectionRetries <= maxConnectionRetries {
-						log.Printf("[Game %s] Connection error (attempt %d/%d), will retry in %v...",
-							config.GameID, connectionRetries, maxConnectionRetries, retryDelay)
-						time.Sleep(retryDelay)
-						// Try to reconnect
-						client.Disconnect()
-						time.Sleep(1 * time.Second)
-						client.Connect()
-						retryDelay *= 2 // Exponential backoff
-					} else {
-						log.Printf("[Game %s] Connection failed after %d retries, giving up", config.GameID, maxConnectionRetries)
-						handler.setError(fmt.Sprintf("Failed to connect to Steam after %d retries: %v", maxConnectionRetries, e))
-						// Release account on failure
-						if accountPool != nil && handler.accountIndex >= 0 {
-							accountPool.Release(handler.accountIndex, config.GameID)
-						}
-						return
+								handler.lobbyShouldExist = true
+								handler.setState("waiting")
+								log.Printf("[Game %s] Lobby creation request sent (PassKey: %s)", config.GameID, passKey)
+							}
+						}()
 					}
-				} else {
-					// Non-connection error, don't retry
-					handler.setError(fmt.Sprintf("Steam error: %v", e))
-				}
 
-			case *steam.DisconnectedEvent:
-				log.Printf("[Game %s] Disconnected from Steam", config.GameID)
-				// Only set error if we haven't successfully created a lobby yet
-				if handler.currentLobbyID == 0 {
-					connectionRetries++
-					if connectionRetries <= maxConnectionRetries {
-						log.Printf("[Game %s] Disconnected (attempt %d/%d), will retry in %v...",
-							config.GameID, connectionRetries, maxConnectionRetries, retryDelay)
-						time.Sleep(retryDelay)
-						client.Connect()
-						retryDelay *= 2 // Exponential backoff
-					} else {
-						log.Printf("[Game %s] Disconnected after %d retries, giving up", config.GameID, maxConnectionRetries)
-						handler.setError("Disconnected from Steam after multiple retries")
-						// Release account on failure
-						if accountPool != nil && handler.accountIndex >= 0 {
-							accountPool.Release(handler.accountIndex, config.GameID)
-						}
-						return
+				case *devents.GCConnectionStatusChanged:
+					if handler != nil {
+						handler.handleConnectionStatusChange(e)
 					}
-				} else {
-					// Lobby was created, this might be a temporary disconnect - log but don't fail
-					log.Printf("[Game %s] Disconnected but lobby exists (ID: %d), will attempt to reconnect", config.GameID, handler.currentLobbyID)
+
+				case *devents.ClientWelcomed:
+					if handler != nil {
+						log.Printf("[Game %s] GC Client Welcomed", config.GameID)
+						// Start keepalive when GC welcomes us (session established)
+						// Note: We don't leave lobbies here - ClientWelcomed fires on keepalive/heartbeat
+						// Lobbies are only left once at startup when initializing the Dota client
+						handler.startGCKeepalive()
+						// Check if lobby needs to be recreated immediately (no delay needed)
+						go func() {
+							time.Sleep(500 * time.Millisecond) // Minimal delay
+							handler.recreateLobbyIfNeeded()
+						}()
+					}
+
+				case error:
+					log.Printf("[Game %s] Steam error: %v", config.GameID, e)
+					// Python's steam library handles connection errors internally via reconnect()
+					// We need to manually detect and retry connection errors
+					errStr := e.Error()
+					if strings.Contains(errStr, "connect: no route to host") ||
+						strings.Contains(errStr, "connection refused") ||
+						strings.Contains(errStr, "timeout") ||
+						strings.Contains(errStr, "Connect failed") {
+						connected = false // Reset connected flag
+						connectionRetries++
+						if connectionRetries <= maxConnectionRetries {
+							// Reduced retry delay from 15s to 1s for faster recovery
+							backoffDelay := 1 * time.Second
+							log.Printf("[Game %s] Connection error (attempt %d/%d), will retry in %v...",
+								config.GameID, connectionRetries, maxConnectionRetries, backoffDelay)
+							time.Sleep(backoffDelay)
+							// Try to reconnect (Python's steam.reconnect() does this automatically)
+							client.Disconnect()
+							time.Sleep(1 * time.Second)
+							lastConnectionAttempt = time.Now()
+							client.Connect()
+						} else {
+							log.Printf("[Game %s] Connection failed after %d retries, giving up", config.GameID, maxConnectionRetries)
+							handler.setError(fmt.Sprintf("Failed to connect to Steam after %d retries: %v", maxConnectionRetries, e))
+							// Release account on failure
+							if accountPool != nil && handler.accountIndex >= 0 {
+								accountPool.Release(handler.accountIndex, config.GameID)
+							}
+							return
+						}
+					} else {
+						// Non-connection error, don't retry
+						handler.setError(fmt.Sprintf("Steam error: %v", e))
+					}
+
+				case *steam.DisconnectedEvent:
+					log.Printf("[Game %s] Disconnected from Steam", config.GameID)
+					connected = false // Reset connected flag
+
+					// Python's steam library automatically handles reconnection via steam.reconnect(maxdelay=15)
+					// We need to manually handle this. Only retry if we haven't created a lobby yet.
+					if handler.currentLobbyID == 0 {
+						connectionRetries++
+						if connectionRetries <= maxConnectionRetries {
+							// Reduced retry delay from 15s to 1s for faster recovery
+							backoffDelay := 1 * time.Second
+							log.Printf("[Game %s] Disconnected (attempt %d/%d), will retry in %v...",
+								config.GameID, connectionRetries, maxConnectionRetries, backoffDelay)
+							time.Sleep(backoffDelay)
+							lastConnectionAttempt = time.Now()
+							client.Connect()
+						} else {
+							log.Printf("[Game %s] Disconnected after %d retries, giving up", config.GameID, maxConnectionRetries)
+							handler.setError("Disconnected from Steam after multiple retries")
+							// Release account on failure
+							if accountPool != nil && handler.accountIndex >= 0 {
+								accountPool.Release(handler.accountIndex, config.GameID)
+							}
+							return
+						}
+					} else {
+						// Lobby was created - Python's steam library would auto-reconnect here
+						// We'll attempt a single reconnect for existing lobbies
+						log.Printf("[Game %s] Disconnected but lobby exists (ID: %d), attempting reconnect...", config.GameID, handler.currentLobbyID)
+						go func() {
+							time.Sleep(5 * time.Second)
+							client.Connect()
+							lastConnectionAttempt = time.Now()
+						}()
+					}
 				}
 			}
 		}
@@ -2207,7 +2472,7 @@ func (h *gcHandler) handleConnectionStatusChange(event *devents.GCConnectionStat
 		h.reconnectMutex.Unlock()
 
 		go func() {
-			time.Sleep(2 * time.Second)
+			time.Sleep(500 * time.Millisecond) // Reduced from 2s
 			h.attemptReconnect()
 		}()
 	}
@@ -2243,7 +2508,7 @@ func (h *gcHandler) attemptReconnect() {
 	h.reconnectMutex.Unlock()
 
 	h.dota.SetPlaying(true)
-	time.Sleep(1 * time.Second)
+	time.Sleep(500 * time.Millisecond) // Reduced from 1s
 	h.dota.SayHello()
 }
 

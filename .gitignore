@@ -4,3 +4,10 @@ allUsers.db
 __pycache__
 venv
 /.idea
+dota2/
+game_results.json
+gargamel-lobby-manager.exe
+gargamel.exe
+go-dota2/
+go1.23.4.linux-amd64.tar.gz
+LOBBY_CONFIGURATION_GUIDE.md
