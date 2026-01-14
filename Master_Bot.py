@@ -2061,7 +2061,7 @@ class Master_Bot(commands.Bot):
                 )
                 return
 
-            # Update coordinator's in-memory game tracking
+            # Update coordinator's in-memory game tracking (simple replace before rebalancing)
             radiant_set, dire_set = self.game_map_inverse.get(game_id, (set(), set()))
 
             if old_member.id in radiant_set:
@@ -2076,6 +2076,7 @@ class Master_Bot(commands.Bot):
             self.game_map.pop(old_member.id, None)
             self.game_map[new_member.id] = game_id
 
+            # Rebalance teams after replace
             success = await self.coordinator.balance_teams(game_id)
 
             if not success:
@@ -2087,48 +2088,12 @@ class Master_Bot(commands.Bot):
 
             if game_id not in self.game_map_inverse:
                 return await interaction.followup.send(
-                    f"No active game with ID {game_id}.", ephemeral=True
+                    f"No active game with ID {game_id}.", ephemeral=True,
                 )
-
-            radiant, dire = self.game_map_inverse[game_id]
-
-            if old_member.id not in radiant and old_member.id not in dire:
-                return await interaction.followup.send(
-                    f"{old_member.display_name} is not in game {game_id}.",
-                    ephemeral=True,
-                )
-            if new_member.id in radiant or new_member.id in dire:
-                return await interaction.followup.send(
-                    f"{new_member.display_name} is already in game {game_id}.",
-                    ephemeral=True,
-                )
-
-            radiant_channel, dire_channel = self.game_channels.get(game_id)
-
-            # Update game map structures
-            if old_member.id in radiant:
-                radiant.remove(old_member.id)
-                radiant.add(new_member.id)
-                try:
-                    await new_member.move_to(radiant_channel)
-                except (discord.HTTPException, discord.ClientException):
-                    logger.exception(
-                        f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
-                    )
-            else:
-                dire.remove(old_member.id)
-                dire.add(new_member.id)
-                try:
-                    await new_member.move_to(dire_channel)
-                except (discord.HTTPException, discord.ClientException):
-                    logger.exception(
-                        f"[WARN] Couldn't move {new_member.display_name} — not connected to voice."
-                    )
-            self.game_map.pop(old_member.id, None)
-            self.game_map[new_member.id] = game_id
 
             # After rebalancing, fetch actual team assignments from REST API
             # This ensures the match card reflects the actual teams in the lobby manager
+            # and that game_map_inverse is synced with REST API state
             status = await self.rest_api.get_game_status(game_id)
             if status:
                 # Get teams from REST API (Steam IDs)
@@ -2164,27 +2129,57 @@ class Master_Bot(commands.Bot):
                 radiant = radiant_discord_ids
                 dire = dire_discord_ids
                 
-                logger.info(f"[Game {game_id}] Updated teams from REST API after replace: Radiant={len(radiant)}, Dire={len(dire)}")
+                logger.info(f"[Game {game_id}] Updated teams from REST API after replace: Radiant={len(radiant_discord_ids)}, Dire={len(dire_discord_ids)}")
+                
+                # Update voice channel assignments based on rebalanced teams
+                radiant_channel, dire_channel = self.game_channels.get(game_id, (None, None))
+                if radiant_channel and dire_channel:
+                    # Move players to correct voice channels based on rebalanced teams
+                    for discord_id in radiant_discord_ids:
+                        member = self.the_guild.get_member(discord_id)
+                        if member and member.voice:
+                            try:
+                                await member.move_to(radiant_channel)
+                            except (discord.HTTPException, discord.ClientException):
+                                logger.debug(f"[Game {game_id}] Couldn't move {discord_id} to Radiant channel")
+                    
+                    for discord_id in dire_discord_ids:
+                        member = self.the_guild.get_member(discord_id)
+                        if member and member.voice:
+                            try:
+                                await member.move_to(dire_channel)
+                            except (discord.HTTPException, discord.ClientException):
+                                logger.debug(f"[Game {game_id}] Couldn't move {discord_id} to Dire channel")
+                
+                # Use the teams from REST API for the embed
+                radiant = radiant_discord_ids
+                dire = dire_discord_ids
             else:
                 # Fallback to local state if REST API call fails
                 logger.warning(f"[Game {game_id}] Failed to get game status from REST API, using local state")
-                radiant = list(radiant)
-                dire = list(dire)
+                radiant_set, dire_set = self.game_map_inverse.get(game_id, (set(), set()))
+                radiant = list(radiant_set)
+                dire = list(dire_set)
 
             # Edit original lobby message
             lobby_msg = self.lobby_messages.get(game_id)
 
-            # Get password from game status
+            # Get password from game status (use cached status if available)
+            if not status:
+                status = await self.rest_api.get_game_status(game_id)
             password = status.get("pass_key", "N/A") if status else "N/A"
             
             embed = self.build_game_embed(game_id, radiant, dire, password)
 
             if lobby_msg:
-                await lobby_msg.edit(embed=embed)
-                logger.info(f"[Game {game_id}] Updated match card embed after replace")
+                try:
+                    await lobby_msg.edit(embed=embed)
+                    logger.info(f"[Game {game_id}] Updated match card embed after replace")
+                except Exception as e:
+                    logger.exception(f"[Game {game_id}] Failed to update match card embed: {e}")
 
             await interaction.followup.send(
-                f"Replaced {old_member.mention} with {new_member.mention} in game {game_id}.",
+                f"✅ Replaced {old_member.mention} with {new_member.mention} in game {game_id} and updated match card.",
                 ephemeral=True,
             )
 
@@ -2728,7 +2723,11 @@ class Master_Bot(commands.Bot):
 
             #Adding players to player_matches
             # Radiant = team 0, Dire = team 1
+            # NOTE: This uses game_map_inverse which should be kept in sync with REST API teams
+            # If teams are changed after game start (via force_replace/force_swap), match_players
+            # may need to be updated separately. Currently, teams are synced via game_map_inverse.
             radiant_ids, dire_ids = self.game_map_inverse.get(game_id, (set(), set()))
+            logger.info(f"[on_game_started] Logging teams to database for game {game_id}: Radiant={list(radiant_ids)}, Dire={list(dire_ids)}")
             for discord_id in radiant_ids:
                 mmr = DB.fetch_rating(discord_id)
                 logger.info(f"Adding Radiant player: discord_id {discord_id} to database for match_id: {match_id} with mmr: {mmr}")
