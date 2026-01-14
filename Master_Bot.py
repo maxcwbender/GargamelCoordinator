@@ -160,6 +160,26 @@ class RESTAPIClient:
             logger.exception(f"[Game {game_id}] Exception updating game mode: {e}")
             return False
     
+    async def update_game_teams(self, game_id: int, radiant_steam_ids: list[int], dire_steam_ids: list[int]) -> bool:
+        """Update the teams for a game."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.put(
+                    urljoin(self.base_url, f"/game/{game_id}"),
+                    json={"radiant_team": radiant_steam_ids, "dire_team": dire_steam_ids},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(f"[Game {game_id}] Updated teams: Radiant={len(radiant_steam_ids)}, Dire={len(dire_steam_ids)}")
+                        return True
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"[Game {game_id}] Failed to update teams: {resp.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Exception updating teams: {e}")
+            return False
+    
     async def start_polling(self, game_id: int) -> bool:
         """Notify the lobby manager that polling has started."""
         try:

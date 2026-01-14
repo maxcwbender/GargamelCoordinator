@@ -124,10 +124,12 @@ type CreateGameRequest struct {
 
 // UpdateLobbySettingsRequest represents a request to update lobby settings
 type UpdateLobbySettingsRequest struct {
-	GameMode     *uint32 `json:"game_mode,omitempty"`
-	ServerRegion *uint32 `json:"server_region,omitempty"`
-	AllowCheats  *bool   `json:"allow_cheats,omitempty"`
-	GameName     string  `json:"game_name,omitempty"`
+	GameMode     *uint32  `json:"game_mode,omitempty"`
+	ServerRegion *uint32  `json:"server_region,omitempty"`
+	AllowCheats  *bool    `json:"allow_cheats,omitempty"`
+	GameName     string   `json:"game_name,omitempty"`
+	RadiantTeam  []uint64 `json:"radiant_team,omitempty"`
+	DireTeam     []uint64 `json:"dire_team,omitempty"`
 }
 
 // AccountInfo holds credentials for a single Steam account
@@ -709,6 +711,16 @@ func handleUpdateLobbySettings(w http.ResponseWriter, r *http.Request, handler *
 	if req.GameName != "" {
 		handler.gameConfig.GameName = req.GameName
 		handler.currentGameName = req.GameName
+	}
+
+	// Update teams if provided
+	if req.RadiantTeam != nil {
+		log.Printf("[Game %s] Updating Radiant team: %v", handler.gameID, req.RadiantTeam)
+		handler.gameConfig.RadiantTeam = req.RadiantTeam
+	}
+	if req.DireTeam != nil {
+		log.Printf("[Game %s] Updating Dire team: %v", handler.gameID, req.DireTeam)
+		handler.gameConfig.DireTeam = req.DireTeam
 	}
 
 	// Apply settings to lobby if it exists
