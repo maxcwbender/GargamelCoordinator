@@ -75,6 +75,7 @@ class RESTAPIClient:
         pass_key: str = "",
         debug_steam_id: int = 0,
         lobby_ready_url: str = "",
+        game_started_url: str = "",
     ) -> str:
         """
         Create a new game via REST API.
@@ -92,6 +93,7 @@ class RESTAPIClient:
             "result_url": result_url,
             "poll_callback_url": poll_callback_url,
             "lobby_ready_url": lobby_ready_url,
+            "game_started_url": game_started_url,
             "server_region": server_region,
             "game_mode": game_mode,
             "allow_cheats": allow_cheats,
@@ -1310,10 +1312,53 @@ class Master_Bot(commands.Bot):
                 logger.exception(f"Error handling lobby ready callback: {e}")
                 return web.json_response({"error": str(e)}, status=500)
         
+        async def handle_game_started(request):
+            """Handle game started callback from lobby manager"""
+            try:
+                data = await request.json()
+                game_id = int(data.get("game_id", 0))
+                match_id = data.get("match_id", 0)
+                lobby_id = data.get("lobby_id", 0)
+                
+                if game_id == 0 or match_id == 0:
+                    logger.error(f"Invalid game_id or match_id in game_started callback: game_id={game_id}, match_id={match_id}")
+                    return web.json_response({"error": "Invalid game_id or match_id"}, status=400)
+                
+                logger.info(f"Received game started callback: game_id={game_id}, match_id={match_id}, lobby_id={lobby_id}")
+                
+                # Get game status from REST API to fill in game info fields
+                status = await self.rest_api.get_game_status(game_id)
+                
+                # Create a simple object to match game_info interface expected by on_game_started
+                class GameInfo:
+                    def __init__(self, data_dict, status_dict):
+                        self.match_id = data_dict.get("match_id", 0)
+                        self.lobby_id = data_dict.get("lobby_id", 0)
+                        self.state = "in_progress"  # Game is in progress when this callback fires
+                        if status_dict:
+                            self.game_mode = status_dict.get("game_mode", 22)
+                            self.server_region = status_dict.get("server_region", 2)
+                            self.lobby_type = 0  # Default, could be enhanced if needed
+                            self.league_id = 0  # Default, could be enhanced if needed
+                        else:
+                            self.game_mode = 22
+                            self.server_region = 2
+                            self.lobby_type = 0
+                            self.league_id = 0
+                
+                game_info = GameInfo(data, status)
+                await self.on_game_started(game_id, game_info)
+                
+                return web.json_response({"status": "received"})
+            except Exception as e:
+                logger.exception(f"Error handling game started callback: {e}")
+                return web.json_response({"error": str(e)}, status=500)
+        
         app = web.Application()
         app.router.add_post("/game_result", handle_game_result)
         app.router.add_post("/poll_callback", handle_poll_callback)
         app.router.add_post("/lobby_ready", handle_lobby_ready)
+        app.router.add_post("/game_started", handle_game_started)
         
         runner = web.AppRunner(app)
         await runner.setup()
@@ -3018,6 +3063,7 @@ class Master_Bot(commands.Bot):
             'password': password,
         }
         
+        game_started_url = f"http://localhost:{self.config.get('RESULT_CALLBACK_PORT', 9999)}/game_started"
         password = await self.rest_api.create_game(
             game_id=game_id,
             username=username,
@@ -3027,6 +3073,7 @@ class Master_Bot(commands.Bot):
             result_url=result_url,
             poll_callback_url=poll_callback_url,
             lobby_ready_url=lobby_ready_url,
+            game_started_url=game_started_url,
             server_region=server_region,
             game_mode=game_mode,
             allow_cheats=allow_cheats,

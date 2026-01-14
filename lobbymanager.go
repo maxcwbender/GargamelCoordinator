@@ -66,6 +66,7 @@ type GameConfig struct {
 	DebugSteamID    uint64   `json:"debug_steam_id"`              // Optional: for debug mode
 	PollCallbackURL string   `json:"poll_callback_url,omitempty"` // Optional: URL to notify when polling should be triggered
 	LobbyReadyURL   string   `json:"lobby_ready_url,omitempty"`   // Optional: URL to notify when lobby is established
+	GameStartedURL  string   `json:"game_started_url,omitempty"`  // Optional: URL to notify when game starts (match_id available)
 	LeagueID        uint32   `json:"league_id"`                   // League ID from config.json
 }
 
@@ -120,6 +121,7 @@ type CreateGameRequest struct {
 	DebugSteamID    uint64   `json:"debug_steam_id,omitempty"`    // Optional
 	PollCallbackURL string   `json:"poll_callback_url,omitempty"` // Optional: URL to notify when polling should be triggered
 	LobbyReadyURL   string   `json:"lobby_ready_url,omitempty"`   // Optional: URL to notify when lobby is established
+	GameStartedURL  string   `json:"game_started_url,omitempty"`  // Optional: URL to notify when game starts (match_id available)
 }
 
 // UpdateLobbySettingsRequest represents a request to update lobby settings
@@ -292,6 +294,9 @@ type gcHandler struct {
 	lobbyReadyURL        string // URL to notify when lobby is established
 	lobbyReadyNotified   bool   // Track if lobby ready callback has been sent
 	lobbyReadyMutex      sync.Mutex
+	gameStartedURL       string // URL to notify when game starts (match_id available)
+	gameStartedNotified  bool   // Track if game started callback has been sent
+	gameStartedMutex     sync.Mutex
 	invitesSent          bool // Track if invites have been sent
 	invitesMutex         sync.Mutex
 	playersInvited       map[uint64]bool // Track which players have been invited (per lobby)
@@ -536,26 +541,29 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		DebugSteamID:    req.DebugSteamID,
 		PollCallbackURL: req.PollCallbackURL,
 		LobbyReadyURL:   req.LobbyReadyURL,
+		GameStartedURL:  req.GameStartedURL,
 		LeagueID:        leagueID,
 	}
 
 	// Create handler and start game
 	ctx, cancel := context.WithCancel(context.Background())
 	handler := &gcHandler{
-		gameID:             req.GameID,
-		gameConfig:         config,
-		accountIndex:       accountIndex, // Store account index for later release
-		pendingResults:     make(map[uint64]*GameResult),
-		lobbyMembers:       make(map[uint64]*LobbyMember),
-		ctx:                ctx,
-		cancel:             cancel,
-		state:              "creating",
-		pollingActive:      false,
-		pollingDone:        false,
-		pollCallbackURL:    req.PollCallbackURL,
-		lobbyReadyURL:      req.LobbyReadyURL,
-		lobbyReadyNotified: false,
-		playersInvited:     make(map[uint64]bool),
+		gameID:              req.GameID,
+		gameConfig:          config,
+		accountIndex:        accountIndex, // Store account index for later release
+		pendingResults:      make(map[uint64]*GameResult),
+		lobbyMembers:        make(map[uint64]*LobbyMember),
+		ctx:                 ctx,
+		cancel:              cancel,
+		state:               "creating",
+		pollingActive:       false,
+		pollingDone:         false,
+		pollCallbackURL:     req.PollCallbackURL,
+		lobbyReadyURL:       req.LobbyReadyURL,
+		lobbyReadyNotified:  false,
+		gameStartedURL:      req.GameStartedURL,
+		gameStartedNotified: false,
+		playersInvited:      make(map[uint64]bool),
 	}
 
 	gameManager.AddGame(req.GameID, handler)
@@ -1361,6 +1369,57 @@ func (h *gcHandler) notifyLobbyReady() {
 	}
 }
 
+func (h *gcHandler) notifyGameStarted(matchID uint64) {
+	h.gameStartedMutex.Lock()
+	defer h.gameStartedMutex.Unlock()
+
+	// Only notify if we have a valid match ID
+	if matchID == 0 {
+		log.Printf("[Game %s] Cannot notify game started - matchID is 0", h.gameID)
+		return
+	}
+
+	if h.gameStartedNotified {
+		log.Printf("[Game %s] Game started already notified, skipping", h.gameID)
+		return
+	}
+
+	if h.gameStartedURL == "" {
+		log.Printf("[Game %s] Cannot notify game started - gameStartedURL is empty", h.gameID)
+		return
+	}
+
+	h.gameStartedNotified = true
+
+	reqBody := map[string]interface{}{
+		"game_id":  h.gameID,
+		"match_id": matchID,
+		"lobby_id": h.currentLobbyID,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		log.Printf("[Game %s] Failed to marshal game started notification: %v", h.gameID, err)
+		return
+	}
+
+	log.Printf("[Game %s] Calling notifyGameStarted: URL=%s, matchID=%d, lobbyID=%d", h.gameID, h.gameStartedURL, matchID, h.currentLobbyID)
+
+	resp, err := http.Post(h.gameStartedURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("[Game %s] Failed to notify game started: %v", h.gameID, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		log.Printf("[Game %s] Game started notification returned status: %d, body: %s", h.gameID, resp.StatusCode, string(body))
+	} else {
+		log.Printf("[Game %s] Successfully notified Master_Bot that game started (match_id=%d, status=%d)", h.gameID, matchID, resp.StatusCode)
+	}
+}
+
 // sendResultToMasterBot sends game result to the master bot via HTTP POST
 func (h *gcHandler) sendResultToMasterBot(result *GameResult) error {
 	if h.gameConfig.ResultURL == "" {
@@ -2117,6 +2176,15 @@ func (h *gcHandler) processMatchInfo(match *protocol.CMsgDOTAMatch) {
 	defer h.resultsMutex.Unlock()
 
 	matchID := match.GetMatchId()
+
+	// Notify game started if we have a match ID and game is in progress
+	if matchID != 0 && h.gameInProgress {
+		// Call notifyGameStarted outside the mutex to avoid deadlock
+		h.resultsMutex.Unlock()
+		h.notifyGameStarted(matchID)
+		h.resultsMutex.Lock()
+	}
+
 	if h.gameInProgress {
 		h.gameInProgress = false
 	}
