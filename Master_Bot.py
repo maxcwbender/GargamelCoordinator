@@ -248,15 +248,18 @@ class RESTAPIClient:
                 async with session.post(
                     urljoin(self.base_url, f"/game/{game_id}/replace"),
                     json={"old_steam_id": old_steam_id, "new_steam_id": new_steam_id},
-                    timeout=aiohttp.ClientTimeout(total=10)
+                    timeout=aiohttp.ClientTimeout(total=30)  # Increased timeout to 30 seconds
                 ) as resp:
                     if resp.status == 200:
-                        logger.info(f"[Game {game_id}] Successfully replaced player")
+                        logger.info(f"[Game {game_id}] Successfully replaced player {old_steam_id} with {new_steam_id}")
                         return True
                     else:
                         error_text = await resp.text()
                         logger.warning(f"[Game {game_id}] Failed to replace player: {resp.status} - {error_text}")
                         return False
+        except asyncio.TimeoutError:
+            logger.error(f"[Game {game_id}] Timeout while replacing player {old_steam_id} with {new_steam_id}")
+            return False
         except Exception as e:
             logger.exception(f"[Game {game_id}] Exception replacing player: {e}")
             return False
@@ -2104,17 +2107,61 @@ class Master_Bot(commands.Bot):
             self.game_map.pop(old_member.id, None)
             self.game_map[new_member.id] = game_id
 
+            # After rebalancing, fetch actual team assignments from REST API
+            # This ensures the match card reflects the actual teams in the lobby manager
+            status = await self.rest_api.get_game_status(game_id)
+            if status:
+                # Get teams from REST API (Steam IDs)
+                radiant_steam_ids = status.get("radiant_team", [])
+                dire_steam_ids = status.get("dire_team", [])
+                
+                # Convert Steam IDs to Discord IDs
+                radiant_discord_ids = []
+                dire_discord_ids = []
+                
+                for steam_id in radiant_steam_ids:
+                    # Query database to find Discord ID for this Steam ID
+                    discord_id = DB.fetch_one(
+                        "SELECT discord_id FROM users WHERE steam_id = ?",
+                        (str(steam_id),)
+                    )
+                    if discord_id:
+                        radiant_discord_ids.append(int(discord_id))
+                
+                for steam_id in dire_steam_ids:
+                    # Query database to find Discord ID for this Steam ID
+                    discord_id = DB.fetch_one(
+                        "SELECT discord_id FROM users WHERE steam_id = ?",
+                        (str(steam_id),)
+                    )
+                    if discord_id:
+                        dire_discord_ids.append(int(discord_id))
+                
+                # Update game_map_inverse with actual teams from REST API
+                self.game_map_inverse[game_id] = (set(radiant_discord_ids), set(dire_discord_ids))
+                
+                # Use the teams from REST API for the embed
+                radiant = radiant_discord_ids
+                dire = dire_discord_ids
+                
+                logger.info(f"[Game {game_id}] Updated teams from REST API after replace: Radiant={len(radiant)}, Dire={len(dire)}")
+            else:
+                # Fallback to local state if REST API call fails
+                logger.warning(f"[Game {game_id}] Failed to get game status from REST API, using local state")
+                radiant = list(radiant)
+                dire = list(dire)
+
             # Edit original lobby message
             lobby_msg = self.lobby_messages.get(game_id)
 
             # Get password from game status
-            status = await self.rest_api.get_game_status(game_id)
             password = status.get("pass_key", "N/A") if status else "N/A"
             
-            embed = self.build_game_embed(game_id, list(radiant), list(dire), password)
+            embed = self.build_game_embed(game_id, radiant, dire, password)
 
             if lobby_msg:
                 await lobby_msg.edit(embed=embed)
+                logger.info(f"[Game {game_id}] Updated match card embed after replace")
 
             await interaction.followup.send(
                 f"Replaced {old_member.mention} with {new_member.mention} in game {game_id}.",

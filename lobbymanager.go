@@ -1018,71 +1018,140 @@ type ReplacePlayerRequest struct {
 }
 
 func handleReplacePlayer(w http.ResponseWriter, r *http.Request, handler *gcHandler, gameID string) {
+	// Track if we've sent a response to avoid double-sending
+	responseSent := false
+	defer func() {
+		if !responseSent {
+			log.Printf("[Game %s] WARNING: No response sent in replace handler, sending error response", gameID)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+	}()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		responseSent = true
 		return
 	}
 
 	var req ReplacePlayerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("[Game %s] Replace request decode error: %v", gameID, err)
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		responseSent = true
 		return
 	}
 
+	log.Printf("[Game %s] Replace request received: OldSteamID=%d, NewSteamID=%d", gameID, req.OldSteamID, req.NewSteamID)
+
+	// Validate handler and config
+	log.Printf("[Game %s] Validating handler and config...", gameID)
+	if handler == nil {
+		log.Printf("[Game %s] ERROR: Handler is nil", gameID)
+		http.Error(w, "Internal error: handler is nil", http.StatusInternalServerError)
+		responseSent = true
+		return
+	}
+	if handler.gameConfig == nil {
+		log.Printf("[Game %s] ERROR: gameConfig is nil", gameID)
+		http.Error(w, "Internal error: game config is nil", http.StatusInternalServerError)
+		responseSent = true
+		return
+	}
+	log.Printf("[Game %s] Handler and config validated", gameID)
+
+	// Log current team configuration before replace
+	log.Printf("[Game %s] Before replace - RadiantTeam: %v, DireTeam: %v", gameID, handler.gameConfig.RadiantTeam, handler.gameConfig.DireTeam)
+
 	// Check if new player is already in game
+	log.Printf("[Game %s] Checking if new player %d is already in game...", gameID, req.NewSteamID)
 	for _, sid := range handler.gameConfig.RadiantTeam {
 		if sid == req.NewSteamID {
+			log.Printf("[Game %s] Replace failed: New player %d is already in Radiant team", gameID, req.NewSteamID)
 			http.Error(w, "New player is already in the game", http.StatusBadRequest)
+			responseSent = true
 			return
 		}
 	}
 	for _, sid := range handler.gameConfig.DireTeam {
 		if sid == req.NewSteamID {
+			log.Printf("[Game %s] Replace failed: New player %d is already in Dire team", gameID, req.NewSteamID)
 			http.Error(w, "New player is already in the game", http.StatusBadRequest)
+			responseSent = true
 			return
 		}
 	}
+	log.Printf("[Game %s] New player %d is not already in game", gameID, req.NewSteamID)
+
+	// Get player names for logging
+	log.Printf("[Game %s] Acquiring membersMutex to get player names...", gameID)
+	handler.membersMutex.Lock()
+	oldPlayerName := handler.getPlayerDisplayName(req.OldSteamID)
+	newPlayerName := handler.getPlayerDisplayName(req.NewSteamID)
+	handler.membersMutex.Unlock()
+	log.Printf("[Game %s] Got player names: old=%s, new=%s", gameID, oldPlayerName, newPlayerName)
 
 	// Find and replace in Radiant
+	log.Printf("[Game %s] Searching for old player %s in Radiant team...", gameID, oldPlayerName)
 	replaced := false
 	for i, sid := range handler.gameConfig.RadiantTeam {
 		if sid == req.OldSteamID {
 			handler.gameConfig.RadiantTeam[i] = req.NewSteamID
 			replaced = true
+			log.Printf("[Game %s] Replaced %s with %s in Radiant team", gameID, oldPlayerName, newPlayerName)
 			break
 		}
 	}
 
 	// Find and replace in Dire if not found in Radiant
 	if !replaced {
+		log.Printf("[Game %s] Old player not found in Radiant, searching Dire team...", gameID)
 		for i, sid := range handler.gameConfig.DireTeam {
 			if sid == req.OldSteamID {
 				handler.gameConfig.DireTeam[i] = req.NewSteamID
 				replaced = true
+				log.Printf("[Game %s] Replaced %s with %s in Dire team", gameID, oldPlayerName, newPlayerName)
 				break
 			}
 		}
 	}
 
 	if !replaced {
+		log.Printf("[Game %s] Replace failed: Old player %s not found in game", gameID, oldPlayerName)
 		http.Error(w, "Old player not found in game", http.StatusBadRequest)
+		responseSent = true
 		return
 	}
 
-	// Kick old player from team
-	if handler.dota != nil {
-		oldSteamID32 := uint32(req.OldSteamID & 0xFFFFFFFF)
-		handler.dota.KickLobbyMemberFromTeam(oldSteamID32)
+	// Log team configuration after replace
+	log.Printf("[Game %s] After replace - RadiantTeam: %v, DireTeam: %v", gameID, handler.gameConfig.RadiantTeam, handler.gameConfig.DireTeam)
+
+	// Send response immediately before any potentially slow operations
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "replaced"}); err != nil {
+		log.Printf("[Game %s] Error encoding replace response: %v", gameID, err)
+		responseSent = true
+		return
 	}
 
-	handler.membersMutex.Lock()
-	oldPlayerName := handler.getPlayerDisplayName(req.OldSteamID)
-	newPlayerName := handler.getPlayerDisplayName(req.NewSteamID)
-	handler.membersMutex.Unlock()
-	log.Printf("[Game %s] Replaced player %s with %s", gameID, oldPlayerName, newPlayerName)
+	// Flush the response to ensure it's sent immediately
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+		log.Printf("[Game %s] Response flushed to client", gameID)
+	}
+	responseSent = true
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "replaced"})
+	// Kick old player from team (non-blocking)
+	if handler.dota != nil {
+		oldSteamID32 := uint32(req.OldSteamID & 0xFFFFFFFF)
+		log.Printf("[Game %s] Kicking old player %s (32-bit: %d) from team to trigger re-seating", gameID, oldPlayerName, oldSteamID32)
+		handler.dota.KickLobbyMemberFromTeam(oldSteamID32)
+		log.Printf("[Game %s] Kicked old player from team - new player will need to join", gameID)
+	} else {
+		log.Printf("[Game %s] Warning: Dota client is nil, cannot kick old player from team", gameID)
+	}
+
+	log.Printf("[Game %s] Replace completed successfully: %s -> %s", gameID, oldPlayerName, newPlayerName)
 }
 
 // ChatMessageRequest represents a request to send a chat message
