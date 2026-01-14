@@ -225,15 +225,18 @@ class RESTAPIClient:
                 async with session.post(
                     urljoin(self.base_url, f"/game/{game_id}/swap"),
                     json={"steam_id_1": steam_id_1, "steam_id_2": steam_id_2},
-                    timeout=aiohttp.ClientTimeout(total=10)
+                    timeout=aiohttp.ClientTimeout(total=30)  # Increased timeout to 30 seconds
                 ) as resp:
                     if resp.status == 200:
-                        logger.info(f"[Game {game_id}] Successfully swapped players")
+                        logger.info(f"[Game {game_id}] Successfully swapped players {steam_id_1} and {steam_id_2}")
                         return True
                     else:
                         error_text = await resp.text()
                         logger.warning(f"[Game {game_id}] Failed to swap players: {resp.status} - {error_text}")
                         return False
+        except asyncio.TimeoutError:
+            logger.error(f"[Game {game_id}] Timeout while swapping players {steam_id_1} and {steam_id_2}")
+            return False
         except Exception as e:
             logger.exception(f"[Game {game_id}] Exception swapping players: {e}")
             return False
@@ -1364,9 +1367,6 @@ class Master_Bot(commands.Bot):
         if not full_queue:
             embed.description = "*No Players are currently queueing.*"
 
-            if self.config["DEBUG_MODE"]:
-                embed.description += f"\n\n <:BrokenRobot:1394750222940377218>*Gargamel Bot is currently set to DEBUG mode. <:BrokenRobot:1394750222940377218>*"
-
         else:
             player_lines = "\n".join(
                 f"{"✅ " if user_id in readied else ""}<@{user_id}>"
@@ -1416,6 +1416,10 @@ class Master_Bot(commands.Bot):
                 inline = content.get("inline", False)  # or whatever default you prefer
 
             embed.add_field(name=name, value=value, inline=inline)
+
+        # Add debug mode footer if enabled (persists whether queue is empty or not)
+        if self.config["DEBUG_MODE"]:
+            embed.set_footer(text="<:BrokenRobot:1394750222940377218> Gargamel Bot is currently set to DEBUG mode. <:BrokenRobot:1394750222940377218>")
 
         view = self.QueueButtonView(parent=self)
 
@@ -1908,13 +1912,20 @@ class Master_Bot(commands.Bot):
             # Edit original lobby message
             lobby_msg = self.lobby_messages.get(game_id)
 
-            # Get password from game status or use stored value
-            # Password is set when game is created, we can retrieve it from status if needed
-            password = "N/A"  # Password is managed by REST API, not directly accessible
+            # Get password from game status
+            password = "N/A"
+            try:
+                status = await self.rest_api.get_game_status(game_id)
+                if status:
+                    password = status.get("pass_key", "N/A")
+            except Exception as e:
+                logger.warning(f"[Game {game_id}] Failed to get password from game status: {e}")
+            
             embed = self.build_game_embed(game_id, radiant, dire, password)
 
             if lobby_msg:
                 await lobby_msg.edit(embed=embed)
+                logger.info(f"[Game {game_id}] Updated match card embed after swap")
 
             await interaction.followup.send(
                 f"✅ Swapped <@{user1.id}> and <@{user2.id}> in game {game_id} and updated lobby message."

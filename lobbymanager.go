@@ -851,9 +851,21 @@ func handleSwapPlayers(w http.ResponseWriter, r *http.Request, handler *gcHandle
 
 	var req SwapPlayersRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("[Game %s] Swap request decode error: %v", gameID, err)
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("[Game %s] Swap request received: SteamID1=%d, SteamID2=%d", gameID, req.SteamID1, req.SteamID2)
+
+	// Get player names for logging
+	handler.membersMutex.Lock()
+	player1Name := handler.getPlayerDisplayName(req.SteamID1)
+	player2Name := handler.getPlayerDisplayName(req.SteamID2)
+	handler.membersMutex.Unlock()
+
+	// Log current team configuration before swap
+	log.Printf("[Game %s] Before swap - RadiantTeam: %v, DireTeam: %v", gameID, handler.gameConfig.RadiantTeam, handler.gameConfig.DireTeam)
 
 	// Validate players are on opposite teams
 	steamID1InRadiant := false
@@ -879,65 +891,90 @@ func handleSwapPlayers(w http.ResponseWriter, r *http.Request, handler *gcHandle
 		}
 	}
 
+	log.Printf("[Game %s] Team validation - Player1 (%s): Radiant=%v, Dire=%v | Player2 (%s): Radiant=%v, Dire=%v",
+		gameID, player1Name, steamID1InRadiant, steamID1InDire, player2Name, steamID2InRadiant, steamID2InDire)
+
 	// Must be on opposite teams
 	if !((steamID1InRadiant && steamID2InDire) || (steamID1InDire && steamID2InRadiant)) {
+		log.Printf("[Game %s] Swap failed: Players must be on opposite teams", gameID)
 		http.Error(w, "Players must be on opposite teams", http.StatusBadRequest)
 		return
 	}
 
 	// Swap in config
 	if steamID1InRadiant && steamID2InDire {
+		log.Printf("[Game %s] Swapping: %s (Radiant) <-> %s (Dire)", gameID, player1Name, player2Name)
 		// Remove from current teams
 		for i, sid := range handler.gameConfig.RadiantTeam {
 			if sid == req.SteamID1 {
 				handler.gameConfig.RadiantTeam = append(handler.gameConfig.RadiantTeam[:i], handler.gameConfig.RadiantTeam[i+1:]...)
+				log.Printf("[Game %s] Removed %s from Radiant team", gameID, player1Name)
 				break
 			}
 		}
 		for i, sid := range handler.gameConfig.DireTeam {
 			if sid == req.SteamID2 {
 				handler.gameConfig.DireTeam = append(handler.gameConfig.DireTeam[:i], handler.gameConfig.DireTeam[i+1:]...)
+				log.Printf("[Game %s] Removed %s from Dire team", gameID, player2Name)
 				break
 			}
 		}
 		// Add to opposite teams
 		handler.gameConfig.RadiantTeam = append(handler.gameConfig.RadiantTeam, req.SteamID2)
 		handler.gameConfig.DireTeam = append(handler.gameConfig.DireTeam, req.SteamID1)
+		log.Printf("[Game %s] Added %s to Radiant team, %s to Dire team", gameID, player2Name, player1Name)
 	} else {
+		log.Printf("[Game %s] Swapping: %s (Dire) <-> %s (Radiant)", gameID, player1Name, player2Name)
 		// Remove from current teams
 		for i, sid := range handler.gameConfig.DireTeam {
 			if sid == req.SteamID1 {
 				handler.gameConfig.DireTeam = append(handler.gameConfig.DireTeam[:i], handler.gameConfig.DireTeam[i+1:]...)
+				log.Printf("[Game %s] Removed %s from Dire team", gameID, player1Name)
 				break
 			}
 		}
 		for i, sid := range handler.gameConfig.RadiantTeam {
 			if sid == req.SteamID2 {
 				handler.gameConfig.RadiantTeam = append(handler.gameConfig.RadiantTeam[:i], handler.gameConfig.RadiantTeam[i+1:]...)
+				log.Printf("[Game %s] Removed %s from Radiant team", gameID, player2Name)
 				break
 			}
 		}
 		// Add to opposite teams
 		handler.gameConfig.DireTeam = append(handler.gameConfig.DireTeam, req.SteamID2)
 		handler.gameConfig.RadiantTeam = append(handler.gameConfig.RadiantTeam, req.SteamID1)
+		log.Printf("[Game %s] Added %s to Dire team, %s to Radiant team", gameID, player2Name, player1Name)
 	}
 
-	// Kick both players from teams so they re-seat correctly
+	// Log team configuration after swap
+	log.Printf("[Game %s] After swap - RadiantTeam: %v, DireTeam: %v", gameID, handler.gameConfig.RadiantTeam, handler.gameConfig.DireTeam)
+
+	// Send response immediately before any potentially slow operations
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "swapped"}); err != nil {
+		log.Printf("[Game %s] Error encoding swap response: %v", gameID, err)
+		return
+	}
+
+	// Flush the response to ensure it's sent
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	// Kick both players from teams so they re-seat correctly (non-blocking)
 	if handler.dota != nil {
 		steamID1_32 := uint32(req.SteamID1 & 0xFFFFFFFF)
 		steamID2_32 := uint32(req.SteamID2 & 0xFFFFFFFF)
+		log.Printf("[Game %s] Kicking players from teams to trigger re-seating: %s (32-bit: %d), %s (32-bit: %d)",
+			gameID, player1Name, steamID1_32, player2Name, steamID2_32)
 		handler.dota.KickLobbyMemberFromTeam(steamID1_32)
 		handler.dota.KickLobbyMemberFromTeam(steamID2_32)
+		log.Printf("[Game %s] Kicked both players from teams - they will re-seat on their new teams", gameID)
+	} else {
+		log.Printf("[Game %s] Warning: Dota client is nil, cannot kick players from teams", gameID)
 	}
 
-	handler.membersMutex.Lock()
-	player1Name := handler.getPlayerDisplayName(req.SteamID1)
-	player2Name := handler.getPlayerDisplayName(req.SteamID2)
-	handler.membersMutex.Unlock()
-	log.Printf("[Game %s] Swapped players %s and %s", gameID, player1Name, player2Name)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "swapped"})
+	log.Printf("[Game %s] Swap completed successfully: %s <-> %s", gameID, player1Name, player2Name)
 }
 
 // ReplacePlayerRequest represents a request to replace a player
