@@ -885,12 +885,10 @@ func handleSwapPlayers(w http.ResponseWriter, r *http.Request, handler *gcHandle
 	}
 	log.Printf("[Game %s] Handler and config validated", gameID)
 
-	// Get player names for logging
-	log.Printf("[Game %s] Acquiring membersMutex to get player names...", gameID)
-	handler.membersMutex.Lock()
+	// Get player names for logging (getPlayerDisplayName handles its own locking)
+	log.Printf("[Game %s] Getting player names...", gameID)
 	player1Name := handler.getPlayerDisplayName(req.SteamID1)
 	player2Name := handler.getPlayerDisplayName(req.SteamID2)
-	handler.membersMutex.Unlock()
 	log.Printf("[Game %s] Got player names: %s, %s", gameID, player1Name, player2Name)
 
 	// Log current team configuration before swap
@@ -1082,12 +1080,10 @@ func handleReplacePlayer(w http.ResponseWriter, r *http.Request, handler *gcHand
 	}
 	log.Printf("[Game %s] New player %d is not already in game", gameID, req.NewSteamID)
 
-	// Get player names for logging
-	log.Printf("[Game %s] Acquiring membersMutex to get player names...", gameID)
-	handler.membersMutex.Lock()
+	// Get player names for logging (getPlayerDisplayName handles its own locking)
+	log.Printf("[Game %s] Getting player names...", gameID)
 	oldPlayerName := handler.getPlayerDisplayName(req.OldSteamID)
 	newPlayerName := handler.getPlayerDisplayName(req.NewSteamID)
-	handler.membersMutex.Unlock()
 	log.Printf("[Game %s] Got player names: old=%s, new=%s", gameID, oldPlayerName, newPlayerName)
 
 	// Find and replace in Radiant
