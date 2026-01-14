@@ -1417,9 +1417,14 @@ class Master_Bot(commands.Bot):
 
             embed.add_field(name=name, value=value, inline=inline)
 
-        # Add debug mode footer if enabled (persists whether queue is empty or not)
+        # Add debug mode message if enabled (persists whether queue is empty or not)
+        # Using a field instead of footer because footers don't support custom emoji markdown
         if self.config["DEBUG_MODE"]:
-            embed.set_footer(text="<:BrokenRobot:1394750222940377218> Gargamel Bot is currently set to DEBUG mode. <:BrokenRobot:1394750222940377218>")
+            embed.add_field(
+                name="\u200b",  # Invisible character for spacing
+                value="<:BrokenRobot:1394750222940377218> **Gargamel Bot is currently set to DEBUG mode.** <:BrokenRobot:1394750222940377218>",
+                inline=False
+            )
 
         view = self.QueueButtonView(parent=self)
 

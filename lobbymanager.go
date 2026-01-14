@@ -844,8 +844,18 @@ type SwapPlayersRequest struct {
 }
 
 func handleSwapPlayers(w http.ResponseWriter, r *http.Request, handler *gcHandler, gameID string) {
+	// Track if we've sent a response to avoid double-sending
+	responseSent := false
+	defer func() {
+		if !responseSent {
+			log.Printf("[Game %s] WARNING: No response sent in swap handler, sending error response", gameID)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+	}()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		responseSent = true
 		return
 	}
 
@@ -853,16 +863,35 @@ func handleSwapPlayers(w http.ResponseWriter, r *http.Request, handler *gcHandle
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("[Game %s] Swap request decode error: %v", gameID, err)
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		responseSent = true
 		return
 	}
 
 	log.Printf("[Game %s] Swap request received: SteamID1=%d, SteamID2=%d", gameID, req.SteamID1, req.SteamID2)
 
+	// Validate handler and config
+	log.Printf("[Game %s] Validating handler and config...", gameID)
+	if handler == nil {
+		log.Printf("[Game %s] ERROR: Handler is nil", gameID)
+		http.Error(w, "Internal error: handler is nil", http.StatusInternalServerError)
+		responseSent = true
+		return
+	}
+	if handler.gameConfig == nil {
+		log.Printf("[Game %s] ERROR: gameConfig is nil", gameID)
+		http.Error(w, "Internal error: game config is nil", http.StatusInternalServerError)
+		responseSent = true
+		return
+	}
+	log.Printf("[Game %s] Handler and config validated", gameID)
+
 	// Get player names for logging
+	log.Printf("[Game %s] Acquiring membersMutex to get player names...", gameID)
 	handler.membersMutex.Lock()
 	player1Name := handler.getPlayerDisplayName(req.SteamID1)
 	player2Name := handler.getPlayerDisplayName(req.SteamID2)
 	handler.membersMutex.Unlock()
+	log.Printf("[Game %s] Got player names: %s, %s", gameID, player1Name, player2Name)
 
 	// Log current team configuration before swap
 	log.Printf("[Game %s] Before swap - RadiantTeam: %v, DireTeam: %v", gameID, handler.gameConfig.RadiantTeam, handler.gameConfig.DireTeam)
@@ -898,6 +927,7 @@ func handleSwapPlayers(w http.ResponseWriter, r *http.Request, handler *gcHandle
 	if !((steamID1InRadiant && steamID2InDire) || (steamID1InDire && steamID2InRadiant)) {
 		log.Printf("[Game %s] Swap failed: Players must be on opposite teams", gameID)
 		http.Error(w, "Players must be on opposite teams", http.StatusBadRequest)
+		responseSent = true
 		return
 	}
 
@@ -951,15 +981,19 @@ func handleSwapPlayers(w http.ResponseWriter, r *http.Request, handler *gcHandle
 
 	// Send response immediately before any potentially slow operations
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "swapped"}); err != nil {
 		log.Printf("[Game %s] Error encoding swap response: %v", gameID, err)
+		responseSent = true
 		return
 	}
 
-	// Flush the response to ensure it's sent
+	// Flush the response to ensure it's sent immediately
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
+		log.Printf("[Game %s] Response flushed to client", gameID)
 	}
+	responseSent = true
 
 	// Kick both players from teams so they re-seat correctly (non-blocking)
 	if handler.dota != nil {
