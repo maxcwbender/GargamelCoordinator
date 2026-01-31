@@ -453,33 +453,39 @@ class Master_Bot(commands.Bot):
         # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
         # clean them up and just assume it's fine.
         general_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
+        if not general_channel:
+            logger.error("General voice channel not found during cleanup!")
+            return
 
-        move_tasks = []
+        all_members_to_move = []
         delete_tasks = []
 
+        # Collect all members from all Game channels
         for channel in self.the_guild.voice_channels:
             if channel.name.startswith("Game"):
                 logger.info(f"Found Game channel: {channel.name}")
-                # Queue up move tasks for all members in the Game channel
+                # Collect all members in the Game channel
                 for member in channel.members:
                     if member.voice and member.voice.channel == channel:
                         logger.info(
-                            f"[clean_up_on_exit_helper] Moving Member: {member} from leftover voice channel added to queued tasks.")
-                        move_tasks.append(member.move_to(general_channel))
+                            f"[clean_up_on_exit_helper] Moving Member: {member} from leftover voice channel")
+                        all_members_to_move.append(member)
 
                 # Queue up deletion of the Game channel
                 logger.info(f"[clean_up_on_exit_helper] Deleting channel:'{channel}' added to queued tasks.")
                 delete_tasks.append(channel.delete())
 
-        if move_tasks:
+        # Move all members with rate limiting
+        if all_members_to_move:
             logger.info(
-                f"[clean_up_on_exit_helper] Running async task to move all players from leftover Game Voice channels.")
-            await asyncio.gather(*move_tasks)
+                f"[clean_up_on_exit_helper] Moving {len(all_members_to_move)} players from leftover Game Voice channels (rate-limited)")
+            await self._move_members_with_rate_limit(all_members_to_move, general_channel, 0)
 
-
-        logger.info(
-            f"[clean_up_on_exit_helper] Running async task to delete leftover Game Voice channels.")
-        await asyncio.gather(*delete_tasks)
+        # Delete channels after all members are moved
+        if delete_tasks:
+            logger.info(
+                f"[clean_up_on_exit_helper] Running async task to delete leftover Game Voice channels.")
+            await asyncio.gather(*delete_tasks, return_exceptions=True)
 
     async def clean_up_on_exit_helper(self):
         # Cleaning up channels is async, but signal catcher requires sync, setting up a job to
@@ -510,67 +516,150 @@ class Master_Bot(commands.Bot):
             logger.debug(f" - {task}")
 
     async def queue_user(self, interaction: discord.Interaction, respond=True):
+        """Add a user to the queue with proper interaction handling."""
+        response_sent = False
+        
+        # Always respond to the interaction first to prevent timeout
+        if interaction:
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=False, ephemeral=True)
+                    response_sent = True
+                except (discord.errors.InteractionResponded, discord.errors.NotFound):
+                    # Interaction already responded to or deleted
+                    response_sent = True
+                except Exception as e:
+                    logger.warning(f"Error deferring interaction in queue_user: {e}")
+                    # Try to send a direct response as fallback
+                    try:
+                        if not interaction.response.is_done():
+                            await interaction.response.send_message(
+                                "Processing your queue request...", ephemeral=True
+                            )
+                            response_sent = True
+                    except Exception:
+                        pass
 
-        if interaction and not interaction.response.is_done():
-            try:
-                await interaction.response.defer(thinking=False, ephemeral=True)
-            except Exception:
-                pass
-
-
+        # Check if already in queue
         if self.coordinator.in_queue(interaction.user.id):
-            await interaction.followup.send(
-                "You're already in the queue, bozo.", ephemeral=True
-            )
+            try:
+                if response_sent:
+                    await interaction.followup.send(
+                        "You're already in the queue, bozo.", ephemeral=True
+                    )
+                else:
+                    await interaction.response.send_message(
+                        "You're already in the queue, bozo.", ephemeral=True
+                    )
+            except (discord.errors.InteractionResponded, discord.errors.NotFound, discord.errors.HTTPException) as e:
+                logger.debug(f"Could not send 'already in queue' message: {e}")
             return False
 
+        # Check rating
         rating = DB.fetch_rating(interaction.user.id)
         if not rating:
             logger.info(f"User with ID: {interaction.user.id} doesn't have a rating")
-            await interaction.followup.send(
-                "You don't have a rating yet. Talk to an Administrator to get started.",
-                ephemeral=True,
-            )
+            try:
+                if response_sent:
+                    await interaction.followup.send(
+                        "You don't have a rating yet. Talk to an Administrator to get started.",
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.response.send_message(
+                        "You don't have a rating yet. Talk to an Administrator to get started.",
+                        ephemeral=True,
+                    )
+            except (discord.errors.InteractionResponded, discord.errors.NotFound, discord.errors.HTTPException) as e:
+                logger.debug(f"Could not send 'no rating' message: {e}")
             return False
 
+        # Add player to queue
         pool_size = self.coordinator.add_player(interaction.user.id, rating)
         await self.update_queue_status_message()
 
+        # Start game loop if enough players
         if pool_size >= self.config["TEAM_SIZE"] * 2:
             if self.pending_game_task is None or self.pending_game_task.done():
-
                 start_game_timer = 60
                 if self.config["DEBUG_MODE"]:
                     start_game_timer = 15
-
                 self.pending_game_task = asyncio.create_task(self._start_game_loop(start_game_timer))
 
-        # Slash command requires a response for success
+        # Send success message
         if respond:
-            await interaction.followup.send(
-                f"You're now queueing with rating {rating}.", ephemeral=True
-            )
+            try:
+                if response_sent:
+                    await interaction.followup.send(
+                        f"You're now queueing with rating {rating}.", ephemeral=True
+                    )
+                else:
+                    await interaction.response.send_message(
+                        f"You're now queueing with rating {rating}.", ephemeral=True
+                    )
+            except (discord.errors.InteractionResponded, discord.errors.NotFound, discord.errors.HTTPException) as e:
+                logger.debug(f"Could not send queue success message: {e}")
 
         return True  # success
 
     async def leave_queue(self, interaction: discord.Interaction, respond=True):
+        """Remove a user from the queue with proper interaction handling."""
+        response_sent = False
+        
+        # Always respond to the interaction first to prevent timeout
+        if interaction:
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(thinking=True, ephemeral=True)
+                    response_sent = True
+                except (discord.errors.InteractionResponded, discord.errors.NotFound):
+                    # Interaction already responded to or deleted
+                    response_sent = True
+                except Exception as e:
+                    logger.warning(f"Error deferring interaction in leave_queue: {e}")
+                    # Try to send a direct response as fallback
+                    try:
+                        if not interaction.response.is_done():
+                            await interaction.response.send_message(
+                                "Processing your leave request...", ephemeral=True
+                            )
+                            response_sent = True
+                    except Exception:
+                        pass
 
-        if interaction and not interaction.response.is_done():
-            try:
-                await interaction.response.defer(thinking=True, ephemeral=True)
-            except Exception:
-                pass
-
+        # Check if in queue
         if not self.coordinator.in_queue(interaction.user.id):
-            await interaction.followup.send(
-                "You're not in the queue, bozo, how are you gonna leave?",
-                ephemeral=True,
-            )
+            try:
+                if response_sent:
+                    await interaction.followup.send(
+                        "You're not in the queue, bozo, how are you gonna leave?",
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.response.send_message(
+                        "You're not in the queue, bozo, how are you gonna leave?",
+                        ephemeral=True,
+                    )
+            except (discord.errors.InteractionResponded, discord.errors.NotFound, discord.errors.HTTPException) as e:
+                logger.debug(f"Could not send 'not in queue' message: {e}")
             return False
+        
+        # Remove player from queue
         self.coordinator.remove_player(interaction.user.id)
-        await interaction.followup.send(
-            "You have left the queue.", ephemeral=True
-        )
+        
+        # Send success message
+        try:
+            if response_sent:
+                await interaction.followup.send(
+                    "You have left the queue.", ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "You have left the queue.", ephemeral=True
+                )
+        except (discord.errors.InteractionResponded, discord.errors.NotFound, discord.errors.HTTPException) as e:
+            logger.debug(f"Could not send leave queue success message: {e}")
+        
         await self.update_queue_status_message()
 
     def _has_role(self, member: discord.abc.User, role_name: str) -> bool:
@@ -2900,6 +2989,70 @@ class Master_Bot(commands.Bot):
                 await channel.send(f"Exception while tearing down Game {game_id}: {e}")
 
 
+    async def _move_members_with_rate_limit(self, members: list, target_channel: discord.VoiceChannel, game_id: int):
+        """
+        Move members to target channel with rate limiting.
+        Discord rate limits voice channel moves to 10 per 10 seconds.
+        
+        Args:
+            members: List of discord.Member objects to move
+            target_channel: Target voice channel
+            game_id: Game ID for logging
+        """
+        if not members:
+            return
+        
+        # Filter out members that don't need to be moved
+        members_to_move = []
+        for member in members:
+            if not member.voice or not member.voice.channel:
+                continue
+            if member.voice.channel.id == target_channel.id:
+                continue
+            members_to_move.append(member)
+        
+        if not members_to_move:
+            logger.info(f"[Game {game_id}] No members need to be moved")
+            return
+        
+        logger.info(f"[Game {game_id}] Moving {len(members_to_move)} members to General channel (rate-limited)")
+        
+        # Discord rate limit: 10 moves per 10 seconds
+        # Using batches of 5 for smoother experience and safety margin
+        BATCH_SIZE = 5
+        RATE_LIMIT_DELAY = 6.0  # seconds between batches (safe with batches of 5)
+        
+        # Process in batches
+        for i in range(0, len(members_to_move), BATCH_SIZE):
+            batch = members_to_move[i:i + BATCH_SIZE]
+            batch_num = (i // BATCH_SIZE) + 1
+            total_batches = (len(members_to_move) + BATCH_SIZE - 1) // BATCH_SIZE
+            
+            logger.info(f"[Game {game_id}] Moving batch {batch_num}/{total_batches} ({len(batch)} members)")
+            
+            # Create move tasks for this batch
+            move_tasks = []
+            for member in batch:
+                try:
+                    move_tasks.append(member.move_to(target_channel))
+                except Exception as e:
+                    logger.warning(f"[Game {game_id}] Failed to queue move for {member.display_name}: {e}")
+            
+            # Execute batch
+            if move_tasks:
+                results = await asyncio.gather(*move_tasks, return_exceptions=True)
+                # Log any failures
+                for member, result in zip(batch, results):
+                    if isinstance(result, Exception):
+                        logger.warning(f"[Game {game_id}] Failed to move {member.display_name} to General: {result}")
+            
+            # Wait before next batch (except for the last batch)
+            if i + BATCH_SIZE < len(members_to_move):
+                logger.debug(f"[Game {game_id}] Waiting {RATE_LIMIT_DELAY}s before next batch (rate limit)")
+                await asyncio.sleep(RATE_LIMIT_DELAY)
+        
+        logger.info(f"[Game {game_id}] Completed moving all members to General channel")
+
     async def clear_game(self, game_id: int):
         """
         Clears an active game and clean up all related state.
@@ -2925,22 +3078,22 @@ class Master_Bot(commands.Bot):
             radiant_channel, dire_channel = self.game_channels.pop(game_id)
 
             target_channel = self.get_channel(int(self.config["GENERAL_V_CHANNEL_ID"]))
-            all_members = radiant_channel.members + dire_channel.members
-            move_tasks = []
+            if not target_channel:
+                logger.error(f"[Game {game_id}] General voice channel not found!")
+                return
+            
+            # Get all members from both channels (including spectators)
+            all_members = list(radiant_channel.members) + list(dire_channel.members)
+            
+            # Log members being moved
             for member in all_members:
                 logger.info(
                     f"[Game {game_id}] {member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
-                if not member.voice or not member.voice.channel:
-                    continue
-                if member.voice.channel.id == target_channel.id:
-                    continue
-
-                try:
-                    move_tasks.append(member.move_to(target_channel))
-                except Exception as e:
-                    logger.exception(f"Failed to move {member.display_name} to {target_channel.name}: {e}")
-
-            await asyncio.gather(*move_tasks, return_exceptions=True)
+            
+            # Move all members with rate limiting
+            await self._move_members_with_rate_limit(all_members, target_channel, game_id)
+            
+            # Delete channels after all members are moved
             await asyncio.gather(
                 radiant_channel.delete(),
                 dire_channel.delete(),

@@ -64,6 +64,7 @@ type GameConfig struct {
 	GameName        string   `json:"game_name"`                   // Default: auto-generated
 	PassKey         string   `json:"pass_key"`                    // Optional lobby password
 	DebugSteamID    uint64   `json:"debug_steam_id"`              // Optional: for debug mode
+	DebugMode       bool     `json:"debug_mode"`                  // Debug mode from config.json - reduces player threshold
 	PollCallbackURL string   `json:"poll_callback_url,omitempty"` // Optional: URL to notify when polling should be triggered
 	LobbyReadyURL   string   `json:"lobby_ready_url,omitempty"`   // Optional: URL to notify when lobby is established
 	GameStartedURL  string   `json:"game_started_url,omitempty"`  // Optional: URL to notify when game starts (match_id available)
@@ -512,8 +513,9 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		gameName = fmt.Sprintf("gargamel_game_%s", req.GameID)
 	}
 
-	// Read league_id from config.json
+	// Read league_id and DEBUG_MODE from config.json
 	leagueID := uint32(0)
+	debugMode := false
 	if configData, err := os.ReadFile("config.json"); err == nil {
 		var configJSON map[string]interface{}
 		if err := json.Unmarshal(configData, &configJSON); err == nil {
@@ -521,6 +523,12 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 				if leagueIDFloat, ok := leagueIDVal.(float64); ok {
 					leagueID = uint32(leagueIDFloat)
 					log.Printf("[Game %s] Loaded league_id from config.json: %d", req.GameID, leagueID)
+				}
+			}
+			if debugModeVal, ok := configJSON["DEBUG_MODE"]; ok {
+				if debugModeBool, ok := debugModeVal.(bool); ok {
+					debugMode = debugModeBool
+					log.Printf("[Game %s] Loaded DEBUG_MODE from config.json: %v", req.GameID, debugMode)
 				}
 			}
 		}
@@ -539,6 +547,7 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		GameName:        gameName,
 		PassKey:         req.PassKey,
 		DebugSteamID:    req.DebugSteamID,
+		DebugMode:       debugMode,
 		PollCallbackURL: req.PollCallbackURL,
 		LobbyReadyURL:   req.LobbyReadyURL,
 		GameStartedURL:  req.GameStartedURL,
@@ -1681,14 +1690,14 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 	if memberCount != h.lastKnownMemberCount {
 		h.lastKnownMemberCount = memberCount
 
-		// Auto-trigger polling when 7 players enter (6 players + bot = 7 total)
-		// In debug mode, trigger when 2 players enter (1 player + bot = 2 total)
-		autoPollSize := 7
-		if h.gameConfig.DebugSteamID != 0 {
-			autoPollSize = 2
+		// Auto-trigger polling when 7 players join (7 players + bot = 8 total members)
+		// In debug mode, trigger when 2 players join (2 players + bot = 3 total members)
+		autoPollSize := 8
+		if h.gameConfig.DebugMode {
+			autoPollSize = 3
 		}
 
-		if memberCount > autoPollSize && state == 0 { // UI state
+		if memberCount >= autoPollSize && state == 0 { // UI state
 			h.pollingMutex.Lock()
 			if !h.pollingDone && !h.pollingActive && h.pollCallbackURL != "" {
 				h.pollingActive = true
@@ -1777,7 +1786,7 @@ func (h *gcHandler) setAllLobbySettings() {
 	gameMode := h.gameConfig.GameMode
 	fillWithBots := false
 	allowSpectating := true // Allow spectators
-	allChat := true
+	allChat := false
 	lan := false
 	passKey := h.gameConfig.PassKey
 	leagueID := h.gameConfig.LeagueID
@@ -2543,7 +2552,7 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 
 								fillWithBots := false
 								allowSpectating := true // Allow spectators
-								allChat := true
+								allChat := false
 								lan := false
 
 								handler.currentGameName = gameName
@@ -2814,7 +2823,7 @@ func (h *gcHandler) recreateLobbyIfNeeded() {
 
 	fillWithBots := false
 	allowSpectating := true // Allow spectators
-	allChat := true
+	allChat := false
 	lan := false
 
 	h.currentGameName = gameName
