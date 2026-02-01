@@ -2836,8 +2836,7 @@ class Master_Bot(commands.Bot):
         logger.info(f"League id: <{league_id}>")
 
         if game_id not in self.pending_matches:
-            logger.debug(f"Ignoring running lobby message for  ID: {lobby_id} - not in pending matches.")
-            return
+            logger.warning(f"[on_game_started] Game {game_id} not in pending_matches (lobby_id: {lobby_id}). This may indicate the game was already processed or there was a tracking issue. Proceeding with database update anyway.")
 
         try:
             # Insert match into DB
@@ -2886,7 +2885,7 @@ class Master_Bot(commands.Bot):
                     (match_id, discord_id, 1, mmr)  # 0 = Radiant
                 )
 
-            self.pending_matches.remove(game_id)
+            self.pending_matches.discard(game_id)  # Use discard instead of remove to avoid KeyError
             logger.info(f"Logged into Database game with game_id: {game_id} , match_id: {match_id}, lobby_id: {lobby_id}")
 
             # TODO Add players involved with all their details to match_players
