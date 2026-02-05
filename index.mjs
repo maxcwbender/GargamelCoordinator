@@ -91,6 +91,7 @@ server.put('/', async (req, res) => {
 
         // Convert rank to rating
         const rankToRating = {
+            'Rusty': 250,
             'Herald': 500,
             'Guardian': 1200,
             'Crusader': 1800,

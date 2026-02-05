@@ -1820,8 +1820,10 @@ class Master_Bot(commands.Bot):
                 """
                 SELECT discord_id FROM users
                 WHERE modsRemaining > 0
-                AND NOT EXISTS(SELECT 1 FROM mod_notes
-                WHERE mod_id = ? AND registrant_id = discord_id)
+                AND NOT EXISTS(
+                    SELECT 1 FROM mod_notes
+                    WHERE mod_id = ? AND registrant_id = discord_id AND result IS NOT NULL
+                )
                 ORDER BY dateCreated ASC
                 LIMIT 1
                 """,
@@ -2000,6 +2002,7 @@ class Master_Bot(commands.Bot):
             Lists all players in the registration queue awaiting mod approval.
 
             Shows discord_id, rating, and date created for each pending registrant.
+            Also indicates which ones you've already reviewed.
 
             Args:
                 interaction (discord.Interaction): Interaction invoking the command.
@@ -2025,18 +2028,43 @@ class Master_Bot(commands.Bot):
                     "No players currently in registration queue.", ephemeral=True
                 )
 
+            # Check which registrants this mod has already reviewed (with a result)
+            already_reviewed = set()
+            for registrant in pending_registrants:
+                discord_id = registrant[0]
+                has_reviewed = self.exists_in(
+                    "mod_notes",
+                    "mod_id = ? AND registrant_id = ? AND result IS NOT NULL",
+                    (mod_id, discord_id)
+                )
+                if has_reviewed:
+                    already_reviewed.add(discord_id)
+
+            available_count = len(pending_registrants) - len(already_reviewed)
+            
             embed = discord.Embed(
                 title="📋 Registration Queue",
-                description=f"**{len(pending_registrants)}** player(s) awaiting approval",
+                description=f"**{len(pending_registrants)}** total awaiting approval\n**{available_count}** available for you to review",
                 color=discord.Color.blue()
             )
 
             for registrant in pending_registrants[:25]:  # Discord embed field limit
                 discord_id, rating, date_created, mods_remaining = registrant
                 rating_display = rating if rating else "Not set"
+                
+                # Try to get user's display name
+                try:
+                    member = await self.the_guild.fetch_member(discord_id)
+                    user_name = member.display_name if member else f"User {discord_id}"
+                except:
+                    user_name = f"User {discord_id}"
+                
+                # Mark if already reviewed by this mod
+                status_marker = "✅ (you reviewed)" if discord_id in already_reviewed else "⏳ Available"
+                
                 embed.add_field(
-                    name=f"<@{discord_id}>",
-                    value=f"**Rating:** {rating_display}\n**Registered:** {date_created}\n**Mods Remaining:** {mods_remaining}",
+                    name=f"{user_name} (<@{discord_id}>)",
+                    value=f"**Status:** {status_marker}\n**Rating:** {rating_display}\n**Registered:** {date_created}\n**Mods Remaining:** {mods_remaining}",
                     inline=False
                 )
 
@@ -2090,10 +2118,10 @@ class Master_Bot(commands.Bot):
                     ephemeral=True,
                 )
 
-            # Check if this mod has already reviewed this user
+            # Check if this mod has already reviewed this user (completed review with result)
             already_reviewed = self.exists_in(
                 "mod_notes",
-                "mod_id = ? AND registrant_id = ?",
+                "mod_id = ? AND registrant_id = ? AND result IS NOT NULL",
                 (mod_id, user.id)
             )
             if already_reviewed:
