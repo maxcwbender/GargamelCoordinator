@@ -360,7 +360,7 @@ class Master_Bot(commands.Bot):
         self.ready_check_status = False
 
         self.deadleague_channel_id = int(self.config.get("GENERAL_CHANNEL_ID", 0))
-        self.deadleague_cooldown = int(self.config.get("DEAD_LEAGUE_COOLDOWN", 15))
+        self.deadleague_cooldown = int(self.config.get("DEAD_LEAGUE_COOLDOWN", 7200))  # 2 hours default
         self.deadleague_csv_path = self.config.get("DEAD_LEAGUE_CSV_PATH", "dead_league_responses.csv")
         self._deadleague_last_ts: float = 0.0
         self._deadleague_trigger = re.compile(r"\bdead\s*league\b", re.IGNORECASE)
@@ -1610,7 +1610,7 @@ class Master_Bot(commands.Bot):
         interaction: discord.Interaction,
         result: bool,
         notes: str,
-        rating: int = 3000,
+        rating: int = None,
     ):
         """
         Handle moderator's approval or rejection of assigned registrant.
@@ -1624,7 +1624,7 @@ class Master_Bot(commands.Bot):
             interaction (discord.Interaction): Interaction invoking the command.
             result (bool): True for approval, False for rejection.
             notes (str): Moderator notes on the decision.
-            rating (int, optional): Player rating to set on approval. Defaults to 3000.
+            rating (int, optional): Player rating to set on approval. If None, uses rating from registration.
         """
         mod_id = interaction.user.id
         chan_id = int(self.config["MOD_CHANNEL_ID"])
@@ -1642,6 +1642,12 @@ class Master_Bot(commands.Bot):
                 f"<@{mod_id}>: no registrant assigned. Use /poll_registration.",
                 ephemeral=True,
             )
+
+        # If no rating specified, use the rating they were assigned during registration (based on their rank)
+        if rating is None:
+            existing_rating = DB.fetch_one("SELECT rating FROM users WHERE discord_id = ?", (registrant_id,))
+            rating = existing_rating if existing_rating else 3000
+            logger.info(f"Using existing rating {rating} for registrant {registrant_id}")
 
         DB.execute(
             """
@@ -1727,17 +1733,26 @@ class Master_Bot(commands.Bot):
         if message.author == self.user or message.guild is None:
             return
 
-        # keep other channels untouched
+        # Process commands first to check if this is a command
+        ctx = await self.get_context(message)
+        
+        # Only trigger dead league response if this is NOT a bot command
         if self.deadleague_channel_id and message.channel.id == self.deadleague_channel_id:
-            if self._deadleague_trigger.search(message.content or ""):
+            # Skip dead league response if this is a valid bot command
+            if not ctx.valid and self._deadleague_trigger.search(message.content or ""):
                 now = discord.utils.utcnow().timestamp()
-                if now - self._deadleague_last_ts >= self.deadleague_cooldown:
+                time_since_last = now - self._deadleague_last_ts
+                
+                if time_since_last >= self.deadleague_cooldown:
                     self._deadleague_last_ts = now
                     try:
+                        logger.debug(f"Dead League trigger detected from {message.author} (cooldown: {time_since_last:.1f}s >= {self.deadleague_cooldown}s)")
                         await message.reply(random.choice(self._deadleague_responses), mention_author=False,
                                             suppress_embeds=True)
                     except Exception as e:
                         logger.exception(f"Failed to send Dead League reply: {e}")
+                else:
+                    logger.debug(f"Dead League trigger ignored - still on cooldown ({time_since_last:.1f}s < {self.deadleague_cooldown}s)")
 
         # ensure normal command processing continues
         await self.process_commands(message)
@@ -1842,20 +1857,20 @@ class Master_Bot(commands.Bot):
         )
         @app_commands.describe(
             notes="Notes about your decision",
-            rating="Player rating (e.g. 3000)",
+            rating="Player rating (optional - defaults to their registration rating)",
         )
         async def approve(
-            interaction: discord.Interaction, notes: str = "", rating: int = 3000
+            interaction: discord.Interaction, notes: str = "", rating: int = None
         ):
             """
             Records an approval decision for the assigned registrant.
 
-            Validates rating as integer; otherwise sends error message.
+            Uses the rating assigned during registration (based on their selected rank), unless overridden.
 
             Args:
                 interaction (discord.Interaction): Interaction invoking the command.
                 notes (str, optional): Notes about the decision. Defaults to "".
-                rating (int, optional): Player rating. Defaults to None.
+                rating (int, optional): Player rating override. If not provided, uses their registration rating.
             """
             await self._mod_decision(
                 interaction, result=True, notes=notes, rating=rating
@@ -1974,6 +1989,135 @@ class Master_Bot(commands.Bot):
             DB.execute(f"UPDATE users SET rating={rating} WHERE discord_id={user.id}")
             await interaction.response.send_message(
                 f"Set {user.display_name}'s rating to {rating}.", ephemeral=True
+            )
+
+        @app_commands.command(
+            name="list_registration_queue",
+            description="List all players awaiting moderation approval"
+        )
+        async def list_registration_queue(interaction: discord.Interaction):
+            """
+            Lists all players in the registration queue awaiting mod approval.
+
+            Shows discord_id, rating, and date created for each pending registrant.
+
+            Args:
+                interaction (discord.Interaction): Interaction invoking the command.
+            """
+            mod_id = interaction.user.id
+            chan_id = int(self.config["MOD_CHANNEL_ID"])
+            if interaction.channel_id != chan_id:
+                return await interaction.response.send_message(
+                    f"<@{mod_id}>: please use <#{chan_id}>", ephemeral=True
+                )
+
+            pending_registrants = DB.fetch_all(
+                """
+                SELECT discord_id, rating, dateCreated, modsRemaining
+                FROM users
+                WHERE modsRemaining > 0
+                ORDER BY dateCreated ASC
+                """
+            )
+
+            if not pending_registrants:
+                return await interaction.response.send_message(
+                    "No players currently in registration queue.", ephemeral=True
+                )
+
+            embed = discord.Embed(
+                title="📋 Registration Queue",
+                description=f"**{len(pending_registrants)}** player(s) awaiting approval",
+                color=discord.Color.blue()
+            )
+
+            for registrant in pending_registrants[:25]:  # Discord embed field limit
+                discord_id, rating, date_created, mods_remaining = registrant
+                rating_display = rating if rating else "Not set"
+                embed.add_field(
+                    name=f"<@{discord_id}>",
+                    value=f"**Rating:** {rating_display}\n**Registered:** {date_created}\n**Mods Remaining:** {mods_remaining}",
+                    inline=False
+                )
+
+            if len(pending_registrants) > 25:
+                embed.set_footer(text=f"Showing first 25 of {len(pending_registrants)} registrants")
+
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        @app_commands.command(
+            name="assign_registrant",
+            description="Assign a specific player from the registration queue to yourself"
+        )
+        @app_commands.describe(user="The user to assign to yourself for moderation")
+        async def assign_registrant(
+            interaction: discord.Interaction, user: discord.User
+        ):
+            """
+            Assigns a specific registrant to the mod for review.
+
+            Similar to poll_registration but allows choosing a specific player.
+
+            Args:
+                interaction (discord.Interaction): Interaction invoking the command.
+                user (discord.User): User to assign for moderation.
+            """
+            mod_id = interaction.user.id
+            chan_id = int(self.config["MOD_CHANNEL_ID"])
+            if interaction.channel_id != chan_id:
+                return await interaction.response.send_message(
+                    f"<@{mod_id}>: please use <#{chan_id}>", ephemeral=True
+                )
+
+            # Check if mod already has an assigned registrant
+            prev_registrant_id = DB.fetch_one(
+                "SELECT assignedRegistrant FROM users WHERE discord_id = ?", (mod_id,)
+            )
+            if prev_registrant_id:
+                return await interaction.response.send_message(
+                    f"<@{mod_id}>: you already have <@{prev_registrant_id}> assigned. Approve/reject first.",
+                    ephemeral=True,
+                )
+
+            # Check if the user is in the registration queue
+            user_data = DB.fetch_one(
+                "SELECT modsRemaining FROM users WHERE discord_id = ?", (user.id,)
+            )
+            
+            if not user_data or user_data <= 0:
+                return await interaction.response.send_message(
+                    f"<@{user.id}> is not in the registration queue or has already been fully reviewed.",
+                    ephemeral=True,
+                )
+
+            # Check if this mod has already reviewed this user
+            already_reviewed = self.exists_in(
+                "mod_notes",
+                "mod_id = ? AND registrant_id = ?",
+                (mod_id, user.id)
+            )
+            if already_reviewed:
+                return await interaction.response.send_message(
+                    f"You have already reviewed <@{user.id}>. Please select a different registrant.",
+                    ephemeral=True,
+                )
+
+            # Assign the registrant to this mod
+            DB.execute(
+                "UPDATE users SET modsRemaining = modsRemaining - 1 WHERE discord_id = ?",
+                (user.id,),
+            )
+            DB.execute(
+                "UPDATE users SET assignedRegistrant = ? WHERE discord_id = ?",
+                (user.id, mod_id),
+            )
+            DB.execute(
+                "INSERT INTO mod_notes (request_id, mod_id, registrant_id) VALUES (?, ?, ?)",
+                (interaction.id, mod_id, user.id),
+            )
+            
+            await interaction.response.send_message(
+                f"<@{mod_id}>: assigned <@{user.id}> for review.", ephemeral=True
             )
 
         @app_commands.command(
@@ -2804,6 +2948,8 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(reject)
         self.tree.add_command(vouch)
         self.tree.add_command(set_rating)
+        self.tree.add_command(list_registration_queue)
+        self.tree.add_command(assign_registrant)
         self.tree.add_command(force_start)
         self.tree.add_command(force_swap)
         self.tree.add_command(force_replace)
@@ -3113,17 +3259,43 @@ class Master_Bot(commands.Bot):
         Args:
             discord_id (int): Discord user ID for which SteamID was found.
         """
-        steam_id = DB.fetch_steam_id(discord_id)
-        for dotaClient in self.dota_talker.dotaClients:
-            dotaClient.steam.friends.add(steam_id)
+        try:
+            logger.info(f"[on_steam_id_found] Processing registration for discord_id: {discord_id}")
+            
+            steam_id = DB.fetch_steam_id(discord_id)
+            logger.info(f"[on_steam_id_found] Found steam_id: {steam_id} for discord_id: {discord_id}")
+            
+            # Only add to dota clients if they exist (they might not be active during idle times)
+            if hasattr(self, 'dota_talker') and hasattr(self.dota_talker, 'dotaClients'):
+                for dotaClient in self.dota_talker.dotaClients:
+                    try:
+                        dotaClient.steam.friends.add(steam_id)
+                        logger.info(f"[on_steam_id_found] Added {steam_id} to dota client friends")
+                    except Exception as e:
+                        logger.warning(f"[on_steam_id_found] Could not add friend to dota client: {e}")
+            else:
+                logger.debug("[on_steam_id_found] No active dota clients to add friend to (this is normal)")
 
-        modsRemaining = DB.fetch_one(
-            f"SELECT modsRemaining FROM users WHERE discord_id = {discord_id}"
-        )
+            modsRemaining = DB.fetch_one(
+                f"SELECT modsRemaining FROM users WHERE discord_id = {discord_id}"
+            )
+            logger.info(f"[on_steam_id_found] User {discord_id} has {modsRemaining} mods remaining")
 
-        if modsRemaining > 0:
-            mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
-            await mod_chan.send(f"<@{discord_id}> joined registration queue!")
+            if modsRemaining > 0:
+                mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
+                if mod_chan:
+                    # Get rating information to include in notification
+                    rating = DB.fetch_one(f"SELECT rating FROM users WHERE discord_id = {discord_id}")
+                    rating_text = f" (Rating: **{rating}**)" if rating else ""
+                    await mod_chan.send(f"<@{discord_id}> joined registration queue!{rating_text}")
+                    logger.info(f"[on_steam_id_found] Sent notification to mod channel for {discord_id}")
+                else:
+                    logger.error(f"[on_steam_id_found] Could not find mod channel: {self.config.get('MOD_CHANNEL_ID')}")
+            else:
+                logger.info(f"[on_steam_id_found] User {discord_id} has no mods remaining, no notification sent")
+                
+        except Exception as e:
+            logger.exception(f"[on_steam_id_found] Error processing registration for {discord_id}: {e}")
 
     def get_players_by_match_id(self, match_id: int):
         """

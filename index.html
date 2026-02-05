@@ -122,10 +122,24 @@
 
       <div class="auth-description">
         To participate in Gargamel League matches, you need to link your Discord account to your Steam account.<br><br>
-        Click the button below to authenticate and join the Gargamel Discord Server.
+        Select your current Dota 2 rank (this determines your starting rating), then click the button below to authenticate and join the Gargamel Discord Server.
       </div>
       <div style="color: red; font-size: 0.75rem; text-align: center; margin-bottom: 20px;">
         Warning: Before clicking the link, please ensure your Discord User Settings have your Steam Account added under Connections
+      </div>
+      <div style="margin-bottom: 20px;">
+        <label for="rank-select" style="display: block; font-weight: 600; margin-bottom: 8px; color: #2c3e50;">Your Current Dota 2 Rank *</label>
+        <select id="rank-select" style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem; font-family: 'Inter', sans-serif; background: white; cursor: pointer;">
+          <option value="">-- Select Your Rank --</option>
+          <option value="Herald">Herald</option>
+          <option value="Guardian">Guardian</option>
+          <option value="Crusader">Crusader</option>
+          <option value="Archon">Archon</option>
+          <option value="Legend">Legend</option>
+          <option value="Ancient">Ancient</option>
+          <option value="Divine">Divine</option>
+          <option value="Immortal">Immortal</option>
+        </select>
       </div>
       <a id="neural-login" class="authenticate-button"
         href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2Fwww.gargamel-league.com%2F&scope=identify+connections+guilds.join">
@@ -176,14 +190,32 @@
 
       if (!accessToken) {
         showState('auth-state');
+        
+        // Add rank validation before allowing OAuth redirect
+        const loginButton = document.getElementById('neural-login');
+        loginButton.addEventListener('click', (e) => {
+          const rankSelect = document.getElementById('rank-select');
+          if (!rankSelect.value) {
+            e.preventDefault();
+            alert('Please select your Dota 2 rank before registering!');
+            rankSelect.style.borderColor = '#ff4444';
+            return false;
+          }
+          // Store rank in sessionStorage so we can retrieve it after OAuth redirect
+          sessionStorage.setItem('selectedRank', rankSelect.value);
+        });
         return;
       }
 
       showState('loading-state');
 
+      // Retrieve the rank that was selected before OAuth
+      const selectedRank = sessionStorage.getItem('selectedRank');
+      sessionStorage.removeItem('selectedRank'); // Clean up
+
       fetch('https://www.gargamel-league.com/', {
         method: 'PUT',
-        body: JSON.stringify({ accessToken, tokenType }),
+        body: JSON.stringify({ accessToken, tokenType, rank: selectedRank }),
         headers: { 'Content-Type': 'application/json' }
       }).then(async response => {
         const data = await response.json().catch(() => ({}));

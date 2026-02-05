@@ -41,11 +41,16 @@ server.put('/', async (req, res) => {
     logger.info('PUT: ' + JSON.stringify(req.body));
     logger.info('------------------------------------------');
 
-    const { tokenType, accessToken } = req.body;
+    const { tokenType, accessToken, rank } = req.body;
 
     if (!tokenType || !accessToken) {
         logger.error("Returning 400: Either missing tokentype or accesstoken.  tokenType: ${tokenType}  accessToken: ${accessToken}")
         return res.status(400).json({ result: 'Missing token information' });
+    }
+
+    if (!rank) {
+        logger.error("Returning 400: Missing rank selection");
+        return res.status(400).json({ result: 'Please select your Dota 2 rank' });
     }
 
     try {
@@ -84,15 +89,31 @@ server.put('/', async (req, res) => {
             return res.status(400).json({ result: 'No Steam ID linked to Discord. Please link under \'Connections\' in Discord Settings and Try Again.' });
         }
 
-        // Insert user into database
+        // Convert rank to rating
+        const rankToRating = {
+            'Herald': 500,
+            'Guardian': 1200,
+            'Crusader': 1800,
+            'Archon': 2600,
+            'Legend': 3300,
+            'Ancient': 4100,
+            'Divine': 5000,
+            'Immortal': 5500
+        };
+        
+        const rating = rankToRating[rank] || 3000; // Default to 3000 if rank not found
+        logger.info(`Converting rank '${rank}' to rating ${rating} for user ${discordID}`);
+
+        // Insert user into database with rating
         const stmt = db.prepare(`
-            INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched) 
-            VALUES (?, ?, datetime('now'), ?, 0)
+            INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched, rating) 
+            VALUES (?, ?, datetime('now'), ?, 0, ?)
             ON CONFLICT(discord_id) DO UPDATE SET 
-                steam_id = excluded.steam_id
+                steam_id = excluded.steam_id,
+                rating = excluded.rating
         `);
         await new Promise((resolve, reject) => {
-            stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, err => {
+            stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, rating, err => {
                 if (err) logger.error('DB upsert error:', err.message);
                 else resolve();
             });
