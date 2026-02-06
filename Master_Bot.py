@@ -1921,18 +1921,15 @@ class Master_Bot(commands.Bot):
                     "You can't vouch for yourself!", ephemeral=True
                 )
 
-            if not self.exists_in("users", "discord_id = ?", (user.id,)):
+            user_exists = DB.fetch_one("SELECT 1 FROM users WHERE discord_id = ?", (user.id,))
+            if not user_exists:
                 return await interaction.response.send_message(
                     "User hasn't registered the bot yet.", ephemeral=True
                 )
 
-            already_vouched = self.exists_in(
-                "vouches",
-                "voucher_id = ? AND vouchee_id = ?",
-                (
-                    interaction.user.id,
-                    user.id,
-                ),
+            already_vouched = DB.fetch_one(
+                "SELECT 1 FROM vouches WHERE voucher_id = ? AND vouchee_id = ?",
+                (interaction.user.id, user.id)
             )
             if already_vouched:
                 DB.execute(
@@ -2032,9 +2029,8 @@ class Master_Bot(commands.Bot):
             already_reviewed = set()
             for registrant in pending_registrants:
                 discord_id = registrant[0]
-                has_reviewed = self.exists_in(
-                    "mod_notes",
-                    "mod_id = ? AND registrant_id = ? AND result IS NOT NULL",
+                has_reviewed = DB.fetch_one(
+                    "SELECT 1 FROM mod_notes WHERE mod_id = ? AND registrant_id = ? AND result IS NOT NULL",
                     (mod_id, discord_id)
                 )
                 if has_reviewed:
@@ -2119,9 +2115,8 @@ class Master_Bot(commands.Bot):
                 )
 
             # Check if this mod has already reviewed this user (completed review with result)
-            already_reviewed = self.exists_in(
-                "mod_notes",
-                "mod_id = ? AND registrant_id = ? AND result IS NOT NULL",
+            already_reviewed = DB.fetch_one(
+                "SELECT 1 FROM mod_notes WHERE mod_id = ? AND registrant_id = ? AND result IS NOT NULL",
                 (mod_id, user.id)
             )
             if already_reviewed:
