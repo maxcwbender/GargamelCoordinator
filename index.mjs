@@ -33,18 +33,19 @@ async function fetchOpenDota(path) {
 async function refreshMatchCache() {
     try {
         logger.info('Refreshing OpenDota match cache...');
-        const leagueMatches = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matches`);
+        // Use /matchIds endpoint — /matches excludes amateur leagues like ours
+        const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
 
-        // Take the 10 most recent matches (API returns newest first)
-        const recent = leagueMatches.slice(0, 10);
+        // Take the 10 most recent match IDs (API returns newest first)
+        const recent = matchIds.slice(0, 10);
 
         // Fetch detailed data for each match (players, scores, winner)
         const detailed = [];
-        for (const m of recent) {
+        for (const matchId of recent) {
             try {
                 // Small delay between requests to stay under 60/min rate limit
                 if (detailed.length > 0) await new Promise(r => setTimeout(r, 1100));
-                const detail = await fetchOpenDota(`/matches/${m.match_id}`);
+                const detail = await fetchOpenDota(`/matches/${matchId}`);
                 detailed.push({
                     match_id: detail.match_id,
                     radiant_win: detail.radiant_win,
@@ -62,7 +63,7 @@ async function refreshMatchCache() {
                     })),
                 });
             } catch (err) {
-                logger.error(`Failed to fetch match ${m.match_id}: ${err.message}`);
+                logger.error(`Failed to fetch match ${matchId}: ${err.message}`);
             }
         }
 
