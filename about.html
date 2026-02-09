@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About - Gargamel Dota League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f9f9f9;
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .navbar-brand img {
+      height: 36px;
+      width: auto;
+    }
+
+    .navbar-links {
+      display: flex;
+      gap: 8px;
+      list-style: none;
+    }
+
+    .navbar-links a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: 6px;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .navbar-links a:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .navbar-links a.active {
+      color: #4e9fd1;
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    /* ── Page content ──────────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .about-container {
+      background: #ffffff;
+      padding: 48px;
+      border-radius: 12px;
+      max-width: 720px;
+      width: 100%;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      border: 1px solid #e0e0e0;
+    }
+
+    .about-container h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+
+    .about-subtitle {
+      text-align: center;
+      color: #4e9fd1;
+      font-weight: 600;
+      font-size: 1rem;
+      margin-bottom: 32px;
+    }
+
+    .about-section {
+      margin-bottom: 28px;
+    }
+
+    .about-section h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #4e9fd1;
+      display: inline-block;
+    }
+
+    .about-section p {
+      font-size: 0.95rem;
+      color: #555;
+      line-height: 1.7;
+    }
+
+    .feature-list {
+      list-style: none;
+      margin-top: 12px;
+    }
+
+    .feature-list li {
+      padding: 10px 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.95rem;
+      color: #555;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .feature-list li:last-child {
+      border-bottom: none;
+    }
+
+    .feature-icon {
+      color: #4e9fd1;
+      font-weight: 700;
+      flex-shrink: 0;
+      width: 20px;
+      text-align: center;
+    }
+
+    .cta-box {
+      background: #f0f7fc;
+      border: 1px solid #d0e6f5;
+      border-radius: 8px;
+      padding: 24px;
+      text-align: center;
+      margin-top: 32px;
+    }
+
+    .cta-box p {
+      color: #2c3e50;
+      font-size: 0.95rem;
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+
+    .cta-button {
+      display: inline-block;
+      background: #4e9fd1;
+      color: #fff;
+      padding: 12px 28px;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-size: 0.95rem;
+      transition: background 0.3s ease;
+    }
+
+    .cta-button:hover {
+      background: #3b84b3;
+    }
+
+    @media (max-width: 480px) {
+      .navbar {
+        padding: 0 1rem;
+      }
+
+      .navbar-brand span {
+        display: none;
+      }
+
+      .navbar-links a {
+        padding: 8px 10px;
+        font-size: 0.8rem;
+      }
+
+      .about-container {
+        padding: 24px;
+      }
+
+      .about-container h1 {
+        font-size: 1.5rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+    <ul class="navbar-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="/matches">Recent Matches</a></li>
+      <li><a href="/about" class="active">About</a></li>
+    </ul>
+  </nav>
+
+  <div class="page-content">
+    <div class="about-container">
+      <h1>Gargamel Dota League</h1>
+      <div class="about-subtitle">Community-Run Inhouse League</div>
+
+      <div class="about-section">
+        <h2>What is Gargamel?</h2>
+        <p>
+          Gargamel is an inhouse Dota 2 league run entirely by its community. Unlike public matchmaking,
+          every game in Gargamel is organized through our Discord server where a custom bot handles
+          matchmaking, team balancing, and lobby creation automatically.
+        </p>
+      </div>
+
+      <div class="about-section">
+        <h2>How It Works</h2>
+        <p>
+          Players register through our website by linking their Discord and Steam accounts. Once registered,
+          you can queue up for matches directly in Discord. When enough players are ready, the bot
+          automatically balances teams based on player ratings and creates a Dota 2 lobby for the match.
+        </p>
+      </div>
+
+      <div class="about-section">
+        <h2>Key Features</h2>
+        <ul class="feature-list">
+          <li>
+            <span class="feature-icon">+</span>
+            <span>Automated matchmaking and team balancing based on player skill ratings</span>
+          </li>
+          <li>
+            <span class="feature-icon">+</span>
+            <span>Auto-created Dota 2 lobbies — no manual lobby setup needed</span>
+          </li>
+          <li>
+            <span class="feature-icon">+</span>
+            <span>Discord-based coordination — queue, communicate, and play all from one place</span>
+          </li>
+          <li>
+            <span class="feature-icon">+</span>
+            <span>Community-driven moderation and league management</span>
+          </li>
+          <li>
+            <span class="feature-icon">+</span>
+            <span>Rating system that adjusts over time to reflect your true skill level</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="about-section">
+        <h2>Why Inhouse?</h2>
+        <p>
+          Inhouse leagues provide a more controlled and competitive environment compared to public
+          matchmaking. Games are played exclusively among registered community members, leading to
+          better communication, fewer abandons, and more balanced matches. It's Dota the way it's
+          meant to be played.
+        </p>
+      </div>
+
+      <div class="cta-box">
+        <p>Ready to join the Gargamel League? Register by linking your Discord and Steam accounts.</p>
+        <a href="/" class="cta-button">Register Now</a>
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>

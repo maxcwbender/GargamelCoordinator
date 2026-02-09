@@ -21,6 +21,68 @@
       color: #333;
       min-height: 100vh;
       display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .navbar-brand img {
+      height: 36px;
+      width: auto;
+    }
+
+    .navbar-links {
+      display: flex;
+      gap: 8px;
+      list-style: none;
+    }
+
+    .navbar-links a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: 6px;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .navbar-links a:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .navbar-links a.active {
+      color: #4e9fd1;
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    /* ── Main content area ──────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      display: flex;
       justify-content: center;
       align-items: center;
       padding: 2rem;
@@ -95,6 +157,19 @@
     }
 
     @media (max-width: 480px) {
+      .navbar {
+        padding: 0 1rem;
+      }
+
+      .navbar-brand span {
+        display: none;
+      }
+
+      .navbar-links a {
+        padding: 8px 10px;
+        font-size: 0.8rem;
+      }
+
       .terminal-window {
         padding: 24px;
       }
@@ -111,6 +186,19 @@
 </head>
 
 <body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+    <ul class="navbar-links">
+      <li><a href="/" class="active">Home</a></li>
+      <li><a href="/matches">Recent Matches</a></li>
+      <li><a href="/about">About</a></li>
+    </ul>
+  </nav>
+
+  <div class="page-content">
   <div class="terminal-window">
     <div class="system-header">
       <div class="logo-title">Gargamel Dota League</div>
@@ -163,6 +251,7 @@
       <div class="status-message">There was a problem linking your accounts. Please try again.</div>
       <button class="authenticate-button" onclick="location.reload()">Retry</button>
     </div>
+  </div>
   </div>
 
   <script>

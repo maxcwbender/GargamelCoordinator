@@ -17,6 +17,65 @@ const server = express();
 server.use(express.json());
 server.use(express.static('.'));
 
+// ─── OpenDota API caching layer ─────────────────────────────────────────────
+const OPENDOTA_BASE = 'https://api.opendota.com/api';
+const LEAGUE_ID = 18388;
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes - keeps us well under 3000 calls/day
+
+let matchCache = { data: null, lastFetched: 0 };
+
+async function fetchOpenDota(path) {
+    const res = await fetch(`${OPENDOTA_BASE}${path}`);
+    if (!res.ok) throw new Error(`OpenDota API ${res.status}: ${path}`);
+    return res.json();
+}
+
+async function refreshMatchCache() {
+    try {
+        logger.info('Refreshing OpenDota match cache...');
+        const leagueMatches = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matches`);
+
+        // Take the 10 most recent matches (API returns newest first)
+        const recent = leagueMatches.slice(0, 10);
+
+        // Fetch detailed data for each match (players, scores, winner)
+        const detailed = [];
+        for (const m of recent) {
+            try {
+                // Small delay between requests to stay under 60/min rate limit
+                if (detailed.length > 0) await new Promise(r => setTimeout(r, 1100));
+                const detail = await fetchOpenDota(`/matches/${m.match_id}`);
+                detailed.push({
+                    match_id: detail.match_id,
+                    radiant_win: detail.radiant_win,
+                    radiant_score: detail.radiant_score,
+                    dire_score: detail.dire_score,
+                    duration: detail.duration,
+                    start_time: detail.start_time,
+                    players: (detail.players || []).map(p => ({
+                        personaname: p.personaname || 'Anonymous',
+                        player_slot: p.player_slot,
+                        isRadiant: p.player_slot < 128,
+                        kills: p.kills,
+                        deaths: p.deaths,
+                        assists: p.assists,
+                    })),
+                });
+            } catch (err) {
+                logger.error(`Failed to fetch match ${m.match_id}: ${err.message}`);
+            }
+        }
+
+        matchCache = { data: detailed, lastFetched: Date.now() };
+        logger.info(`Match cache refreshed: ${detailed.length} matches loaded`);
+    } catch (err) {
+        logger.error(`Failed to refresh match cache: ${err.message}`);
+    }
+}
+
+// Initial fetch on startup
+refreshMatchCache();
+
 // Serve static files from node_modules
 server.use('/node_modules', express.static('node_modules'));
 
@@ -35,6 +94,26 @@ server.get('/', (request, response) => {
     logger.info('GET: ' + request.url);
     logger.info('------------------------------------------');
     return response.sendFile('index.html', { root: '.' });
+});
+
+server.get('/about', (req, res) => {
+    return res.sendFile('about.html', { root: '.' });
+});
+
+server.get('/matches', (req, res) => {
+    return res.sendFile('matches.html', { root: '.' });
+});
+
+server.get('/api/recent-matches', async (req, res) => {
+    // Refresh cache if stale
+    if (Date.now() - matchCache.lastFetched > CACHE_TTL_MS) {
+        await refreshMatchCache();
+    }
+    return res.json({
+        matches: matchCache.data || [],
+        lastUpdated: matchCache.lastFetched,
+        cacheMaxAge: CACHE_TTL_MS,
+    });
 });
 
 server.put('/', async (req, res) => {
