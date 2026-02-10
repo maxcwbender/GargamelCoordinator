@@ -41,7 +41,7 @@ function loadPlayerStatsFromDB() {
     try {
         const query = `
             SELECT ps.account_id, ps.personaname, ps.wins, ps.losses, ps.kills,
-                   ps.deaths, ps.assists, ps.gold_per_minute, ps.total_gold, ps.matches, ps.last_updated,
+                   ps.deaths, ps.assists, ps.gold_per_minute, ps.total_gold, ps.wards_placed, ps.matches, ps.last_updated,
                    pa.avatar_url
             FROM player_stats ps
             LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
@@ -69,6 +69,8 @@ function loadPlayerStatsFromDB() {
             avgGPM: row.matches > 0 ? (row.gold_per_minute / row.matches) : 0,
             total_gold: row.total_gold,
             avgNetWorth: row.matches > 0 ? (row.total_gold / row.matches) : 0,
+            wards_placed: row.wards_placed,
+            avgWards: row.matches > 0 ? (row.wards_placed / row.matches) : 0,
         }));
 
         const oldestUpdate = rows.length > 0 ? Math.min(...rows.map(r => r.last_updated)) : 0;
@@ -89,8 +91,8 @@ function savePlayerStatsToDB(playerMap) {
         const now = Date.now();
         const insertStats = db.prepare(`
             INSERT OR REPLACE INTO player_stats
-            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, matches, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, wards_placed, matches, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         for (const [accountId, stats] of playerMap.entries()) {
@@ -104,6 +106,7 @@ function savePlayerStatsToDB(playerMap) {
                 stats.assists,
                 stats.gold_per_minute,
                 stats.total_gold,
+                stats.wards_placed,
                 stats.matches,
                 now
             );
@@ -262,6 +265,7 @@ async function refreshPlayerStats() {
                             assists: 0,
                             gold_per_minute: 0,
                             total_gold: 0,
+                            wards_placed: 0,
                             matches: 0,
                         });
                     }
@@ -281,6 +285,9 @@ async function refreshPlayerStats() {
                     // Total gold is gold remaining + gold spent
                     const totalGold = (player.gold || 0) + (player.gold_spent || 0);
                     stats.total_gold += totalGold;
+                    // Wards placed (observer + sentry)
+                    const wardsPlaced = (player.obs_placed || 0) + (player.sen_placed || 0);
+                    stats.wards_placed += wardsPlaced;
                 }
 
                 if ((i + 1) % 10 === 0) {
@@ -326,6 +333,8 @@ async function refreshPlayerStats() {
             avgGPM: stats.matches > 0 ? (stats.gold_per_minute / stats.matches) : 0,
             total_gold: stats.total_gold,
             avgNetWorth: stats.matches > 0 ? (stats.total_gold / stats.matches) : 0,
+            wards_placed: stats.wards_placed,
+            avgWards: stats.matches > 0 ? (stats.wards_placed / stats.matches) : 0,
         }));
 
         // Filter out players with very few matches
@@ -464,10 +473,16 @@ server.get('/api/top-rankings', async (req, res) => {
         .sort((a, b) => b.avgGPM - a.avgGPM)
         .slice(0, 10);
 
+    // Top 10 by wards placed (simple sort, highest to lowest)
+    const topByWards = [...players]
+        .sort((a, b) => b.avgWards - a.avgWards)
+        .slice(0, 10);
+
     return res.json({
         topByWinRate,
         topByKDA,
         topByGPM,
+        topByWards,
         lastUpdated: playerStatsCache.lastFetched,
         matchesAnalyzed: playerStatsCache.matchesAnalyzed || 0,
         cacheMaxAge: PLAYER_STATS_TTL_MS,

@@ -415,7 +415,8 @@
 
       if ((!data.topByWinRate || data.topByWinRate.length === 0) &&
           (!data.topByKDA || data.topByKDA.length === 0) &&
-          (!data.topByGPM || data.topByGPM.length === 0)) {
+          (!data.topByGPM || data.topByGPM.length === 0) &&
+          (!data.topByWards || data.topByWards.length === 0)) {
         container.innerHTML =
           '<div class="empty-state">' +
             '<h2>No rankings yet</h2>' +
@@ -528,6 +529,40 @@
                 Math.round(player.avgNetWorth).toLocaleString() +
                 ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
         html += '<td class="stat-value">' + Math.round(player.avgGPM) + '</td>';
+        html += '</tr>';
+      }
+
+      html += '</tbody></table></div>';
+
+      // Wards Rankings
+      html += '<div class="ranking-card">';
+      html += '<div class="ranking-header">';
+      html += '<h2>Top 10 Unsung Heroes</h2>';
+      html += '<p>Four Wards in Stock, Guys</p>';
+      html += '</div>';
+      html += '<table class="ranking-table">';
+      html += '<thead><tr>';
+      html += '<th>#</th><th>Player</th><th>Total Wards</th><th>Avg/Game</th>';
+      html += '</tr></thead><tbody>';
+
+      for (let i = 0; i < data.topByWards.length; i++) {
+        const player = data.topByWards[i];
+        const rankClass = i < 3 ? 'rank-number top-3' : 'rank-number';
+
+        html += '<tr>';
+        html += '<td class="' + rankClass + '">' + (i + 1) + '</td>';
+        html += '<td><div class="player-cell">';
+        if (player.avatar) {
+          html += '<img src="' + escapeHtml(player.avatar) + '" alt="" class="player-avatar">';
+        } else {
+          html += '<div class="player-avatar"></div>';
+        }
+        html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+        html += '</div></td>';
+        html += '<td class="stat-secondary">' +
+                player.wards_placed.toLocaleString() +
+                ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
+        html += '<td class="stat-value">' + player.avgWards.toFixed(1) + '</td>';
         html += '</tr>';
       }
 
