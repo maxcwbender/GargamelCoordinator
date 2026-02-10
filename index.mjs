@@ -35,11 +35,15 @@ const migrations = [
     'ALTER TABLE player_stats ADD COLUMN observer_kills INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_time_total INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_count INTEGER DEFAULT 0',
+    // Recreate match_mvps with composite key (match_id, award_type) for MVP + SVP
+    `DROP TABLE IF EXISTS match_mvps`,
     `CREATE TABLE IF NOT EXISTS match_mvps (
-        match_id INTEGER PRIMARY KEY,
+        match_id INTEGER NOT NULL,
         account_id INTEGER NOT NULL,
+        award_type TEXT NOT NULL DEFAULT 'mvp',
         mvp_score REAL DEFAULT 0,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (match_id, award_type)
     )`,
 ];
 for (const sql of migrations) {
@@ -61,11 +65,14 @@ function loadPlayerStatsFromDB() {
                    ps.wards_placed, ps.observer_kills, ps.obs_ward_time_total, ps.obs_ward_count,
                    ps.matches, ps.last_updated,
                    pa.avatar_url,
-                   COALESCE(mv.mvp_count, 0) AS mvp_count
+                   COALESCE(mv.mvp_count, 0) AS mvp_count,
+                   COALESCE(sv.svp_count, 0) AS svp_count
             FROM player_stats ps
             LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
-            LEFT JOIN (SELECT account_id, COUNT(*) AS mvp_count FROM match_mvps GROUP BY account_id) mv
+            LEFT JOIN (SELECT account_id, COUNT(*) AS mvp_count FROM match_mvps WHERE award_type = 'mvp' GROUP BY account_id) mv
                 ON ps.account_id = mv.account_id
+            LEFT JOIN (SELECT account_id, COUNT(*) AS svp_count FROM match_mvps WHERE award_type = 'svp' GROUP BY account_id) sv
+                ON ps.account_id = sv.account_id
         `;
 
         // better-sqlite3 has synchronous methods
@@ -98,6 +105,7 @@ function loadPlayerStatsFromDB() {
                 ? (row.obs_ward_time_total / row.obs_ward_count)
                 : null,
             mvpCount: row.mvp_count || 0,
+            svpCount: row.svp_count || 0,
         }));
 
         const oldestUpdate = rows.length > 0 ? Math.min(...rows.map(r => r.last_updated)) : 0;
@@ -244,18 +252,22 @@ async function refreshMatchCache() {
                     };
                 });
 
-                // MVP = highest mvpScore on the winning team
+                // MVP = highest score on winning team, SVP = highest score on losing team
                 const winningTeamRadiant = detail.radiant_win;
                 let mvpSlot = null;
-                let bestScore = -Infinity;
+                let mvpBest = -Infinity;
+                let svpSlot = null;
+                let svpBest = -Infinity;
                 for (const p of matchPlayers) {
-                    if (p.isRadiant === winningTeamRadiant && p.mvpScore > bestScore) {
-                        bestScore = p.mvpScore;
-                        mvpSlot = p.player_slot;
+                    if (p.isRadiant === winningTeamRadiant) {
+                        if (p.mvpScore > mvpBest) { mvpBest = p.mvpScore; mvpSlot = p.player_slot; }
+                    } else {
+                        if (p.mvpScore > svpBest) { svpBest = p.mvpScore; svpSlot = p.player_slot; }
                     }
                 }
                 for (const p of matchPlayers) {
                     p.isMVP = p.player_slot === mvpSlot;
+                    p.isSVP = p.player_slot === svpSlot;
                 }
 
                 detailed.push({
@@ -369,14 +381,13 @@ async function refreshPlayerStats() {
                     }
                 }
 
-                // Determine match MVP (highest fantasy score on winning team)
+                // Determine match MVP (winning team) and SVP (losing team)
                 const winningRadiant = detail.radiant_win;
-                let mvpId = null;
-                let mvpBest = -Infinity;
+                let mvpId = null, mvpBest = -Infinity;
+                let svpId = null, svpBest = -Infinity;
                 for (const p of detail.players || []) {
                     if (!p.account_id) continue;
                     const pRadiant = p.player_slot < 128;
-                    if (pRadiant !== winningRadiant) continue;
                     const score =
                         (p.kills || 0) * 0.5 +
                         (3 - (p.deaths || 0) * 0.3) +
@@ -388,14 +399,21 @@ async function refreshPlayerStats() {
                         (p.hero_healing || 0) * 0.0002 +
                         (p.obs_placed || 0) * 0.5 +
                         (p.observer_kills || 0) * 0.5;
-                    if (score > mvpBest) { mvpBest = score; mvpId = p.account_id; }
+                    if (pRadiant === winningRadiant) {
+                        if (score > mvpBest) { mvpBest = score; mvpId = p.account_id; }
+                    } else {
+                        if (score > svpBest) { svpBest = score; svpId = p.account_id; }
+                    }
                 }
+                const insertAward = db.prepare(
+                    'INSERT OR IGNORE INTO match_mvps (match_id, account_id, award_type, mvp_score, created_at) VALUES (?, ?, ?, ?, ?)'
+                );
+                const now = Date.now();
                 if (mvpId != null) {
-                    try {
-                        db.prepare(
-                            'INSERT OR IGNORE INTO match_mvps (match_id, account_id, mvp_score, created_at) VALUES (?, ?, ?, ?)'
-                        ).run(matchId, mvpId, mvpBest, Date.now());
-                    } catch (_) { /* ignore if match already recorded */ }
+                    try { insertAward.run(matchId, mvpId, 'mvp', mvpBest, now); } catch (_) {}
+                }
+                if (svpId != null) {
+                    try { insertAward.run(matchId, svpId, 'svp', svpBest, now); } catch (_) {}
                 }
 
                 if ((i + 1) % 10 === 0) {
@@ -420,8 +438,10 @@ async function refreshPlayerStats() {
         // Load avatars and MVP counts from DB and merge with player stats
         const avatarQuery = db.prepare('SELECT account_id, avatar_url FROM player_avatars');
         const avatars = new Map(avatarQuery.all().map(row => [row.account_id, row.avatar_url]));
-        const mvpQuery = db.prepare('SELECT account_id, COUNT(*) AS cnt FROM match_mvps GROUP BY account_id');
+        const mvpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'mvp' GROUP BY account_id");
         const mvpCounts = new Map(mvpQuery.all().map(row => [row.account_id, row.cnt]));
+        const svpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'svp' GROUP BY account_id");
+        const svpCounts = new Map(svpQuery.all().map(row => [row.account_id, row.cnt]));
 
         // Convert to array and calculate derived stats
         const players = Array.from(playerMap.entries()).map(([accountId, stats]) => ({
@@ -451,6 +471,7 @@ async function refreshPlayerStats() {
                 ? (stats.obs_ward_time_total / stats.obs_ward_count)
                 : null,
             mvpCount: mvpCounts.get(accountId) || 0,
+            svpCount: svpCounts.get(accountId) || 0,
         }));
 
         // Filter out players with very few matches
@@ -621,6 +642,12 @@ server.get('/api/top-rankings', async (req, res) => {
         .sort((a, b) => b.midasScore - a.midasScore)
         .slice(0, 10);
 
+    // Player of the Month — most MVP awards (no minimum-match filter; MVPs already require wins)
+    const playerOfTheMonth = [...players]
+        .filter(p => p.mvpCount > 0)
+        .sort((a, b) => b.mvpCount - a.mvpCount || b.svpCount - a.svpCount)
+        .slice(0, 1)[0] || null;
+
     return res.json({
         topByWinRate,
         topByKDA,
@@ -628,6 +655,7 @@ server.get('/api/top-rankings', async (req, res) => {
         topByWards,
         topByDewards,
         topByMidas,
+        playerOfTheMonth,
         minMatchesRequired: minMatches,
         lastUpdated: playerStatsCache.lastFetched,
         matchesAnalyzed: playerStatsCache.matchesAnalyzed || 0,

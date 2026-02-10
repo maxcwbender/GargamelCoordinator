@@ -40,13 +40,15 @@ def init_database():
         )
     ''')
 
-    # Create match_mvps table (one MVP per match, deduped by match_id)
+    # Create match_mvps table (MVP + SVP per match, deduped by match_id + award_type)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS match_mvps (
-            match_id INTEGER PRIMARY KEY,
+            match_id INTEGER NOT NULL,
             account_id INTEGER NOT NULL,
+            award_type TEXT NOT NULL DEFAULT 'mvp',
             mvp_score REAL DEFAULT 0,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (match_id, award_type)
         )
     ''')
 

@@ -309,6 +309,81 @@
       transition: width 0.3s ease;
     }
 
+    /* ── Player of the Month ──────────────────────────────── */
+    .potm-card {
+      background: linear-gradient(135deg, #fff9e6 0%, #fff 40%);
+      border: 2px solid #daa520;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      box-shadow: 0 4px 16px rgba(218, 165, 32, 0.15);
+    }
+
+    .potm-avatar {
+      width: 64px;
+      height: 64px;
+      border-radius: 10px;
+      flex-shrink: 0;
+      background: #e0e0e0;
+      object-fit: cover;
+      border: 2px solid #daa520;
+    }
+
+    .potm-info h2 {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #b8860b;
+      margin-bottom: 4px;
+    }
+
+    .potm-name {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: #2c3e50;
+    }
+
+    .potm-stats {
+      font-size: 0.85rem;
+      color: #888;
+      margin-top: 2px;
+    }
+
+    .potm-stats strong {
+      color: #daa520;
+    }
+
+    .potm-star {
+      font-size: 2rem;
+      color: #daa520;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+
+    @media (max-width: 900px) {
+      .potm-card {
+        padding: 16px;
+        gap: 14px;
+      }
+
+      .potm-avatar {
+        width: 48px;
+        height: 48px;
+      }
+
+      .potm-name {
+        font-size: 1.1rem;
+      }
+
+      .potm-star {
+        font-size: 1.5rem;
+      }
+    }
+
     .midas-card {
       border-color: #b8860b;
     }
@@ -443,7 +518,29 @@
         return;
       }
 
-      let html = '<div class="rankings-grid">';
+      let html = '';
+
+      // Player of the Month
+      if (data.playerOfTheMonth) {
+        var p = data.playerOfTheMonth;
+        html += '<div class="potm-card">';
+        if (p.avatar) {
+          html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="potm-avatar">';
+        } else {
+          html += '<div class="potm-avatar"></div>';
+        }
+        html += '<div class="potm-info">';
+        html += '<h2>Player of the Month</h2>';
+        html += '<div class="potm-name">' + escapeHtml(p.name) + '</div>';
+        html += '<div class="potm-stats"><strong>' + p.mvpCount + '</strong> MVP' + (p.mvpCount !== 1 ? 's' : '') +
+                ' &middot; <strong>' + p.svpCount + '</strong> SVP' + (p.svpCount !== 1 ? 's' : '') +
+                ' &middot; ' + p.wins + 'W-' + p.losses + 'L</div>';
+        html += '</div>';
+        html += '<div class="potm-star">&#9733;</div>';
+        html += '</div>';
+      }
+
+      html += '<div class="rankings-grid">';
 
       // Win Rate Rankings
       html += '<div class="ranking-card">';

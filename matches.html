@@ -396,10 +396,30 @@
       color: #b8860b;
     }
 
-    .mvp-star {
+    .player-svp {
+      background: linear-gradient(90deg, rgba(192, 192, 192, 0.2) 0%, rgba(192, 192, 192, 0.06) 100%);
+      border-radius: 4px;
+      padding: 2px 6px;
+      margin: -2px -6px;
+    }
+
+    .player-svp .player-name-text {
+      font-weight: 700;
+      color: #708090;
+    }
+
+    .vp-star {
       flex-shrink: 0;
       font-size: 0.75rem;
+      margin-left: auto;
+    }
+
+    .vp-star.gold {
       color: #daa520;
+    }
+
+    .vp-star.silver {
+      color: #a0a0a0;
     }
 
     /* ── Score divider ─────────────────────────────────────── */
@@ -635,14 +655,16 @@
           '<span class="team-indicator indicator-radiant"></span>Radiant</div>';
         html += '<ul class="player-list">';
         for (const p of radiantPlayers) {
-          html += '<li' + (p.isMVP ? ' class="player-mvp"' : '') + '>';
-          if (p.isMVP) html += '<span class="mvp-star" title="Match MVP">&#9733;</span>';
+          var liClass = p.isMVP ? 'player-mvp' : (p.isSVP ? 'player-svp' : '');
+          html += '<li' + (liClass ? ' class="' + liClass + '"' : '') + '>';
           if (p.avatar) {
             html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
           } else {
             html += '<div class="player-avatar"></div>';
           }
           html += '<span class="player-name-text">' + escapeHtml(p.personaname) + '</span>';
+          if (p.isMVP) html += '<span class="vp-star gold" title="Match MVP">&#9733;</span>';
+          if (p.isSVP) html += '<span class="vp-star silver" title="Match SVP">&#9733;</span>';
           html += '</li>';
         }
         html += '</ul></div>';
@@ -663,14 +685,16 @@
           '<span class="team-indicator indicator-dire"></span>Dire</div>';
         html += '<ul class="player-list">';
         for (const p of direPlayers) {
-          html += '<li' + (p.isMVP ? ' class="player-mvp"' : '') + '>';
-          if (p.isMVP) html += '<span class="mvp-star" title="Match MVP">&#9733;</span>';
+          var liClass = p.isMVP ? 'player-mvp' : (p.isSVP ? 'player-svp' : '');
+          html += '<li' + (liClass ? ' class="' + liClass + '"' : '') + '>';
           if (p.avatar) {
             html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
           } else {
             html += '<div class="player-avatar"></div>';
           }
           html += '<span class="player-name-text">' + escapeHtml(p.personaname) + '</span>';
+          if (p.isMVP) html += '<span class="vp-star gold" title="Match MVP">&#9733;</span>';
+          if (p.isSVP) html += '<span class="vp-star silver" title="Match SVP">&#9733;</span>';
           html += '</li>';
         }
         html += '</ul></div>';
