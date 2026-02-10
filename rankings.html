@@ -309,7 +309,7 @@
       transition: width 0.3s ease;
     }
 
-    /* ── Player of the Month ──────────────────────────────── */
+    /* ── League MVP Spotlight ─────────────────────────────── */
     .potm-card {
       background: linear-gradient(135deg, #fff9e6 0%, #fff 40%);
       border: 2px solid #daa520;
@@ -520,7 +520,7 @@
 
       let html = '';
 
-      // Player of the Month
+      // League MVP Spotlight
       if (data.playerOfTheMonth) {
         var p = data.playerOfTheMonth;
         html += '<div class="potm-card">';
@@ -530,7 +530,7 @@
           html += '<div class="potm-avatar"></div>';
         }
         html += '<div class="potm-info">';
-        html += '<h2>Player of the Month</h2>';
+        html += '<h2>League MVP</h2>';
         html += '<div class="potm-name">' + escapeHtml(p.name) + '</div>';
         html += '<div class="potm-stats"><strong>' + p.mvpCount + '</strong> MVP' + (p.mvpCount !== 1 ? 's' : '') +
                 ' &middot; <strong>' + p.svpCount + '</strong> SVP' + (p.svpCount !== 1 ? 's' : '') +
