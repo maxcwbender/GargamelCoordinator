@@ -211,27 +211,71 @@
       padding: 14px 20px;
       background: #fafafa;
       border-bottom: 1px solid #f0f0f0;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .match-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
     }
 
     .match-id {
-      font-size: 0.8rem;
-      color: #aaa;
-      font-weight: 500;
+      font-size: 0.75rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
     .match-id a {
-      color: #aaa;
+      color: #4e9fd1;
       text-decoration: none;
-      transition: color 0.2s ease;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      background: rgba(78, 159, 209, 0.08);
     }
 
     .match-id a:hover {
-      color: #4e9fd1;
+      background: rgba(78, 159, 209, 0.15);
+      color: #3b84b3;
+    }
+
+    .match-id a::after {
+      content: '↗';
+      font-size: 0.9rem;
+      opacity: 0.7;
+    }
+
+    .match-date {
+      font-size: 0.75rem;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .match-date::before {
+      content: '📅';
+      font-size: 0.85rem;
     }
 
     .match-duration {
-      font-size: 0.8rem;
-      color: #aaa;
+      font-size: 0.75rem;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .match-duration::before {
+      content: '⏱️';
+      font-size: 0.85rem;
     }
 
     .match-winner {
@@ -312,6 +356,21 @@
       font-size: 0.85rem;
       color: #555;
       padding: 3px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .player-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      background: #e0e0e0;
+      object-fit: cover;
+    }
+
+    .player-name-text {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -415,7 +474,8 @@
     </a>
     <ul class="navbar-links">
       <li><a href="/">Home</a></li>
-      <li><a href="/matches" class="active">Recent Matches</a></li>
+      <li><a href="/matches" class="active">Matches</a></li>
+      <li><a href="/rankings">Rankings</a></li>
       <li><a href="/about">About</a></li>
     </ul>
   </nav>
@@ -440,6 +500,29 @@
       const m = Math.floor(seconds / 60);
       const s = seconds % 60;
       return m + ':' + String(s).padStart(2, '0');
+    }
+
+    function formatMatchDate(timestamp) {
+      const date = new Date(timestamp * 1000); // Convert Unix timestamp to milliseconds
+      const now = new Date();
+      const diff = now - date;
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const days = Math.floor(hours / 24);
+
+      // If less than 24 hours ago, show relative time
+      if (hours < 24) {
+        if (hours < 1) return 'Less than an hour ago';
+        return hours === 1 ? '1 hour ago' : hours + ' hours ago';
+      }
+
+      // If less than 7 days ago, show days
+      if (days < 7) {
+        return days === 1 ? 'Yesterday' : days + ' days ago';
+      }
+
+      // Otherwise show full date
+      const options = { month: 'short', day: 'numeric', year: 'numeric' };
+      return date.toLocaleDateString('en-US', options);
     }
 
     function timeAgo(timestamp) {
@@ -484,12 +567,24 @@
 
         // Header
         html += '<div class="match-header">';
+
+        // Left side: Match info (ID and date)
+        html += '<div class="match-info">';
         html += '<span class="match-id"><a href="https://www.opendota.com/matches/' +
-          match.match_id + '" target="_blank" rel="noopener">Match ' + match.match_id + '</a></span>';
+          match.match_id + '" target="_blank" rel="noopener">View on OpenDota</a></span>';
+        if (match.start_time) {
+          html += '<span class="match-date">' + formatMatchDate(match.start_time) + '</span>';
+        }
+        html += '</div>';
+
+        // Center: Winner badge
         html += '<span class="match-winner ' + winnerClass + '">' + winnerText + '</span>';
+
+        // Right: Duration
         if (match.duration) {
           html += '<span class="match-duration">' + formatDuration(match.duration) + '</span>';
         }
+
         html += '</div>';
 
         // Body
@@ -501,7 +596,14 @@
           '<span class="team-indicator indicator-radiant"></span>Radiant</div>';
         html += '<ul class="player-list">';
         for (const p of radiantPlayers) {
-          html += '<li>' + escapeHtml(p.personaname) + '</li>';
+          html += '<li>';
+          if (p.avatar) {
+            html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
+          } else {
+            html += '<div class="player-avatar"></div>';
+          }
+          html += '<span class="player-name-text">' + escapeHtml(p.personaname) + '</span>';
+          html += '</li>';
         }
         html += '</ul></div>';
 
@@ -521,7 +623,14 @@
           '<span class="team-indicator indicator-dire"></span>Dire</div>';
         html += '<ul class="player-list">';
         for (const p of direPlayers) {
-          html += '<li>' + escapeHtml(p.personaname) + '</li>';
+          html += '<li>';
+          if (p.avatar) {
+            html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
+          } else {
+            html += '<div class="player-avatar"></div>';
+          }
+          html += '<span class="player-name-text">' + escapeHtml(p.personaname) + '</span>';
+          html += '</li>';
         }
         html += '</ul></div>';
 
