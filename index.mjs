@@ -367,6 +367,10 @@ if (Date.now() - dbStats.lastFetched > PLAYER_STATS_TTL_MS || dbStats.players.le
                 playerStatsCache.data = updatedStats.players;
                 logger.info('Player stats cache updated with new avatars');
             }
+            // Refresh match cache to include new avatars
+            return refreshMatchCache();
+        }).then(() => {
+            logger.info('Match cache refreshed with new avatars');
         }).catch(err => {
             logger.error(`Failed to fetch missing avatars: ${err.message}`);
         });
