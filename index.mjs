@@ -30,14 +30,20 @@ let isRefreshingStats = false; // Prevent concurrent refreshes
 // Initialize database connection early (before any functions that use it)
 let db = new Database('allUsers.db');
 
-// Migrate schema: add columns introduced after initial release
+// Migrate schema: add columns and tables introduced after initial release
 const migrations = [
     'ALTER TABLE player_stats ADD COLUMN observer_kills INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_time_total INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_count INTEGER DEFAULT 0',
+    `CREATE TABLE IF NOT EXISTS match_mvps (
+        match_id INTEGER PRIMARY KEY,
+        account_id INTEGER NOT NULL,
+        mvp_score REAL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    )`,
 ];
 for (const sql of migrations) {
-    try { db.exec(sql); } catch (_) { /* column already exists */ }
+    try { db.exec(sql); } catch (_) { /* column/table already exists */ }
 }
 
 async function fetchOpenDota(path) {
@@ -54,9 +60,12 @@ function loadPlayerStatsFromDB() {
                    ps.deaths, ps.assists, ps.gold_per_minute, ps.total_gold,
                    ps.wards_placed, ps.observer_kills, ps.obs_ward_time_total, ps.obs_ward_count,
                    ps.matches, ps.last_updated,
-                   pa.avatar_url
+                   pa.avatar_url,
+                   COALESCE(mv.mvp_count, 0) AS mvp_count
             FROM player_stats ps
             LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
+            LEFT JOIN (SELECT account_id, COUNT(*) AS mvp_count FROM match_mvps GROUP BY account_id) mv
+                ON ps.account_id = mv.account_id
         `;
 
         // better-sqlite3 has synchronous methods
@@ -88,6 +97,7 @@ function loadPlayerStatsFromDB() {
             avgObsWardDuration: (row.obs_ward_count || 0) > 0
                 ? (row.obs_ward_time_total / row.obs_ward_count)
                 : null,
+            mvpCount: row.mvp_count || 0,
         }));
 
         const oldestUpdate = rows.length > 0 ? Math.min(...rows.map(r => r.last_updated)) : 0;
@@ -359,6 +369,35 @@ async function refreshPlayerStats() {
                     }
                 }
 
+                // Determine match MVP (highest fantasy score on winning team)
+                const winningRadiant = detail.radiant_win;
+                let mvpId = null;
+                let mvpBest = -Infinity;
+                for (const p of detail.players || []) {
+                    if (!p.account_id) continue;
+                    const pRadiant = p.player_slot < 128;
+                    if (pRadiant !== winningRadiant) continue;
+                    const score =
+                        (p.kills || 0) * 0.5 +
+                        (3 - (p.deaths || 0) * 0.3) +
+                        (p.assists || 0) * 0.25 +
+                        (p.last_hits || 0) * 0.004 +
+                        (p.gold_per_min || 0) * 0.004 +
+                        (p.hero_damage || 0) * 0.0002 +
+                        (p.tower_damage || 0) * 0.0004 +
+                        (p.hero_healing || 0) * 0.0002 +
+                        (p.obs_placed || 0) * 0.5 +
+                        (p.observer_kills || 0) * 0.5;
+                    if (score > mvpBest) { mvpBest = score; mvpId = p.account_id; }
+                }
+                if (mvpId != null) {
+                    try {
+                        db.prepare(
+                            'INSERT OR IGNORE INTO match_mvps (match_id, account_id, mvp_score, created_at) VALUES (?, ?, ?, ?)'
+                        ).run(matchId, mvpId, mvpBest, Date.now());
+                    } catch (_) { /* ignore if match already recorded */ }
+                }
+
                 if ((i + 1) % 10 === 0) {
                     logger.info(`Progress: ${i + 1}/${matchesToFetch.length} matches processed`);
                 }
@@ -378,9 +417,11 @@ async function refreshPlayerStats() {
         const accountIds = Array.from(playerMap.keys());
         await fetchAndSaveAvatars(accountIds);
 
-        // Load avatars from DB and merge with player stats
+        // Load avatars and MVP counts from DB and merge with player stats
         const avatarQuery = db.prepare('SELECT account_id, avatar_url FROM player_avatars');
         const avatars = new Map(avatarQuery.all().map(row => [row.account_id, row.avatar_url]));
+        const mvpQuery = db.prepare('SELECT account_id, COUNT(*) AS cnt FROM match_mvps GROUP BY account_id');
+        const mvpCounts = new Map(mvpQuery.all().map(row => [row.account_id, row.cnt]));
 
         // Convert to array and calculate derived stats
         const players = Array.from(playerMap.entries()).map(([accountId, stats]) => ({
@@ -409,6 +450,7 @@ async function refreshPlayerStats() {
             avgObsWardDuration: (stats.obs_ward_count || 0) > 0
                 ? (stats.obs_ward_time_total / stats.obs_ward_count)
                 : null,
+            mvpCount: mvpCounts.get(accountId) || 0,
         }));
 
         // Filter out players with very few matches

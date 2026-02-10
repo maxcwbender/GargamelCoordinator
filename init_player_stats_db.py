@@ -40,6 +40,16 @@ def init_database():
         )
     ''')
 
+    # Create match_mvps table (one MVP per match, deduped by match_id)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS match_mvps (
+            match_id INTEGER PRIMARY KEY,
+            account_id INTEGER NOT NULL,
+            mvp_score REAL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        )
+    ''')
+
     # Create index on last_updated for efficient queries
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_player_stats_updated
