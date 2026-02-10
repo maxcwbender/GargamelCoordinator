@@ -582,7 +582,7 @@
                 ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
         var durationText = player.avgObsWardDuration != null
           ? Math.floor(player.avgObsWardDuration / 60) + ':' + ('0' + Math.floor(player.avgObsWardDuration % 60)).slice(-2)
-          : '\u2014';
+          : '';
         html += '<td class="stat-secondary hide-mobile">' + durationText + '</td>';
         html += '<td class="stat-value">' + player.avgWards.toFixed(1) + '</td>';
         html += '</tr>';

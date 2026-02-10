@@ -186,7 +186,7 @@ async function fetchAndSaveAvatars(accountIds) {
 async function refreshMatchCache() {
     try {
         logger.info('Refreshing OpenDota match cache...');
-        // Use /matchIds endpoint — /matches excludes amateur leagues like ours
+        // Use /matchIds endpoint - /matches excludes amateur leagues like ours
         const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
 
         // Take the 10 most recent match IDs (API returns newest first)
@@ -226,6 +226,7 @@ async function refreshMatchCache() {
                     dire_score: detail.dire_score,
                     duration: detail.duration,
                     start_time: detail.start_time,
+                    game_mode: detail.game_mode,
                     players: matchPlayers,
                 });
             } catch (err) {
@@ -538,7 +539,7 @@ server.get('/api/top-rankings', async (req, res) => {
         .sort((a, b) => b.avgDewards - a.avgDewards)
         .slice(0, 10);
 
-    // "Hand of Midas, Heart of Absence" — highest net worth per fight participation.
+    // "Hand of Midas, Heart of Absence" - highest net worth per fight participation.
     // Score = avgNetWorth / (avgKills + avgAssists + 1)
     // The +1 prevents division by zero and slightly penalises zero participation.
     const topByMidas = [...qualified]

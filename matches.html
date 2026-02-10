@@ -265,6 +265,14 @@
       font-size: 0.85rem;
     }
 
+    .match-mode {
+      font-size: 0.75rem;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
     .match-duration {
       font-size: 0.75rem;
       color: #888;
@@ -537,6 +545,16 @@
       return days + 'd ago';
     }
 
+    var GAME_MODES = {
+      0: 'Unknown', 1: 'All Pick', 2: "Captain's Mode", 3: 'Random Draft',
+      4: 'Single Draft', 5: 'All Random', 6: 'Intro', 7: 'Diretide',
+      8: "Greeviling", 9: 'Tutorial', 10: 'Mid Only', 11: 'Least Played',
+      12: 'Limited Heroes', 13: 'Compendium', 14: 'All Pick', 15: 'Custom',
+      16: "Captain's Draft", 17: 'Balanced Draft', 18: 'Ability Draft',
+      19: 'Event', 20: 'All Random DM', 21: '1v1 Mid', 22: 'All Draft',
+      23: 'Turbo', 24: 'Mutation'
+    };
+
     function renderMatches(data) {
       const container = document.getElementById('match-container');
       const cacheInfo = document.getElementById('cache-info');
@@ -574,6 +592,9 @@
           match.match_id + '" target="_blank" rel="noopener">View on OpenDota</a></span>';
         if (match.start_time) {
           html += '<span class="match-date">' + formatMatchDate(match.start_time) + '</span>';
+        }
+        if (match.game_mode != null) {
+          html += '<span class="match-mode">' + escapeHtml(GAME_MODES[match.game_mode] || 'Mode ' + match.game_mode) + '</span>';
         }
         html += '</div>';
 
