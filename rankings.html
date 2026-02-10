@@ -349,6 +349,10 @@
       .ranking-table th:first-child {
         width: 30px;
       }
+
+      .midas-card .midas-hide-mobile {
+        display: none;
+      }
     }
   </style>
 </head>
@@ -587,7 +591,7 @@
         html += '</div>';
         html += '<table class="ranking-table">';
         html += '<thead><tr>';
-        html += '<th>#</th><th>Player</th><th>Avg Net Worth</th><th>Avg K+A</th><th>Midas Score</th>';
+        html += '<th>#</th><th>Player</th><th class="midas-hide-mobile">Avg Net Worth</th><th>Avg K+A</th><th>Midas Score</th>';
         html += '</tr></thead><tbody>';
 
         for (var i = 0; i < data.topByMidas.length; i++) {
@@ -605,7 +609,7 @@
           }
           html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
           html += '</div></td>';
-          html += '<td class="stat-secondary">' +
+          html += '<td class="stat-secondary midas-hide-mobile">' +
                   Math.round(player.avgNetWorth).toLocaleString() + ' gold' +
                   ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
           html += '<td class="stat-secondary">' + avgFights + '/game</td>';
