@@ -21,6 +21,9 @@ def init_database():
             gold_per_minute INTEGER DEFAULT 0,
             total_gold INTEGER DEFAULT 0,
             wards_placed INTEGER DEFAULT 0,
+            observer_kills INTEGER DEFAULT 0,
+            obs_ward_time_total INTEGER DEFAULT 0,
+            obs_ward_count INTEGER DEFAULT 0,
             matches INTEGER DEFAULT 0,
             last_updated INTEGER NOT NULL,
             UNIQUE(account_id)

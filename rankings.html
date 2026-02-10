@@ -353,6 +353,10 @@
       .midas-card .midas-hide-mobile {
         display: none;
       }
+
+      .hide-mobile {
+        display: none;
+      }
     }
   </style>
 </head>
@@ -556,7 +560,7 @@
       html += '</div>';
       html += '<table class="ranking-table">';
       html += '<thead><tr>';
-      html += '<th>#</th><th>Player</th><th>Total Wards Placed</th><th>Avg/Game</th>';
+      html += '<th>#</th><th>Player</th><th>Total Wards Placed</th><th class="hide-mobile">Avg Obs Duration</th><th>Avg/Game</th>';
       html += '</tr></thead><tbody>';
 
       for (let i = 0; i < data.topByWards.length; i++) {
@@ -576,11 +580,51 @@
         html += '<td class="stat-secondary">' +
                 player.wards_placed.toLocaleString() +
                 ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
+        var durationText = player.avgObsWardDuration != null
+          ? Math.floor(player.avgObsWardDuration / 60) + ':' + ('0' + Math.floor(player.avgObsWardDuration % 60)).slice(-2)
+          : '\u2014';
+        html += '<td class="stat-secondary hide-mobile">' + durationText + '</td>';
         html += '<td class="stat-value">' + player.avgWards.toFixed(1) + '</td>';
         html += '</tr>';
       }
 
       html += '</tbody></table></div>';
+
+      // Dewarding Rankings
+      if (data.topByDewards && data.topByDewards.length > 0) {
+        html += '<div class="ranking-card">';
+        html += '<div class="ranking-header">';
+        html += '<h2>Top 10 Players with True Sight</h2>';
+        html += '<p>Best Dewarders</p>';
+        html += '</div>';
+        html += '<table class="ranking-table">';
+        html += '<thead><tr>';
+        html += '<th>#</th><th>Player</th><th>Total Dewards</th><th>Avg/Game</th>';
+        html += '</tr></thead><tbody>';
+
+        for (var i = 0; i < data.topByDewards.length; i++) {
+          var player = data.topByDewards[i];
+          var rankClass = i < 3 ? 'rank-number top-3' : 'rank-number';
+
+          html += '<tr>';
+          html += '<td class="' + rankClass + '">' + (i + 1) + '</td>';
+          html += '<td><div class="player-cell">';
+          if (player.avatar) {
+            html += '<img src="' + escapeHtml(player.avatar) + '" alt="" class="player-avatar">';
+          } else {
+            html += '<div class="player-avatar"></div>';
+          }
+          html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+          html += '</div></td>';
+          html += '<td class="stat-secondary">' +
+                  player.observer_kills.toLocaleString() +
+                  ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
+          html += '<td class="stat-value">' + player.avgDewards.toFixed(2) + '</td>';
+          html += '</tr>';
+        }
+
+        html += '</tbody></table></div>';
+      }
 
       // Hand of Midas, Heart of Absence
       if (data.topByMidas && data.topByMidas.length > 0) {

@@ -30,6 +30,16 @@ let isRefreshingStats = false; // Prevent concurrent refreshes
 // Initialize database connection early (before any functions that use it)
 let db = new Database('allUsers.db');
 
+// Migrate schema: add columns introduced after initial release
+const migrations = [
+    'ALTER TABLE player_stats ADD COLUMN observer_kills INTEGER DEFAULT 0',
+    'ALTER TABLE player_stats ADD COLUMN obs_ward_time_total INTEGER DEFAULT 0',
+    'ALTER TABLE player_stats ADD COLUMN obs_ward_count INTEGER DEFAULT 0',
+];
+for (const sql of migrations) {
+    try { db.exec(sql); } catch (_) { /* column already exists */ }
+}
+
 async function fetchOpenDota(path) {
     const res = await fetch(`${OPENDOTA_BASE}${path}`);
     if (!res.ok) throw new Error(`OpenDota API ${res.status}: ${path}`);
@@ -41,7 +51,9 @@ function loadPlayerStatsFromDB() {
     try {
         const query = `
             SELECT ps.account_id, ps.personaname, ps.wins, ps.losses, ps.kills,
-                   ps.deaths, ps.assists, ps.gold_per_minute, ps.total_gold, ps.wards_placed, ps.matches, ps.last_updated,
+                   ps.deaths, ps.assists, ps.gold_per_minute, ps.total_gold,
+                   ps.wards_placed, ps.observer_kills, ps.obs_ward_time_total, ps.obs_ward_count,
+                   ps.matches, ps.last_updated,
                    pa.avatar_url
             FROM player_stats ps
             LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
@@ -71,6 +83,11 @@ function loadPlayerStatsFromDB() {
             avgNetWorth: row.matches > 0 ? (row.total_gold / row.matches) : 0,
             wards_placed: row.wards_placed,
             avgWards: row.matches > 0 ? (row.wards_placed / row.matches) : 0,
+            observer_kills: row.observer_kills || 0,
+            avgDewards: row.matches > 0 ? ((row.observer_kills || 0) / row.matches) : 0,
+            avgObsWardDuration: (row.obs_ward_count || 0) > 0
+                ? (row.obs_ward_time_total / row.obs_ward_count)
+                : null,
         }));
 
         const oldestUpdate = rows.length > 0 ? Math.min(...rows.map(r => r.last_updated)) : 0;
@@ -91,8 +108,8 @@ function savePlayerStatsToDB(playerMap) {
         const now = Date.now();
         const insertStats = db.prepare(`
             INSERT OR REPLACE INTO player_stats
-            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, wards_placed, matches, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, wards_placed, observer_kills, obs_ward_time_total, obs_ward_count, matches, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         for (const [accountId, stats] of playerMap.entries()) {
@@ -107,6 +124,9 @@ function savePlayerStatsToDB(playerMap) {
                 stats.gold_per_minute,
                 stats.total_gold,
                 stats.wards_placed,
+                stats.observer_kills || 0,
+                stats.obs_ward_time_total || 0,
+                stats.obs_ward_count || 0,
                 stats.matches,
                 now
             );
@@ -266,6 +286,9 @@ async function refreshPlayerStats() {
                             gold_per_minute: 0,
                             total_gold: 0,
                             wards_placed: 0,
+                            observer_kills: 0,
+                            obs_ward_time_total: 0,
+                            obs_ward_count: 0,
                             matches: 0,
                         });
                     }
@@ -288,6 +311,22 @@ async function refreshPlayerStats() {
                     // Wards placed (observer + sentry)
                     const wardsPlaced = (player.obs_placed || 0) + (player.sen_placed || 0);
                     stats.wards_placed += wardsPlaced;
+                    // Dewards (enemy observer wards destroyed)
+                    stats.observer_kills += player.observer_kills || 0;
+                    // Observer ward durations (from parsed replay logs)
+                    if (Array.isArray(player.obs_log) && Array.isArray(player.obs_left_log)) {
+                        const leftByHandle = new Map();
+                        for (const evt of player.obs_left_log) {
+                            if (evt.ehandle != null) leftByHandle.set(evt.ehandle, evt.time);
+                        }
+                        for (const evt of player.obs_log) {
+                            const leftTime = evt.ehandle != null ? leftByHandle.get(evt.ehandle) : undefined;
+                            if (leftTime != null && evt.time != null) {
+                                stats.obs_ward_time_total += (leftTime - evt.time);
+                                stats.obs_ward_count++;
+                            }
+                        }
+                    }
                 }
 
                 if ((i + 1) % 10 === 0) {
@@ -335,6 +374,11 @@ async function refreshPlayerStats() {
             avgNetWorth: stats.matches > 0 ? (stats.total_gold / stats.matches) : 0,
             wards_placed: stats.wards_placed,
             avgWards: stats.matches > 0 ? (stats.wards_placed / stats.matches) : 0,
+            observer_kills: stats.observer_kills || 0,
+            avgDewards: stats.matches > 0 ? ((stats.observer_kills || 0) / stats.matches) : 0,
+            avgObsWardDuration: (stats.obs_ward_count || 0) > 0
+                ? (stats.obs_ward_time_total / stats.obs_ward_count)
+                : null,
         }));
 
         // Filter out players with very few matches
@@ -488,6 +532,12 @@ server.get('/api/top-rankings', async (req, res) => {
         .sort((a, b) => b.avgWards - a.avgWards)
         .slice(0, 10);
 
+    // Top 10 dewarders (by avg observer wards killed per game)
+    const topByDewards = [...qualified]
+        .filter(p => p.observer_kills > 0)
+        .sort((a, b) => b.avgDewards - a.avgDewards)
+        .slice(0, 10);
+
     // "Hand of Midas, Heart of Absence" — highest net worth per fight participation.
     // Score = avgNetWorth / (avgKills + avgAssists + 1)
     // The +1 prevents division by zero and slightly penalises zero participation.
@@ -504,6 +554,7 @@ server.get('/api/top-rankings', async (req, res) => {
         topByKDA,
         topByGPM,
         topByWards,
+        topByDewards,
         topByMidas,
         minMatchesRequired: minMatches,
         lastUpdated: playerStatsCache.lastFetched,
