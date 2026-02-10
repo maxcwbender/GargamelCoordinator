@@ -41,7 +41,7 @@ function loadPlayerStatsFromDB() {
     try {
         const query = `
             SELECT ps.account_id, ps.personaname, ps.wins, ps.losses, ps.kills,
-                   ps.deaths, ps.assists, ps.gold_per_minute, ps.matches, ps.last_updated,
+                   ps.deaths, ps.assists, ps.gold_per_minute, ps.total_gold, ps.matches, ps.last_updated,
                    pa.avatar_url
             FROM player_stats ps
             LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
@@ -67,6 +67,8 @@ function loadPlayerStatsFromDB() {
             kda: row.deaths > 0 ? ((row.kills + row.assists) / row.deaths) : (row.kills + row.assists),
             gold_per_minute: row.gold_per_minute,
             avgGPM: row.matches > 0 ? (row.gold_per_minute / row.matches) : 0,
+            total_gold: row.total_gold,
+            avgNetWorth: row.matches > 0 ? (row.total_gold / row.matches) : 0,
         }));
 
         const oldestUpdate = rows.length > 0 ? Math.min(...rows.map(r => r.last_updated)) : 0;
@@ -87,8 +89,8 @@ function savePlayerStatsToDB(playerMap) {
         const now = Date.now();
         const insertStats = db.prepare(`
             INSERT OR REPLACE INTO player_stats
-            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, matches, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, matches, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         for (const [accountId, stats] of playerMap.entries()) {
@@ -101,6 +103,7 @@ function savePlayerStatsToDB(playerMap) {
                 stats.deaths,
                 stats.assists,
                 stats.gold_per_minute,
+                stats.total_gold,
                 stats.matches,
                 now
             );
@@ -258,6 +261,7 @@ async function refreshPlayerStats() {
                             deaths: 0,
                             assists: 0,
                             gold_per_minute: 0,
+                            total_gold: 0,
                             matches: 0,
                         });
                     }
@@ -274,6 +278,9 @@ async function refreshPlayerStats() {
                     stats.deaths += player.deaths || 0;
                     stats.assists += player.assists || 0;
                     stats.gold_per_minute += player.gold_per_min || 0;
+                    // Total gold is gold remaining + gold spent
+                    const totalGold = (player.gold || 0) + (player.gold_spent || 0);
+                    stats.total_gold += totalGold;
                 }
 
                 if ((i + 1) % 10 === 0) {
@@ -317,6 +324,8 @@ async function refreshPlayerStats() {
             kda: stats.deaths > 0 ? ((stats.kills + stats.assists) / stats.deaths) : (stats.kills + stats.assists),
             gold_per_minute: stats.gold_per_minute,
             avgGPM: stats.matches > 0 ? (stats.gold_per_minute / stats.matches) : 0,
+            total_gold: stats.total_gold,
+            avgNetWorth: stats.matches > 0 ? (stats.total_gold / stats.matches) : 0,
         }));
 
         // Filter out players with very few matches

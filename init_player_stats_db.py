@@ -19,6 +19,7 @@ def init_database():
             deaths INTEGER DEFAULT 0,
             assists INTEGER DEFAULT 0,
             gold_per_minute INTEGER DEFAULT 0,
+            total_gold INTEGER DEFAULT 0,
             matches INTEGER DEFAULT 0,
             last_updated INTEGER NOT NULL,
             UNIQUE(account_id)

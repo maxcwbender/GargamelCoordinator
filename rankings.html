@@ -507,7 +507,7 @@
       html += '</div>';
       html += '<table class="ranking-table">';
       html += '<thead><tr>';
-      html += '<th>#</th><th>Player</th><th>Total Gold</th><th>Avg GPM</th>';
+      html += '<th>#</th><th>Player</th><th>Avg Net Worth</th><th>Avg GPM</th>';
       html += '</tr></thead><tbody>';
 
       for (let i = 0; i < data.topByGPM.length; i++) {
@@ -525,7 +525,7 @@
         html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
         html += '</div></td>';
         html += '<td class="stat-secondary">' +
-                player.gold_per_minute.toLocaleString() +
+                Math.round(player.avgNetWorth).toLocaleString() +
                 ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
         html += '<td class="stat-value">' + Math.round(player.avgGPM) + '</td>';
         html += '</tr>';
