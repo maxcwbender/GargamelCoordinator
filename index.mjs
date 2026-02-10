@@ -41,7 +41,7 @@ function loadPlayerStatsFromDB() {
     try {
         const query = `
             SELECT ps.account_id, ps.personaname, ps.wins, ps.losses, ps.kills,
-                   ps.deaths, ps.assists, ps.matches, ps.last_updated,
+                   ps.deaths, ps.assists, ps.gold_per_minute, ps.matches, ps.last_updated,
                    pa.avatar_url
             FROM player_stats ps
             LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
@@ -65,6 +65,8 @@ function loadPlayerStatsFromDB() {
             avgDeaths: row.matches > 0 ? (row.deaths / row.matches) : 0,
             avgAssists: row.matches > 0 ? (row.assists / row.matches) : 0,
             kda: row.deaths > 0 ? ((row.kills + row.assists) / row.deaths) : (row.kills + row.assists),
+            gold_per_minute: row.gold_per_minute,
+            avgGPM: row.matches > 0 ? (row.gold_per_minute / row.matches) : 0,
         }));
 
         const oldestUpdate = rows.length > 0 ? Math.min(...rows.map(r => r.last_updated)) : 0;
@@ -85,8 +87,8 @@ function savePlayerStatsToDB(playerMap) {
         const now = Date.now();
         const insertStats = db.prepare(`
             INSERT OR REPLACE INTO player_stats
-            (account_id, personaname, wins, losses, kills, deaths, assists, matches, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, matches, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         for (const [accountId, stats] of playerMap.entries()) {
@@ -98,6 +100,7 @@ function savePlayerStatsToDB(playerMap) {
                 stats.kills,
                 stats.deaths,
                 stats.assists,
+                stats.gold_per_minute,
                 stats.matches,
                 now
             );
@@ -254,6 +257,7 @@ async function refreshPlayerStats() {
                             kills: 0,
                             deaths: 0,
                             assists: 0,
+                            gold_per_minute: 0,
                             matches: 0,
                         });
                     }
@@ -269,6 +273,7 @@ async function refreshPlayerStats() {
                     stats.kills += player.kills || 0;
                     stats.deaths += player.deaths || 0;
                     stats.assists += player.assists || 0;
+                    stats.gold_per_minute += player.gold_per_min || 0;
                 }
 
                 if ((i + 1) % 10 === 0) {
@@ -310,6 +315,8 @@ async function refreshPlayerStats() {
             avgDeaths: stats.matches > 0 ? (stats.deaths / stats.matches) : 0,
             avgAssists: stats.matches > 0 ? (stats.assists / stats.matches) : 0,
             kda: stats.deaths > 0 ? ((stats.kills + stats.assists) / stats.deaths) : (stats.kills + stats.assists),
+            gold_per_minute: stats.gold_per_minute,
+            avgGPM: stats.matches > 0 ? (stats.gold_per_minute / stats.matches) : 0,
         }));
 
         // Filter out players with very few matches
@@ -433,35 +440,25 @@ server.get('/api/top-rankings', async (req, res) => {
 
     const players = playerStatsCache.data || [];
 
-    // Weighted scoring function: metric * (1 + log(games) / 10)
-    // This gives more weight to players with more games played
-    const calculateWeightedScore = (metric, games) => {
-        if (games < 3) return 0;
-        const gameWeight = 1 + (Math.log(games) / 10);
-        return metric * gameWeight;
-    };
-
-    // Top 10 by win rate (weighted by number of games)
+    // Top 10 by win rate (simple sort, highest to lowest)
     const topByWinRate = [...players]
-        .map(p => ({
-            ...p,
-            weightedScore: calculateWeightedScore(p.winRate, p.matches)
-        }))
-        .sort((a, b) => b.weightedScore - a.weightedScore)
+        .sort((a, b) => b.winRate - a.winRate)
         .slice(0, 10);
 
-    // Top 10 by K/D/A (weighted by number of games)
+    // Top 10 by K/D/A (simple sort, highest to lowest)
     const topByKDA = [...players]
-        .map(p => ({
-            ...p,
-            weightedScore: calculateWeightedScore(p.kda, p.matches)
-        }))
-        .sort((a, b) => b.weightedScore - a.weightedScore)
+        .sort((a, b) => b.kda - a.kda)
+        .slice(0, 10);
+
+    // Top 10 by GPM (simple sort, highest to lowest)
+    const topByGPM = [...players]
+        .sort((a, b) => b.avgGPM - a.avgGPM)
         .slice(0, 10);
 
     return res.json({
         topByWinRate,
         topByKDA,
+        topByGPM,
         lastUpdated: playerStatsCache.lastFetched,
         matchesAnalyzed: playerStatsCache.matchesAnalyzed || 0,
         cacheMaxAge: PLAYER_STATS_TTL_MS,

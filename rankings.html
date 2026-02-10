@@ -187,7 +187,7 @@
     /* ── Rankings grid ─────────────────────────────────────── */
     .rankings-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
       gap: 24px;
     }
 
@@ -200,7 +200,7 @@
     }
 
     .ranking-header {
-      background: linear-gradient(135deg, #4e9fd1 0%, #3b84b3 100%);
+      background: #1a1a2e;
       color: white;
       padding: 20px;
       text-align: center;
@@ -414,7 +414,8 @@
       }
 
       if ((!data.topByWinRate || data.topByWinRate.length === 0) &&
-          (!data.topByKDA || data.topByKDA.length === 0)) {
+          (!data.topByKDA || data.topByKDA.length === 0) &&
+          (!data.topByGPM || data.topByGPM.length === 0)) {
         container.innerHTML =
           '<div class="empty-state">' +
             '<h2>No rankings yet</h2>' +
@@ -493,6 +494,40 @@
                 player.avgAssists.toFixed(1) +
                 ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
         html += '<td class="stat-value">' + formatKDA(player.kda) + '</td>';
+        html += '</tr>';
+      }
+
+      html += '</tbody></table></div>';
+
+      // GPM Rankings
+      html += '<div class="ranking-card">';
+      html += '<div class="ranking-header">';
+      html += '<h2>Top 10 by GPM</h2>';
+      html += '<p>Best gold per minute averages</p>';
+      html += '</div>';
+      html += '<table class="ranking-table">';
+      html += '<thead><tr>';
+      html += '<th>#</th><th>Player</th><th>Total Gold</th><th>Avg GPM</th>';
+      html += '</tr></thead><tbody>';
+
+      for (let i = 0; i < data.topByGPM.length; i++) {
+        const player = data.topByGPM[i];
+        const rankClass = i < 3 ? 'rank-number top-3' : 'rank-number';
+
+        html += '<tr>';
+        html += '<td class="' + rankClass + '">' + (i + 1) + '</td>';
+        html += '<td><div class="player-cell">';
+        if (player.avatar) {
+          html += '<img src="' + escapeHtml(player.avatar) + '" alt="" class="player-avatar">';
+        } else {
+          html += '<div class="player-avatar"></div>';
+        }
+        html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+        html += '</div></td>';
+        html += '<td class="stat-secondary">' +
+                player.gold_per_minute.toLocaleString() +
+                ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
+        html += '<td class="stat-value">' + Math.round(player.avgGPM) + '</td>';
         html += '</tr>';
       }
 
