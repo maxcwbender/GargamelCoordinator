@@ -27,6 +27,9 @@ let matchCache = { data: null, lastFetched: 0 };
 let playerStatsCache = { data: null, lastFetched: 0 };
 let isRefreshingStats = false; // Prevent concurrent refreshes
 
+// Initialize database connection early (before any functions that use it)
+let db = new sqlite3.Database('allUsers.db');
+
 async function fetchOpenDota(path) {
     const res = await fetch(`${OPENDOTA_BASE}${path}`);
     if (!res.ok) throw new Error(`OpenDota API ${res.status}: ${path}`);
@@ -367,8 +370,6 @@ server.use((req, res, next) => {
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
 });
-
-let db = new sqlite3.Database('allUsers.db');
 
 server.get('/', (request, response) => {
     logger.info('GET: ' + request.url);
