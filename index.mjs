@@ -31,23 +31,32 @@ let isRefreshingStats = false; // Prevent concurrent refreshes
 let db = new Database('allUsers.db');
 
 // Migrate schema: add columns and tables introduced after initial release
-const migrations = [
+const columnMigrations = [
     'ALTER TABLE player_stats ADD COLUMN observer_kills INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_time_total INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_count INTEGER DEFAULT 0',
-    // Recreate match_mvps with composite key (match_id, award_type) for MVP + SVP
-    `DROP TABLE IF EXISTS match_mvps`,
-    `CREATE TABLE IF NOT EXISTS match_mvps (
+];
+for (const sql of columnMigrations) {
+    try { db.exec(sql); } catch (_) { /* column already exists */ }
+}
+
+// Ensure match_mvps table exists with composite key (match_id, award_type)
+{
+    const cols = db.pragma('table_info(match_mvps)');
+    const hasAwardType = cols.some(c => c.name === 'award_type');
+    if (cols.length > 0 && !hasAwardType) {
+        // Old schema (single PK) — drop and recreate with composite key
+        logger.info('Migrating match_mvps table to composite key schema');
+        db.exec('DROP TABLE match_mvps');
+    }
+    db.exec(`CREATE TABLE IF NOT EXISTS match_mvps (
         match_id INTEGER NOT NULL,
         account_id INTEGER NOT NULL,
         award_type TEXT NOT NULL DEFAULT 'mvp',
         mvp_score REAL DEFAULT 0,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (match_id, award_type)
-    )`,
-];
-for (const sql of migrations) {
-    try { db.exec(sql); } catch (_) { /* column/table already exists */ }
+    )`);
 }
 
 async function fetchOpenDota(path) {
