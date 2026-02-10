@@ -458,24 +458,45 @@ server.get('/api/top-rankings', async (req, res) => {
 
     const players = playerStatsCache.data || [];
 
-    // Top 10 by win rate (simple sort, highest to lowest)
-    const topByWinRate = [...players]
+    // Dynamic minimum match threshold to filter statistical outliers.
+    // Uses 25% of the median match count (minimum 10) so the bar rises
+    // as the league plays more games.
+    const matchCounts = players.map(p => p.matches).sort((a, b) => a - b);
+    const median = matchCounts.length > 0
+        ? matchCounts[Math.floor(matchCounts.length / 2)]
+        : 0;
+    const minMatches = Math.max(10, Math.floor(median * 0.25));
+    const qualified = players.filter(p => p.matches >= minMatches);
+
+    // Top 10 by win rate
+    const topByWinRate = [...qualified]
         .sort((a, b) => b.winRate - a.winRate)
         .slice(0, 10);
 
-    // Top 10 by K/D/A (simple sort, highest to lowest)
-    const topByKDA = [...players]
+    // Top 10 by K/D/A
+    const topByKDA = [...qualified]
         .sort((a, b) => b.kda - a.kda)
         .slice(0, 10);
 
-    // Top 10 by GPM (simple sort, highest to lowest)
-    const topByGPM = [...players]
+    // Top 10 by GPM
+    const topByGPM = [...qualified]
         .sort((a, b) => b.avgGPM - a.avgGPM)
         .slice(0, 10);
 
-    // Top 10 by wards placed (simple sort, highest to lowest)
-    const topByWards = [...players]
+    // Top 10 by wards placed
+    const topByWards = [...qualified]
         .sort((a, b) => b.avgWards - a.avgWards)
+        .slice(0, 10);
+
+    // "Hand of Midas, Heart of Absence" — highest net worth per fight participation.
+    // Score = avgNetWorth / (avgKills + avgAssists + 1)
+    // The +1 prevents division by zero and slightly penalises zero participation.
+    const topByMidas = [...qualified]
+        .map(p => ({
+            ...p,
+            midasScore: p.avgNetWorth / (p.avgKills + p.avgAssists + 1),
+        }))
+        .sort((a, b) => b.midasScore - a.midasScore)
         .slice(0, 10);
 
     return res.json({
@@ -483,6 +504,8 @@ server.get('/api/top-rankings', async (req, res) => {
         topByKDA,
         topByGPM,
         topByWards,
+        topByMidas,
+        minMatchesRequired: minMatches,
         lastUpdated: playerStatsCache.lastFetched,
         matchesAnalyzed: playerStatsCache.matchesAnalyzed || 0,
         cacheMaxAge: PLAYER_STATS_TTL_MS,

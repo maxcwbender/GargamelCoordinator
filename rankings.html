@@ -309,6 +309,14 @@
       transition: width 0.3s ease;
     }
 
+    .midas-card {
+      border-color: #b8860b;
+    }
+
+    .midas-card .rank-number.top-3 {
+      color: #b8860b;
+    }
+
     /* ── Responsive ────────────────────────────────────────── */
     @media (max-width: 900px) {
       .rankings-grid {
@@ -410,13 +418,15 @@
         cacheInfo.textContent =
           'Data refreshed ' + timeAgo(data.lastUpdated) +
           ' \u00B7 based on ' + (data.matchesAnalyzed || 0) + ' matches' +
-          ' \u00B7 updates every ' + hoursAgo + ' hours';
+          ' \u00B7 updates every ' + hoursAgo + ' hours' +
+          (data.minMatchesRequired ? ' \u00B7 min ' + data.minMatchesRequired + ' games to qualify' : '');
       }
 
       if ((!data.topByWinRate || data.topByWinRate.length === 0) &&
           (!data.topByKDA || data.topByKDA.length === 0) &&
           (!data.topByGPM || data.topByGPM.length === 0) &&
-          (!data.topByWards || data.topByWards.length === 0)) {
+          (!data.topByWards || data.topByWards.length === 0) &&
+          (!data.topByMidas || data.topByMidas.length === 0)) {
         container.innerHTML =
           '<div class="empty-state">' +
             '<h2>No rankings yet</h2>' +
@@ -567,6 +577,45 @@
       }
 
       html += '</tbody></table></div>';
+
+      // Hand of Midas, Heart of Absence
+      if (data.topByMidas && data.topByMidas.length > 0) {
+        html += '<div class="ranking-card midas-card">';
+        html += '<div class="ranking-header" style="background: linear-gradient(135deg, #b8860b 0%, #1a1a2e 60%)">';
+        html += '<h2>Hand of Midas, Heart of Absence</h2>';
+        html += '<p>Most Net Worth with Least Fight Participation</p>';
+        html += '</div>';
+        html += '<table class="ranking-table">';
+        html += '<thead><tr>';
+        html += '<th>#</th><th>Player</th><th>Avg Net Worth</th><th>Avg K+A</th><th>Midas Score</th>';
+        html += '</tr></thead><tbody>';
+
+        for (var i = 0; i < data.topByMidas.length; i++) {
+          var player = data.topByMidas[i];
+          var rankClass = i < 3 ? 'rank-number top-3' : 'rank-number';
+          var avgFights = (player.avgKills + player.avgAssists).toFixed(1);
+
+          html += '<tr>';
+          html += '<td class="' + rankClass + '">' + (i + 1) + '</td>';
+          html += '<td><div class="player-cell">';
+          if (player.avatar) {
+            html += '<img src="' + escapeHtml(player.avatar) + '" alt="" class="player-avatar">';
+          } else {
+            html += '<div class="player-avatar"></div>';
+          }
+          html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+          html += '</div></td>';
+          html += '<td class="stat-secondary">' +
+                  Math.round(player.avgNetWorth).toLocaleString() + ' gold' +
+                  ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
+          html += '<td class="stat-secondary">' + avgFights + '/game</td>';
+          html += '<td class="stat-value" style="color:#b8860b">' + Math.round(player.midasScore).toLocaleString() + '</td>';
+          html += '</tr>';
+        }
+
+        html += '</tbody></table></div>';
+      }
+
       html += '</div>'; // rankings-grid
 
       container.innerHTML = html;
