@@ -1,5 +1,5 @@
 import fetch from 'node-fetch';
-import sqlite3 from 'sqlite3';
+import Database from 'better-sqlite3';
 import express from 'express';
 import net from 'net';
 import { readFileSync } from 'fs';
@@ -28,7 +28,7 @@ let playerStatsCache = { data: null, lastFetched: 0 };
 let isRefreshingStats = false; // Prevent concurrent refreshes
 
 // Initialize database connection early (before any functions that use it)
-let db = new sqlite3.Database('allUsers.db');
+let db = new Database('allUsers.db');
 
 async function fetchOpenDota(path) {
     const res = await fetch(`${OPENDOTA_BASE}${path}`);
@@ -46,6 +46,8 @@ function loadPlayerStatsFromDB() {
             FROM player_stats ps
             LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
         `;
+
+        // better-sqlite3 has synchronous methods
         const rows = db.prepare(query).all();
 
         const players = rows.map(row => ({
@@ -169,11 +171,11 @@ async function refreshMatchCache() {
                 if (detailed.length > 0) await new Promise(r => setTimeout(r, 1100));
                 const detail = await fetchOpenDota(`/matches/${matchId}`);
                 // Load avatars from database for match players
+                const getAvatar = db.prepare('SELECT avatar_url FROM player_avatars WHERE account_id = ?');
                 const matchPlayers = (detail.players || []).map(p => {
                     let avatar = null;
                     if (p.account_id) {
-                        const avatarRow = db.prepare('SELECT avatar_url FROM player_avatars WHERE account_id = ?')
-                            .get(p.account_id);
+                        const avatarRow = getAvatar.get(p.account_id);
                         avatar = avatarRow ? avatarRow.avatar_url : null;
                     }
 
@@ -514,20 +516,18 @@ server.put('/', async (req, res) => {
         logger.info(`Converting rank '${rank}' to rating ${rating} for user ${discordID}`);
 
         // Insert user into database with rating
-        const stmt = db.prepare(`
-            INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched, rating) 
-            VALUES (?, ?, datetime('now'), ?, 0, ?)
-            ON CONFLICT(discord_id) DO UPDATE SET 
-                steam_id = excluded.steam_id,
-                rating = excluded.rating
-        `);
-        await new Promise((resolve, reject) => {
-            stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, rating, err => {
-                if (err) logger.error('DB upsert error:', err.message);
-                else resolve();
-            });
-        });
-        stmt.finalize();
+        try {
+            const stmt = db.prepare(`
+                INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched, rating)
+                VALUES (?, ?, datetime('now'), ?, 0, ?)
+                ON CONFLICT(discord_id) DO UPDATE SET
+                    steam_id = excluded.steam_id,
+                    rating = excluded.rating
+            `);
+            stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, rating);
+        } catch (err) {
+            logger.error('DB upsert error:', err.message);
+        }
 
         //Notify local pipe
         try {
