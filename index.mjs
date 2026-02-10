@@ -354,6 +354,23 @@ if (Date.now() - dbStats.lastFetched > PLAYER_STATS_TTL_MS || dbStats.players.le
     refreshPlayerStats(); // Don't await - run in background
 } else {
     logger.info('Player stats cache is fresh, skipping initial refresh');
+
+    // Check if we need to fetch missing avatars
+    const playersWithoutAvatars = dbStats.players.filter(p => !p.avatar);
+    if (playersWithoutAvatars.length > 0) {
+        logger.info(`Found ${playersWithoutAvatars.length} players without avatars, fetching in background`);
+        const accountIds = playersWithoutAvatars.map(p => p.accountId);
+        fetchAndSaveAvatars(accountIds).then(() => {
+            // Reload player stats after avatar fetch to update cache
+            const updatedStats = loadPlayerStatsFromDB();
+            if (updatedStats.players.length > 0) {
+                playerStatsCache.data = updatedStats.players;
+                logger.info('Player stats cache updated with new avatars');
+            }
+        }).catch(err => {
+            logger.error(`Failed to fetch missing avatars: ${err.message}`);
+        });
+    }
 }
 
 // Set up periodic player stats refresh every 12 hours
