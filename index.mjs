@@ -208,16 +208,45 @@ async function refreshMatchCache() {
                         avatar = avatarRow ? avatarRow.avatar_url : null;
                     }
 
+                    const isRadiant = p.player_slot < 128;
+                    // DPC-style fantasy score for MVP calculation
+                    const mvpScore =
+                        (p.kills || 0) * 0.5 +
+                        (3 - (p.deaths || 0) * 0.3) +
+                        (p.assists || 0) * 0.25 +
+                        (p.last_hits || 0) * 0.004 +
+                        (p.gold_per_min || 0) * 0.004 +
+                        (p.hero_damage || 0) * 0.0002 +
+                        (p.tower_damage || 0) * 0.0004 +
+                        (p.hero_healing || 0) * 0.0002 +
+                        (p.obs_placed || 0) * 0.5 +
+                        (p.observer_kills || 0) * 0.5;
+
                     return {
                         personaname: p.personaname || 'Anonymous',
                         player_slot: p.player_slot,
-                        isRadiant: p.player_slot < 128,
+                        isRadiant,
                         kills: p.kills,
                         deaths: p.deaths,
                         assists: p.assists,
                         avatar: avatar,
+                        mvpScore,
                     };
                 });
+
+                // MVP = highest mvpScore on the winning team
+                const winningTeamRadiant = detail.radiant_win;
+                let mvpSlot = null;
+                let bestScore = -Infinity;
+                for (const p of matchPlayers) {
+                    if (p.isRadiant === winningTeamRadiant && p.mvpScore > bestScore) {
+                        bestScore = p.mvpScore;
+                        mvpSlot = p.player_slot;
+                    }
+                }
+                for (const p of matchPlayers) {
+                    p.isMVP = p.player_slot === mvpSlot;
+                }
 
                 detailed.push({
                     match_id: detail.match_id,

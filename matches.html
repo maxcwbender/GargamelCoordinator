@@ -384,6 +384,24 @@
       text-overflow: ellipsis;
     }
 
+    .player-mvp {
+      background: linear-gradient(90deg, rgba(255, 215, 0, 0.18) 0%, rgba(255, 215, 0, 0.06) 100%);
+      border-radius: 4px;
+      padding: 2px 6px;
+      margin: -2px -6px;
+    }
+
+    .player-mvp .player-name-text {
+      font-weight: 700;
+      color: #b8860b;
+    }
+
+    .mvp-star {
+      flex-shrink: 0;
+      font-size: 0.75rem;
+      color: #daa520;
+    }
+
     /* ── Score divider ─────────────────────────────────────── */
     .score-divider {
       display: flex;
@@ -617,7 +635,8 @@
           '<span class="team-indicator indicator-radiant"></span>Radiant</div>';
         html += '<ul class="player-list">';
         for (const p of radiantPlayers) {
-          html += '<li>';
+          html += '<li' + (p.isMVP ? ' class="player-mvp"' : '') + '>';
+          if (p.isMVP) html += '<span class="mvp-star" title="Match MVP">&#9733;</span>';
           if (p.avatar) {
             html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
           } else {
@@ -644,7 +663,8 @@
           '<span class="team-indicator indicator-dire"></span>Dire</div>';
         html += '<ul class="player-list">';
         for (const p of direPlayers) {
-          html += '<li>';
+          html += '<li' + (p.isMVP ? ' class="player-mvp"' : '') + '>';
+          if (p.isMVP) html += '<span class="mvp-star" title="Match MVP">&#9733;</span>';
           if (p.avatar) {
             html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
           } else {
