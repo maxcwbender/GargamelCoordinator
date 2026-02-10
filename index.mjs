@@ -53,6 +53,12 @@ for (const sql of migrations) {
 async function fetchOpenDota(path) {
     const res = await fetch(`${OPENDOTA_BASE}${path}`);
     if (!res.ok) throw new Error(`OpenDota API ${res.status}: ${path}`);
+    // Log rate-limit headers when present
+    const remaining = res.headers.get('x-rate-limit-remaining')
+        || res.headers.get('x-ratelimit-remaining');
+    if (remaining != null) {
+        logger.info(`OpenDota rate limit remaining: ${remaining}`);
+    }
     return res.json();
 }
 
@@ -314,8 +320,8 @@ async function refreshPlayerStats() {
         for (let i = 0; i < matchesToFetch.length; i++) {
             const matchId = matchesToFetch[i];
             try {
-                // Delay to respect rate limits - 2 seconds between calls
-                if (i > 0) await new Promise(r => setTimeout(r, 2000));
+                // Delay to respect OpenDota's 60/min rate limit (~55 calls/min)
+                if (i > 0) await new Promise(r => setTimeout(r, 1100));
 
                 const detail = await fetchOpenDota(`/matches/${matchId}`);
 
