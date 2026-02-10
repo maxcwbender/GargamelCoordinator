@@ -74,8 +74,13 @@ async function refreshMatchCache() {
     }
 }
 
-// Initial fetch on startup
-refreshMatchCache();
+// Initial fetch on startup (await to ensure cache is ready before serving)
+await refreshMatchCache();
+
+// Set up periodic background refresh every 10 minutes
+setInterval(() => {
+    refreshMatchCache();
+}, CACHE_TTL_MS);
 
 // Serve static files from node_modules
 server.use('/node_modules', express.static('node_modules'));
