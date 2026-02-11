@@ -506,6 +506,75 @@
         margin: 0;
       }
     }
+
+    /* ── Live Game Toast ────────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      top: 80px;
+      right: 20px;
+      background: #1a1a2e;
+      border: 2px solid #ef4444;
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      z-index: 1000;
+      min-width: 280px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .toast.hidden {
+      display: none;
+    }
+
+    .toast:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 25px rgba(0, 0, 0, 0.4);
+    }
+
+    .toast-content {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toast-icon {
+      font-size: 24px;
+      animation: toast-pulse 1.5s ease-in-out infinite;
+    }
+
+    .toast-message strong {
+      display: block;
+      color: white;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .toast-message p {
+      color: #aaa;
+      font-size: 12px;
+      margin: 0;
+    }
+
+    .toast-close {
+      background: none;
+      border: none;
+      color: #aaa;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0;
+      margin-left: auto;
+      line-height: 1;
+    }
+
+    .toast-close:hover {
+      color: white;
+    }
+
+    @keyframes toast-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
   </style>
 </head>
 
@@ -520,6 +589,7 @@
       <li><a href="/matches" class="active">Matches</a></li>
       <li><a href="/rankings">Rankings</a></li>
       <li><a href="/about">About</a></li>
+      <li><a href="/livegame">Live Game</a></li>
     </ul>
   </nav>
 
@@ -736,7 +806,81 @@
     }
 
     loadMatches();
+
+    // ── Live Game Toast ──────────────────────────────────────────────────────
+    const TOAST_POLL_INTERVAL = 15000; // Check every 15 seconds
+    const TOAST_DISMISSED_KEY = 'liveGameToastDismissed';
+    const TOAST_DISMISS_DURATION = 5 * 60 * 1000; // 5 minutes
+
+    async function checkLiveGameStatus() {
+      // Don't check if we're already on the live game page
+      if (window.location.pathname === '/livegame') {
+        return;
+      }
+
+      // Check if toast was recently dismissed
+      const dismissed = localStorage.getItem(TOAST_DISMISSED_KEY);
+      if (dismissed && (Date.now() - parseInt(dismissed)) < TOAST_DISMISS_DURATION) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/live-game/status');
+        const data = await response.json();
+
+        if (data.active) {
+          showToast();
+        } else {
+          hideToast();
+          // Clear dismissed flag if no game is active
+          localStorage.removeItem(TOAST_DISMISSED_KEY);
+        }
+      } catch (error) {
+        console.error('Failed to check live game status:', error);
+      }
+    }
+
+    function showToast() {
+      const toast = document.getElementById('live-game-toast');
+      if (toast) {
+        toast.classList.remove('hidden');
+        toast.onclick = () => {
+          window.location.href = '/livegame';
+        };
+      }
+    }
+
+    function hideToast() {
+      const toast = document.getElementById('live-game-toast');
+      if (toast) {
+        toast.classList.add('hidden');
+      }
+    }
+
+    function dismissToast(event) {
+      event.stopPropagation();
+      localStorage.setItem(TOAST_DISMISSED_KEY, Date.now().toString());
+      hideToast();
+    }
+
+    // Initial check
+    checkLiveGameStatus();
+
+    // Poll for live game status
+    setInterval(checkLiveGameStatus, TOAST_POLL_INTERVAL);
   </script>
+
+  <!-- Live Game Toast -->
+  <div id="live-game-toast" class="toast hidden">
+    <div class="toast-content">
+      <div class="toast-icon">🔴</div>
+      <div class="toast-message">
+        <strong>Live Game in Progress!</strong>
+        <p>Click to watch</p>
+      </div>
+      <button class="toast-close" onclick="dismissToast(event)">&times;</button>
+    </div>
+  </div>
 </body>
 
 </html>

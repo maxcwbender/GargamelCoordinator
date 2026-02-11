@@ -23,9 +23,19 @@ const LEAGUE_ID = 18388;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes - keeps us well under 3000 calls/day
 const PLAYER_STATS_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours for player stats
 
+// ─── Steam API for live games ────────────────────────────────────────────────
+const STEAM_API_KEY = config.STEAM_API_KEY || '';
+const STEAM_API_BASE = 'https://api.steampowered.com';
+const LIVE_GAME_CACHE_TTL = 3000; // 3 seconds cache for live games
+
 let matchCache = { data: null, lastFetched: 0 };
 let playerStatsCache = { data: null, lastFetched: 0 };
 let isRefreshingStats = false; // Prevent concurrent refreshes
+let liveGameCache = {
+    data: null,
+    lastFetched: 0,
+    isActive: false
+};
 
 // Initialize database connection early (before any functions that use it)
 let db = new Database('allUsers.db');
@@ -612,6 +622,30 @@ setInterval(() => {
     refreshPlayerStats();
 }, PLAYER_STATS_TTL_MS);
 
+// ─── Steam API: Fetch Live Game ──────────────────────────────────────────────
+async function fetchLiveGame() {
+    try {
+        const url = `${STEAM_API_BASE}/IDOTA2Match_570/GetLiveLeagueGames/v0001/?key=${STEAM_API_KEY}&league_id=${LEAGUE_ID}`;
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            logger.error(`Steam API error: ${response.status}`);
+            return null;
+        }
+
+        const data = await response.json();
+        const games = data?.result?.games || [];
+
+        // Filter to our league only
+        const ourGame = games.find(g => g.league_id === LEAGUE_ID);
+
+        return ourGame || null;
+    } catch (error) {
+        logger.error('Failed to fetch live game:', error);
+        return null;
+    }
+}
+
 // Serve static files from node_modules
 server.use('/node_modules', express.static('node_modules'));
 
@@ -640,6 +674,96 @@ server.get('/matches', (req, res) => {
 
 server.get('/rankings', (req, res) => {
     return res.sendFile('rankings.html', { root: '.' });
+});
+
+server.get('/livegame', (req, res) => {
+    return res.sendFile('livegame.html', { root: '.' });
+});
+
+server.get('/api/live-game', async (req, res) => {
+    const now = Date.now();
+
+    // Return cached data if still fresh
+    if (liveGameCache.data && (now - liveGameCache.lastFetched) < LIVE_GAME_CACHE_TTL) {
+        return res.json(liveGameCache.data);
+    }
+
+    const game = await fetchLiveGame();
+
+    liveGameCache.data = game;
+    liveGameCache.lastFetched = now;
+    liveGameCache.isActive = !!game;
+
+    if (!game) {
+        return res.json({ active: false });
+    }
+
+    // Transform data for frontend
+    const radiantPlayers = game.scoreboard.radiant.players.map(p => {
+        const playerInfo = game.players.find(pl => pl.account_id === p.account_id);
+        return {
+            accountId: p.account_id,
+            name: playerInfo?.name || 'Unknown',
+            heroId: playerInfo?.hero_id,
+            team: 'radiant',
+            kills: p.kills || 0,
+            deaths: p.death || 0,
+            assists: p.assists || 0,
+            netWorth: p.net_worth || 0,
+            level: p.level || 1,
+            posX: p.position_x,
+            posY: p.position_y,
+            respawnTimer: p.respawn_timer || 0
+        };
+    });
+
+    const direPlayers = game.scoreboard.dire.players.map(p => {
+        const playerInfo = game.players.find(pl => pl.account_id === p.account_id);
+        return {
+            accountId: p.account_id,
+            name: playerInfo?.name || 'Unknown',
+            heroId: playerInfo?.hero_id,
+            team: 'dire',
+            kills: p.kills || 0,
+            deaths: p.death || 0,
+            assists: p.assists || 0,
+            netWorth: p.net_worth || 0,
+            level: p.level || 1,
+            posX: p.position_x,
+            posY: p.position_y,
+            respawnTimer: p.respawn_timer || 0
+        };
+    });
+
+    return res.json({
+        active: true,
+        matchId: game.match_id,
+        duration: game.scoreboard.duration,
+        spectators: game.spectators || 0,
+        radiant: {
+            score: game.scoreboard.radiant.score,
+            players: radiantPlayers
+        },
+        dire: {
+            score: game.scoreboard.dire.score,
+            players: direPlayers
+        }
+    });
+});
+
+server.get('/api/live-game/status', async (req, res) => {
+    const now = Date.now();
+
+    // Use cached status if recent
+    if ((now - liveGameCache.lastFetched) < LIVE_GAME_CACHE_TTL) {
+        return res.json({ active: liveGameCache.isActive });
+    }
+
+    const game = await fetchLiveGame();
+    liveGameCache.isActive = !!game;
+    liveGameCache.lastFetched = now;
+
+    return res.json({ active: !!game });
 });
 
 server.get('/api/recent-matches', async (req, res) => {

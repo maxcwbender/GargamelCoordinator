@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Game - Gargamel League</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #f9f9f9;
+            color: #333;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Navbar */
+        .navbar {
+            background: #1a1a2e;
+            padding: 0 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 60px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .navbar-brand {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #fff;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .navbar-brand img {
+            height: 36px;
+            width: auto;
+        }
+
+        .navbar-links {
+            display: flex;
+            gap: 8px;
+            list-style: none;
+        }
+
+        .navbar-links a {
+            color: #b0b8c8;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: color 0.2s ease, background 0.2s ease;
+        }
+
+        .navbar-links a:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .navbar-links a.active {
+            color: #4e9fd1;
+            background: rgba(78, 159, 209, 0.1);
+        }
+
+        /* Page content */
+        .page-content {
+            flex: 1;
+            max-width: 1400px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Live indicator */
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #ef4444;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: white;
+            border-radius: 50%;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* Match info header */
+        .match-header {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .match-time {
+            font-size: 32px;
+            font-weight: 700;
+            color: #4ade80;
+        }
+
+        .match-score {
+            font-size: 48px;
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+
+        .spectator-count {
+            color: #666;
+            font-size: 14px;
+        }
+
+        /* Minimap container */
+        .minimap-container {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .minimap-container h3 {
+            margin-bottom: 16px;
+            text-align: center;
+            color: #1a1a2e;
+            font-size: 20px;
+        }
+
+        .minimap {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            margin: 0 auto;
+            aspect-ratio: 1;
+            background: #0a0a0f;
+            border: 2px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .minimap-grid {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+            background-size: 10% 10%;
+        }
+
+        .player-dot {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid rgba(255,255,255,0.8);
+            transform: translate(-50%, -50%);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .player-dot.radiant {
+            background: #4ade80;
+            box-shadow: 0 0 10px #4ade80;
+        }
+
+        .player-dot.dire {
+            background: #ef4444;
+            box-shadow: 0 0 10px #ef4444;
+        }
+
+        .player-dot.dead {
+            opacity: 0.3;
+            filter: grayscale(100%);
+        }
+
+        /* Player tables */
+        .teams-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-top: 24px;
+        }
+
+        .team-card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .team-card.radiant {
+            border-left: 4px solid #4ade80;
+        }
+
+        .team-card.dire {
+            border-left: 4px solid #ef4444;
+        }
+
+        .team-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .team-name {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+
+        .team-score {
+            font-size: 32px;
+            font-weight: 700;
+        }
+
+        .players-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .players-table th {
+            text-align: left;
+            padding: 12px 8px;
+            border-bottom: 2px solid #e0e0e0;
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .players-table td {
+            padding: 12px 8px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .player-name-cell {
+            font-weight: 600;
+            color: #1a1a2e;
+        }
+
+        .kda-cell {
+            font-family: 'Courier New', monospace;
+            color: #666;
+        }
+
+        .net-worth-cell {
+            color: #f59e0b;
+            font-weight: 600;
+        }
+
+        /* No game state */
+        .no-game {
+            text-align: center;
+            padding: 80px 20px;
+            color: #999;
+        }
+
+        .no-game h2 {
+            font-size: 32px;
+            margin-bottom: 16px;
+            color: #333;
+        }
+
+        .no-game p {
+            color: #666;
+        }
+
+        /* Responsive */
+        @media (max-width: 968px) {
+            .teams-container {
+                grid-template-columns: 1fr;
+            }
+
+            .match-header {
+                flex-direction: column;
+                gap: 16px;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">
+            <img src="GargamelPuppets.png" alt="Logo">
+            <span>Gargamel League</span>
+        </a>
+        <ul class="navbar-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/matches">Matches</a></li>
+            <li><a href="/rankings">Rankings</a></li>
+            <li><a href="/about">About</a></li>
+            <li><a href="/livegame" class="active">Live Game</a></li>
+        </ul>
+    </nav>
+
+    <div class="page-content">
+        <div id="game-container">
+            <!-- Will be populated by JavaScript -->
+        </div>
+    </div>
+
+    <script>
+        const POLL_INTERVAL = 5000; // Poll every 5 seconds
+
+        async function fetchLiveGame() {
+            try {
+                const response = await fetch('/api/live-game');
+                const data = await response.json();
+                renderGame(data);
+            } catch (error) {
+                console.error('Failed to fetch live game:', error);
+                renderNoGame();
+            }
+        }
+
+        function renderGame(data) {
+            if (!data.active) {
+                renderNoGame();
+                return;
+            }
+
+            const duration = formatDuration(data.duration);
+            const container = document.getElementById('game-container');
+
+            let html = '';
+
+            // Live badge
+            html += '<div class="live-badge">';
+            html += '<div class="live-dot"></div>';
+            html += '<span>LIVE</span>';
+            html += '</div>';
+
+            // Match header
+            html += '<div class="match-header">';
+            html += '<div class="match-time">' + duration + '</div>';
+            html += '<div class="match-score">' + data.radiant.score + ' - ' + data.dire.score + '</div>';
+            html += '<div class="spectator-count">' + data.spectators + ' watching</div>';
+            html += '</div>';
+
+            // Minimap
+            html += '<div class="minimap-container">';
+            html += '<h3>Live Minimap</h3>';
+            html += '<div class="minimap">';
+            html += '<div class="minimap-grid"></div>';
+
+            // Plot radiant players
+            data.radiant.players.forEach(p => {
+                if (p.posX !== undefined && p.posY !== undefined) {
+                    const x = (p.posX / 255) * 100; // Convert to percentage
+                    const y = 100 - (p.posY / 255) * 100; // Invert Y axis
+                    const deadClass = p.respawnTimer > 0 ? ' dead' : '';
+                    html += '<div class="player-dot radiant' + deadClass + '" ';
+                    html += 'style="left: ' + x + '%; top: ' + y + '%;" ';
+                    html += 'title="' + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
+                    html += '</div>';
+                }
+            });
+
+            // Plot dire players
+            data.dire.players.forEach(p => {
+                if (p.posX !== undefined && p.posY !== undefined) {
+                    const x = (p.posX / 255) * 100;
+                    const y = 100 - (p.posY / 255) * 100;
+                    const deadClass = p.respawnTimer > 0 ? ' dead' : '';
+                    html += '<div class="player-dot dire' + deadClass + '" ';
+                    html += 'style="left: ' + x + '%; top: ' + y + '%;" ';
+                    html += 'title="' + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
+                    html += '</div>';
+                }
+            });
+
+            html += '</div></div>';
+
+            // Teams container
+            html += '<div class="teams-container">';
+
+            // Radiant team
+            html += '<div class="team-card radiant">';
+            html += '<div class="team-header">';
+            html += '<div class="team-name">Radiant</div>';
+            html += '<div class="team-score" style="color: #4ade80;">' + data.radiant.score + '</div>';
+            html += '</div>';
+            html += renderPlayerTable(data.radiant.players);
+            html += '</div>';
+
+            // Dire team
+            html += '<div class="team-card dire">';
+            html += '<div class="team-header">';
+            html += '<div class="team-name">Dire</div>';
+            html += '<div class="team-score" style="color: #ef4444;">' + data.dire.score + '</div>';
+            html += '</div>';
+            html += renderPlayerTable(data.dire.players);
+            html += '</div>';
+
+            html += '</div>';
+
+            container.innerHTML = html;
+        }
+
+        function renderPlayerTable(players) {
+            let html = '<table class="players-table">';
+            html += '<thead><tr>';
+            html += '<th>Player</th>';
+            html += '<th>Lvl</th>';
+            html += '<th>K/D/A</th>';
+            html += '<th>Net Worth</th>';
+            html += '</tr></thead>';
+            html += '<tbody>';
+
+            players.forEach(p => {
+                html += '<tr>';
+                html += '<td class="player-name-cell">' + escapeHtml(p.name) + '</td>';
+                html += '<td>' + p.level + '</td>';
+                html += '<td class="kda-cell">' + p.kills + '/' + p.deaths + '/' + p.assists + '</td>';
+                html += '<td class="net-worth-cell">' + p.netWorth.toLocaleString() + '</td>';
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function renderNoGame() {
+            const container = document.getElementById('game-container');
+            container.innerHTML = `
+                <div class="no-game">
+                    <h2>No Live Games</h2>
+                    <p>There are no active games in the league right now.</p>
+                    <p style="margin-top: 12px;">This page will update automatically when a game starts.</p>
+                </div>
+            `;
+        }
+
+        function formatDuration(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return mins + ':' + (secs < 10 ? '0' : '') + secs;
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // Initial fetch
+        fetchLiveGame();
+
+        // Poll for updates
+        setInterval(fetchLiveGame, POLL_INTERVAL);
+    </script>
+</body>
+</html>
