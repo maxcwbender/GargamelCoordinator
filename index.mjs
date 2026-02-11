@@ -689,13 +689,12 @@ server.get('/api/live-game', async (req, res) => {
     }
 
     const game = await fetchLiveGame();
-
-    liveGameCache.data = game;
     liveGameCache.lastFetched = now;
     liveGameCache.isActive = !!game;
 
     if (!game) {
-        return res.json({ active: false });
+        liveGameCache.data = { active: false };
+        return res.json(liveGameCache.data);
     }
 
     // Transform data for frontend
@@ -735,7 +734,8 @@ server.get('/api/live-game', async (req, res) => {
         };
     });
 
-    return res.json({
+    // Cache the transformed data (not raw API response)
+    liveGameCache.data = {
         active: true,
         matchId: game.match_id,
         duration: game.scoreboard.duration,
@@ -748,7 +748,9 @@ server.get('/api/live-game', async (req, res) => {
             score: game.scoreboard.dire.score,
             players: direPlayers
         }
-    });
+    };
+
+    return res.json(liveGameCache.data);
 });
 
 server.get('/api/live-game/status', async (req, res) => {

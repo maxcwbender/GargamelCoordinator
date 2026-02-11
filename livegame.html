@@ -165,7 +165,7 @@
             max-width: 600px;
             margin: 0 auto;
             aspect-ratio: 1;
-            background: #0a0a0f;
+            background: #0a0a0f url('https://liquipedia.net/commons/images/0/03/Gamemap_7.40_minimap_dota2_gameasset.png') center/cover;
             border: 2px solid #333;
             border-radius: 8px;
             overflow: hidden;
@@ -178,9 +178,22 @@
             right: 0;
             bottom: 0;
             background-image:
-                linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+                linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
             background-size: 10% 10%;
+        }
+
+        .minimap-no-positions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(255,255,255,0.5);
+            font-size: 14px;
+            text-align: center;
+            padding: 10px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 4px;
         }
 
         .player-dot {
@@ -380,9 +393,14 @@
             html += '<div class="minimap">';
             html += '<div class="minimap-grid"></div>';
 
+            // Debug: log position data
+            let playersWithPositions = 0;
+
             // Plot radiant players
             data.radiant.players.forEach(p => {
-                if (p.posX !== undefined && p.posY !== undefined) {
+                const hasPosition = p.posX != null && p.posY != null;
+                if (hasPosition) {
+                    playersWithPositions++;
                     const x = (p.posX / 255) * 100; // Convert to percentage
                     const y = 100 - (p.posY / 255) * 100; // Invert Y axis
                     const deadClass = p.respawnTimer > 0 ? ' dead' : '';
@@ -391,11 +409,14 @@
                     html += 'title="' + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
                     html += '</div>';
                 }
+                console.log('[Minimap] Radiant player:', p.name, 'posX:', p.posX, 'posY:', p.posY, 'hasPosition:', hasPosition);
             });
 
             // Plot dire players
             data.dire.players.forEach(p => {
-                if (p.posX !== undefined && p.posY !== undefined) {
+                const hasPosition = p.posX != null && p.posY != null;
+                if (hasPosition) {
+                    playersWithPositions++;
                     const x = (p.posX / 255) * 100;
                     const y = 100 - (p.posY / 255) * 100;
                     const deadClass = p.respawnTimer > 0 ? ' dead' : '';
@@ -404,7 +425,13 @@
                     html += 'title="' + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
                     html += '</div>';
                 }
+                console.log('[Minimap] Dire player:', p.name, 'posX:', p.posX, 'posY:', p.posY, 'hasPosition:', hasPosition);
             });
+
+            // Show message if no position data available
+            if (playersWithPositions === 0) {
+                html += '<div class="minimap-no-positions">Position data not available</div>';
+            }
 
             html += '</div></div>';
 

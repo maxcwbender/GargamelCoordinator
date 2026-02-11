@@ -1691,11 +1691,8 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 		h.lastKnownMemberCount = memberCount
 
 		// Auto-trigger polling when 7 players join (7 players + bot = 8 total members)
-		// In debug mode, trigger when 2 players join (2 players + bot = 3 total members)
+		// Always require normal player count, even in debug mode
 		autoPollSize := 8
-		if h.gameConfig.DebugMode {
-			autoPollSize = 3
-		}
 
 		if memberCount >= autoPollSize && state == 0 { // UI state
 			h.pollingMutex.Lock()
