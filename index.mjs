@@ -266,6 +266,7 @@ async function refreshMatchCache() {
                         (p.observer_kills || 0) * 0.5;
 
                     return {
+                        account_id: p.account_id,
                         personaname: p.personaname || 'Anonymous',
                         player_slot: p.player_slot,
                         isRadiant,
