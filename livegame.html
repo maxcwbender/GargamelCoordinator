@@ -249,6 +249,28 @@
             background: #333;
         }
 
+        .barracks {
+            position: absolute;
+            width: 7px;
+            height: 7px;
+            transform: translate(-50%, -50%);
+            border: 1px solid rgba(255,255,255,0.4);
+            border-radius: 1px;
+        }
+
+        .barracks.radiant {
+            background: rgba(74, 222, 128, 0.7);
+        }
+
+        .barracks.dire {
+            background: rgba(239, 68, 68, 0.7);
+        }
+
+        .barracks.destroyed {
+            opacity: 0.2;
+            background: #333;
+        }
+
         /* Player tables */
         .teams-container {
             display: grid;
@@ -335,6 +357,61 @@
             font-weight: 600;
         }
 
+        .hero-cell {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .hero-icon {
+            width: 48px;
+            height: 27px;
+            object-fit: cover;
+            border-radius: 3px;
+            background: #1a1a2e;
+            flex-shrink: 0;
+        }
+
+        .hero-placeholder {
+            width: 48px;
+            height: 27px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+
+        .item-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 28px);
+            grid-template-rows: repeat(2, 20px);
+            gap: 1px;
+        }
+
+        .item-slot {
+            width: 28px;
+            height: 20px;
+            border-radius: 2px;
+            object-fit: cover;
+            background: #1a1a2e;
+        }
+
+        .item-empty {
+            width: 28px;
+            height: 20px;
+            background: #2a2a3e;
+            border-radius: 2px;
+        }
+
+        .cs-cell {
+            color: #888;
+            font-size: 13px;
+        }
+
+        .gpm-cell {
+            color: #888;
+            font-size: 13px;
+        }
+
         /* No game state */
         .no-game {
             text-align: center;
@@ -362,6 +439,35 @@
                 flex-direction: column;
                 gap: 16px;
                 text-align: center;
+            }
+
+            .hide-mobile {
+                display: none;
+            }
+
+            .hero-icon {
+                width: 36px;
+                height: 20px;
+            }
+
+            .hero-placeholder {
+                width: 36px;
+                height: 20px;
+            }
+
+            .item-grid {
+                grid-template-columns: repeat(3, 24px);
+                grid-template-rows: repeat(2, 17px);
+            }
+
+            .item-slot {
+                width: 24px;
+                height: 17px;
+            }
+
+            .item-empty {
+                width: 24px;
+                height: 17px;
             }
         }
     </style>
@@ -396,7 +502,6 @@
                 const data = await response.json();
                 renderGame(data);
             } catch (error) {
-                console.error('Failed to fetch live game:', error);
                 renderNoGame();
             }
         }
@@ -449,6 +554,43 @@
             return html;
         }
 
+        // Barracks positions on minimap
+        // Bit order: 0=TopMelee, 1=TopRanged, 2=MidMelee, 3=MidRanged, 4=BotMelee, 5=BotRanged
+        const BARRACKS_POSITIONS = {
+            radiant: [
+                { bit: 0, x: 11, y: 74, label: 'Top Melee' },
+                { bit: 1, x: 15, y: 74, label: 'Top Ranged' },
+                { bit: 2, x: 22, y: 78, label: 'Mid Melee' },
+                { bit: 3, x: 26, y: 78, label: 'Mid Ranged' },
+                { bit: 4, x: 24, y: 89, label: 'Bot Melee' },
+                { bit: 5, x: 28, y: 89, label: 'Bot Ranged' },
+            ],
+            dire: [
+                { bit: 0, x: 72, y: 11, label: 'Top Melee' },
+                { bit: 1, x: 76, y: 11, label: 'Top Ranged' },
+                { bit: 2, x: 74, y: 22, label: 'Mid Melee' },
+                { bit: 3, x: 78, y: 22, label: 'Mid Ranged' },
+                { bit: 4, x: 85, y: 25, label: 'Bot Melee' },
+                { bit: 5, x: 89, y: 25, label: 'Bot Ranged' },
+            ]
+        };
+
+        function renderBarracks(barracksState, team) {
+            let html = '';
+            const positions = BARRACKS_POSITIONS[team];
+
+            positions.forEach(rax => {
+                const isAlive = (barracksState & (1 << rax.bit)) !== 0;
+                const destroyedClass = isAlive ? '' : ' destroyed';
+                html += '<div class="barracks ' + team + destroyedClass + '" ';
+                html += 'style="left: ' + rax.x + '%; top: ' + rax.y + '%;" ';
+                html += 'title="' + team.charAt(0).toUpperCase() + team.slice(1) + ' ' + rax.label + '">';
+                html += '</div>';
+            });
+
+            return html;
+        }
+
         function renderGame(data) {
             if (!data.active) {
                 if (data.pending) {
@@ -492,15 +634,15 @@
                 const hasPosition = p.posX != null && p.posY != null;
                 if (hasPosition) {
                     playersWithPositions++;
-                    const x = (p.posX / 255) * 100; // Convert to percentage
-                    const y = 100 - (p.posY / 255) * 100; // Invert Y axis
+                    const x = (p.posX / 255) * 100;
+                    const y = 100 - (p.posY / 255) * 100;
                     const deadClass = p.respawnTimer > 0 ? ' dead' : '';
+                    const heroLabel = p.heroName ? p.heroName + ' - ' : '';
                     html += '<div class="player-dot radiant' + deadClass + '" ';
                     html += 'style="left: ' + x + '%; top: ' + y + '%;" ';
-                    html += 'title="' + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
+                    html += 'title="' + heroLabel + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
                     html += '</div>';
                 }
-                console.log('[Minimap] Radiant player:', p.name, 'posX:', p.posX, 'posY:', p.posY, 'hasPosition:', hasPosition);
             });
 
             // Plot dire players
@@ -511,12 +653,12 @@
                     const x = (p.posX / 255) * 100;
                     const y = 100 - (p.posY / 255) * 100;
                     const deadClass = p.respawnTimer > 0 ? ' dead' : '';
+                    const heroLabel = p.heroName ? p.heroName + ' - ' : '';
                     html += '<div class="player-dot dire' + deadClass + '" ';
                     html += 'style="left: ' + x + '%; top: ' + y + '%;" ';
-                    html += 'title="' + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
+                    html += 'title="' + heroLabel + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
                     html += '</div>';
                 }
-                console.log('[Minimap] Dire player:', p.name, 'posX:', p.posX, 'posY:', p.posY, 'hasPosition:', hasPosition);
             });
 
             // Show message if no position data available
@@ -524,13 +666,11 @@
                 html += '<div class="minimap-no-positions">Position data not available</div>';
             }
 
-            // Render towers
+            // Render towers and barracks
             html += renderTowers(data.radiant.towerState || 0, 'radiant');
             html += renderTowers(data.dire.towerState || 0, 'dire');
-
-            // Log tower state for debugging
-            console.log('[Minimap] Radiant towerState:', data.radiant.towerState, 'binary:', (data.radiant.towerState || 0).toString(2));
-            console.log('[Minimap] Dire towerState:', data.dire.towerState, 'binary:', (data.dire.towerState || 0).toString(2));
+            html += renderBarracks(data.radiant.barracksState || 0, 'radiant');
+            html += renderBarracks(data.dire.barracksState || 0, 'dire');
 
             html += '</div></div>';
 
@@ -560,26 +700,56 @@
             container.innerHTML = html;
         }
 
+        function renderItemGrid(items) {
+            let html = '<div class="item-grid">';
+            for (let i = 0; i < 6; i++) {
+                const item = items && items[i];
+                if (item && item.img) {
+                    html += '<img src="' + escapeHtml(item.img) + '" alt="' + escapeHtml(item.name) + '" title="' + escapeHtml(item.name) + '" class="item-slot" onerror="this.className=\'item-empty\';this.removeAttribute(\'src\')">';
+                } else {
+                    html += '<div class="item-empty"></div>';
+                }
+            }
+            html += '</div>';
+            return html;
+        }
+
         function renderPlayerTable(players) {
             let html = '<table class="players-table">';
             html += '<thead><tr>';
             html += '<th>Player</th>';
             html += '<th>Lvl</th>';
             html += '<th>K/D/A</th>';
+            html += '<th class="hide-mobile">LH/DN</th>';
+            html += '<th class="hide-mobile">GPM</th>';
             html += '<th>Net Worth</th>';
+            html += '<th>Items</th>';
             html += '</tr></thead>';
             html += '<tbody>';
 
             players.forEach(p => {
                 html += '<tr>';
-                if (p.accountId) {
-                    html += '<td class="player-name-cell"><a href="https://www.opendota.com/players/' + p.accountId + '" target="_blank" rel="noopener">' + escapeHtml(p.name) + '</a></td>';
+
+                // Hero + Player name
+                html += '<td><div class="hero-cell">';
+                if (p.heroImg) {
+                    html += '<img src="' + escapeHtml(p.heroImg) + '" alt="' + escapeHtml(p.heroName || '') + '" title="' + escapeHtml(p.heroName || '') + '" class="hero-icon" onerror="this.className=\'hero-placeholder\';this.removeAttribute(\'src\')">';
                 } else {
-                    html += '<td class="player-name-cell">' + escapeHtml(p.name) + '</td>';
+                    html += '<div class="hero-placeholder"></div>';
                 }
+                if (p.accountId) {
+                    html += '<a href="https://www.opendota.com/players/' + p.accountId + '" target="_blank" rel="noopener" class="player-name-cell">' + escapeHtml(p.name) + '</a>';
+                } else {
+                    html += '<span class="player-name-cell">' + escapeHtml(p.name) + '</span>';
+                }
+                html += '</div></td>';
+
                 html += '<td>' + p.level + '</td>';
                 html += '<td class="kda-cell">' + p.kills + '/' + p.deaths + '/' + p.assists + '</td>';
+                html += '<td class="cs-cell hide-mobile">' + (p.lastHits || 0) + '/' + (p.denies || 0) + '</td>';
+                html += '<td class="gpm-cell hide-mobile">' + (p.gpm || 0) + '</td>';
                 html += '<td class="net-worth-cell">' + p.netWorth.toLocaleString() + '</td>';
+                html += '<td>' + renderItemGrid(p.items) + '</td>';
                 html += '</tr>';
             });
 

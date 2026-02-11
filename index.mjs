@@ -37,6 +37,57 @@ let liveGameCache = {
     isActive: false
 };
 
+// ─── Dota 2 Hero & Item Constants (from OpenDota) ────────────────────────────
+let dotaConstants = { heroes: {}, items: {}, lastFetched: 0 };
+const CONSTANTS_TTL_MS = 24 * 60 * 60 * 1000; // refresh daily
+
+async function fetchDotaConstants() {
+    try {
+        logger.info('[Constants] Fetching hero and item data from OpenDota...');
+        const [heroesRes, itemsRes] = await Promise.all([
+            fetch(`${OPENDOTA_BASE}/constants/heroes`),
+            fetch(`${OPENDOTA_BASE}/constants/items`)
+        ]);
+
+        if (heroesRes.ok) {
+            const heroes = await heroesRes.json();
+            const heroMap = {};
+            for (const [, hero] of Object.entries(heroes)) {
+                const slug = hero.name.replace('npc_dota_hero_', '');
+                heroMap[hero.id] = {
+                    name: hero.localized_name,
+                    img: `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/${slug}.png`
+                };
+            }
+            dotaConstants.heroes = heroMap;
+        }
+
+        if (itemsRes.ok) {
+            const items = await itemsRes.json();
+            const itemMap = {};
+            for (const [key, item] of Object.entries(items)) {
+                if (item.id) {
+                    itemMap[item.id] = {
+                        name: item.dname || key,
+                        img: `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${key}.png`
+                    };
+                }
+            }
+            dotaConstants.items = itemMap;
+        }
+
+        dotaConstants.lastFetched = Date.now();
+        logger.info(`[Constants] Loaded ${Object.keys(dotaConstants.heroes).length} heroes, ${Object.keys(dotaConstants.items).length} items`);
+    } catch (err) {
+        logger.error('[Constants] Failed to fetch:', err.message);
+    }
+}
+
+// Fetch constants on startup
+fetchDotaConstants();
+// Refresh daily
+setInterval(fetchDotaConstants, CONSTANTS_TTL_MS);
+
 // Initialize database connection early (before any functions that use it)
 let db = new Database('allUsers.db');
 
@@ -745,42 +796,43 @@ server.get('/api/live-game', async (req, res) => {
         const direPlayerList = game.scoreboard.dire.players || [];
         logger.info(`[API /api/live-game] Processing ${radiantPlayerList.length} radiant, ${direPlayerList.length} dire players`);
 
-        // Transform data for frontend
-        const radiantPlayers = radiantPlayerList.map(p => {
-            const playerInfo = (game.players || []).find(pl => pl.account_id === p.account_id);
-            return {
-                accountId: p.account_id,
-                name: playerInfo?.name || 'Unknown',
-                heroId: playerInfo?.hero_id,
-                team: 'radiant',
-                kills: p.kills || 0,
-                deaths: p.death || 0,
-                assists: p.assists || 0,
-                netWorth: p.net_worth || 0,
-                level: p.level || 1,
-                posX: p.position_x,
-                posY: p.position_y,
-                respawnTimer: p.respawn_timer || 0
-            };
-        });
+        // Helper: resolve item ID to { name, img } or null
+        function resolveItem(id) {
+            if (!id || id === 0) return null;
+            const item = dotaConstants.items[id];
+            return item ? { id, name: item.name, img: item.img } : { id, name: 'Unknown', img: null };
+        }
 
-        const direPlayers = direPlayerList.map(p => {
+        // Helper: transform a scoreboard player to frontend format
+        function transformPlayer(p, team) {
             const playerInfo = (game.players || []).find(pl => pl.account_id === p.account_id);
+            const hero = dotaConstants.heroes[playerInfo?.hero_id];
             return {
                 accountId: p.account_id,
                 name: playerInfo?.name || 'Unknown',
                 heroId: playerInfo?.hero_id,
-                team: 'dire',
+                heroName: hero?.name || null,
+                heroImg: hero?.img || null,
+                team,
                 kills: p.kills || 0,
                 deaths: p.death || 0,
                 assists: p.assists || 0,
+                lastHits: p.last_hits || 0,
+                denies: p.denies || 0,
+                gpm: p.gold_per_min || 0,
+                xpm: p.xp_per_min || 0,
                 netWorth: p.net_worth || 0,
                 level: p.level || 1,
+                items: [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5].map(resolveItem),
                 posX: p.position_x,
                 posY: p.position_y,
                 respawnTimer: p.respawn_timer || 0
             };
-        });
+        }
+
+        // Transform data for frontend
+        const radiantPlayers = radiantPlayerList.map(p => transformPlayer(p, 'radiant'));
+        const direPlayers = direPlayerList.map(p => transformPlayer(p, 'dire'));
 
         // Log raw scoreboard data for debugging
         logger.info(`[API /api/live-game] Raw scoreboard data: radiant.tower_state=${game.scoreboard.radiant.tower_state}, dire.tower_state=${game.scoreboard.dire.tower_state}`);
