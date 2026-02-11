@@ -1690,13 +1690,16 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 	if memberCount != h.lastKnownMemberCount {
 		h.lastKnownMemberCount = memberCount
 
-		// Auto-trigger polling when 7 players join (7 players + bot = 8 total members)
-		// In debug mode with small teams, don't trigger polling at all
-		autoPollSize := 8
+		// Auto-trigger polling when enough human players join.
+		// Normal mode: 7 players + bot = 8 total members
+		// Debug mode: 2 human players + bot = 3 total members (lower threshold for testing)
 		totalExpectedPlayers := len(h.gameConfig.RadiantTeam) + len(h.gameConfig.DireTeam)
-		skipPollingForDebug := h.gameConfig.DebugMode && totalExpectedPlayers < 10
+		autoPollSize := 8
+		if h.gameConfig.DebugMode && totalExpectedPlayers < 10 {
+			autoPollSize = 3 // 2 human players + bot
+		}
 
-		if memberCount >= autoPollSize && state == 0 && !skipPollingForDebug { // UI state
+		if memberCount >= autoPollSize && state == 0 { // UI state
 			h.pollingMutex.Lock()
 			if !h.pollingDone && !h.pollingActive && h.pollCallbackURL != "" {
 				h.pollingActive = true
@@ -1704,12 +1707,11 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 
 				// Notify Master_Bot to start polling
 				go h.notifyPollingStarted()
-				log.Printf("[Game %s] Lobby has %d players — triggering game mode poll", h.gameID, memberCount)
+				log.Printf("[Game %s] Lobby has %d members (threshold=%d, debug=%v) — triggering game mode poll",
+					h.gameID, memberCount, autoPollSize, h.gameConfig.DebugMode)
 			} else {
 				h.pollingMutex.Unlock()
 			}
-		} else if skipPollingForDebug && memberCount >= 2 {
-			log.Printf("[Game %s] Debug mode with small teams (%d expected) - skipping poll trigger", h.gameID, totalExpectedPlayers)
 		}
 	}
 
@@ -1902,27 +1904,23 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 	}
 
 	if radiantCount == expectedRadiantCount && direCount == expectedDireCount {
-		// All players are seated - check if polling is blocking launch
+		// All players are seated - check if a poll is currently running
 		h.pollingMutex.Lock()
 		pollingActive := h.pollingActive
 		messageAlreadySent := h.pollingMessageSent
 		h.pollingMutex.Unlock()
 
-		// In debug mode with small teams (less than normal 5v5), skip polling requirement
-		totalExpectedPlayers := expectedRadiantCount + expectedDireCount
-		skipPolling := h.gameConfig.DebugMode && totalExpectedPlayers < 10
-
-		if pollingActive && !skipPolling {
-			// All players ready but polling is active - send message only once (like DotaTalker.py)
+		// Only block launch while a poll is actively running.
+		// Once the poll ends (pollingActive=false), game proceeds regardless of outcome.
+		if pollingActive {
+			// All players ready but polling is active - send message only once
 			if !messageAlreadySent {
 				h.pollingMutex.Lock()
-				h.pollingMessageSent = true // Mark as sent to prevent duplicates
+				h.pollingMessageSent = true
 				h.pollingMutex.Unlock()
 
-				log.Printf("[Game %s] All players ready but polling is active — delaying launch (DebugMode=%v, expectedPlayers=%d)",
-					h.gameID, h.gameConfig.DebugMode, totalExpectedPlayers)
+				log.Printf("[Game %s] All players ready but polling is active — delaying launch", h.gameID)
 				if h.dota != nil && h.currentLobbyID != 0 {
-					// Join channel and send message
 					go func() {
 						channelName := fmt.Sprintf("Lobby_%d", h.currentLobbyID)
 						channelType := protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby
@@ -1939,15 +1937,12 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 								h.dota.SendChannelMessage(h.currentLobbyID, "All players are ready but game mode poll is still active.  Will start game upon completion.")
 							}
 						} else {
-							// Fallback: try sending without joining
 							h.dota.SendChannelMessage(h.currentLobbyID, "All players are ready but game mode poll is still active.  Will start game upon completion.")
 						}
 					}()
 				}
 			}
-			return // Don't launch yet
-		} else if skipPolling && pollingActive {
-			log.Printf("[Game %s] Debug mode with small teams (%d players) - skipping poll wait", h.gameID, totalExpectedPlayers)
+			return // Don't launch yet — poll still running
 		}
 
 		// Launch when all expected players are seated (works for any team size)
@@ -1985,21 +1980,14 @@ func (h *gcHandler) launchGame() {
 		return
 	}
 
-	// Check if polling is active - block launch if so
+	// Block launch while a game mode poll is actively running
 	h.pollingMutex.Lock()
 	pollingActive := h.pollingActive
 	h.pollingMutex.Unlock()
 
-	// In debug mode with small teams, skip polling requirement
-	totalExpectedPlayers := len(h.gameConfig.RadiantTeam) + len(h.gameConfig.DireTeam)
-	skipPolling := h.gameConfig.DebugMode && totalExpectedPlayers < 10
-
-	if pollingActive && !skipPolling {
-		log.Printf("[Game %s] All players ready but polling is active — delaying launch (DebugMode=%v, expectedPlayers=%d)",
-			h.gameID, h.gameConfig.DebugMode, totalExpectedPlayers)
+	if pollingActive {
+		log.Printf("[Game %s] Cannot launch — game mode poll is still active", h.gameID)
 		return
-	} else if pollingActive && skipPolling {
-		log.Printf("[Game %s] Debug mode with small teams (%d players) - bypassing poll wait to launch", h.gameID, totalExpectedPlayers)
 	}
 
 	h.setState("launching")

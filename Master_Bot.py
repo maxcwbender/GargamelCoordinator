@@ -1088,13 +1088,23 @@ class Master_Bot(commands.Bot):
                 winner = None
                 reason = "No in-game votes — mode unchanged."
 
-            # Apply winning mode
+            # Apply winning mode (or end polling with current mode if no votes)
             if winner is not None:
                 try:
                     mode_enum = self.mode_name_to_enum[winner]
                     await self.parent.rest_api.end_polling(self.game_id, mode_enum)
                 except Exception as e:
                     logger.exception(f"[Game {self.game_id}] Failed to apply mode {winner}: {e}")
+            else:
+                # No votes — still need to end polling on the Go side to unblock game launch.
+                # Query the current game mode so we pass it through unchanged.
+                try:
+                    status = await self.parent.rest_api.get_game_status(self.game_id)
+                    current_mode = status.get("game_mode", 22) if status else 22
+                    logger.info(f"[Game {self.game_id}] No votes — ending poll with current mode {current_mode}")
+                    await self.parent.rest_api.end_polling(self.game_id, current_mode)
+                except Exception as e:
+                    logger.exception(f"[Game {self.game_id}] Failed to end polling (no votes): {e}")
 
             # Build results for embed
             options_in_order = self._options_in_order()
