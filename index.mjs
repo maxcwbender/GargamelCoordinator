@@ -642,18 +642,23 @@ async function fetchLiveGame() {
 
         const data = await response.json();
         const games = data?.result?.games || [];
-        logger.info(`[LiveGame] Found ${games.length} total live games`);
+        logger.info(`[LiveGame] Found ${games.length} total live games across ALL leagues`);
+
+        // Log all league IDs for debugging (helps identify if our game appears under a different ID)
+        if (games.length > 0) {
+            const leagueIds = [...new Set(games.map(g => g.league_id))];
+            logger.info(`[LiveGame] League IDs in response: ${JSON.stringify(leagueIds)}`);
+        }
 
         // Filter to our league only
         const ourGame = games.find(g => g.league_id === LEAGUE_ID);
+        logger.info(`[LiveGame] Looking for league_id=${LEAGUE_ID}, found: ${!!ourGame}`);
 
         if (ourGame) {
             logger.info(`[LiveGame] Found our league game: match_id=${ourGame.match_id}, has scoreboard=${!!ourGame.scoreboard}`);
             if (ourGame.scoreboard) {
                 logger.info(`[LiveGame] Scoreboard: duration=${ourGame.scoreboard.duration}, radiant=${!!ourGame.scoreboard.radiant}, dire=${!!ourGame.scoreboard.dire}`);
             }
-        } else {
-            logger.info('[LiveGame] No game found for our league');
         }
 
         return ourGame || null;
