@@ -162,10 +162,10 @@
         .minimap {
             position: relative;
             width: 100%;
-            max-width: 600px;
+            max-width: 300px;
             margin: 0 auto;
             aspect-ratio: 1;
-            background: #0a0a0f url('minimap_background.png') center/115%;
+            background: #0a0a0f url('minimap_background.png') center/cover;
             border: 2px solid #333;
             border-radius: 8px;
             overflow: hidden;
@@ -308,6 +308,17 @@
             color: #1a1a2e;
         }
 
+        .player-name-cell a {
+            color: #1a1a2e;
+            text-decoration: none;
+            transition: color 0.2s ease;
+        }
+
+        .player-name-cell a:hover {
+            color: #4e9fd1;
+            text-decoration: underline;
+        }
+
         .kda-cell {
             font-family: 'Courier New', monospace;
             color: #666;
@@ -433,7 +444,11 @@
 
         function renderGame(data) {
             if (!data.active) {
-                renderNoGame();
+                if (data.pending) {
+                    renderPendingGame(data);
+                } else {
+                    renderNoGame();
+                }
                 return;
             }
 
@@ -549,7 +564,11 @@
 
             players.forEach(p => {
                 html += '<tr>';
-                html += '<td class="player-name-cell">' + escapeHtml(p.name) + '</td>';
+                if (p.accountId) {
+                    html += '<td class="player-name-cell"><a href="https://www.opendota.com/players/' + p.accountId + '" target="_blank" rel="noopener">' + escapeHtml(p.name) + '</a></td>';
+                } else {
+                    html += '<td class="player-name-cell">' + escapeHtml(p.name) + '</td>';
+                }
                 html += '<td>' + p.level + '</td>';
                 html += '<td class="kda-cell">' + p.kills + '/' + p.deaths + '/' + p.assists + '</td>';
                 html += '<td class="net-worth-cell">' + p.netWorth.toLocaleString() + '</td>';
@@ -567,6 +586,22 @@
                     <h2>No Live Games</h2>
                     <p>There are no active games in the league right now.</p>
                     <p style="margin-top: 12px;">This page will update automatically when a game starts.</p>
+                </div>
+            `;
+        }
+
+        function renderPendingGame(data) {
+            const container = document.getElementById('game-container');
+            container.innerHTML = `
+                <div class="no-game">
+                    <div class="live-badge" style="display: inline-flex; margin-bottom: 20px;">
+                        <div class="live-dot"></div>
+                        <span>LIVE</span>
+                    </div>
+                    <h2>Game Starting...</h2>
+                    <p>A live game has been detected and is currently in the picking phase.</p>
+                    <p style="margin-top: 12px;">Live stats will appear once the game begins.</p>
+                    ${data.matchId ? '<p style="margin-top: 8px; color: #666; font-size: 12px;">Match ID: ' + data.matchId + '</p>' : ''}
                 </div>
             `;
         }

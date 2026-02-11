@@ -729,14 +729,14 @@ server.get('/api/live-game', async (req, res) => {
 
         // Defensive checks for game structure
         if (!game.scoreboard) {
-            logger.warn('[API /api/live-game] Game found but no scoreboard data yet');
-            liveGameCache.data = { active: false, reason: 'no_scoreboard' };
+            logger.warn('[API /api/live-game] Game found but no scoreboard data yet (picking phase?)');
+            liveGameCache.data = { active: false, pending: true, matchId: game.match_id };
             return res.json(liveGameCache.data);
         }
 
         if (!game.scoreboard.radiant || !game.scoreboard.dire) {
-            logger.warn('[API /api/live-game] Scoreboard missing team data');
-            liveGameCache.data = { active: false, reason: 'incomplete_scoreboard' };
+            logger.warn('[API /api/live-game] Scoreboard missing team data (game starting?)');
+            liveGameCache.data = { active: false, pending: true, matchId: game.match_id };
             return res.json(liveGameCache.data);
         }
 
@@ -849,8 +849,13 @@ server.get('/api/recent-matches', async (req, res) => {
     if (Date.now() - matchCache.lastFetched > CACHE_TTL_MS) {
         await refreshMatchCache();
     }
+    // Filter out debug matches (less than 10 players)
+    const fullMatches = (matchCache.data || []).filter(match => {
+        const playerCount = match.players?.length || 0;
+        return playerCount >= 10;
+    });
     return res.json({
-        matches: matchCache.data || [],
+        matches: fullMatches,
         lastUpdated: matchCache.lastFetched,
         cacheMaxAge: CACHE_TTL_MS,
     });

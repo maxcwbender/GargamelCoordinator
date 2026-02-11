@@ -1904,7 +1904,11 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 		messageAlreadySent := h.pollingMessageSent
 		h.pollingMutex.Unlock()
 
-		if pollingActive {
+		// In debug mode with small teams (less than normal 5v5), skip polling requirement
+		totalExpectedPlayers := expectedRadiantCount + expectedDireCount
+		skipPolling := h.gameConfig.DebugMode && totalExpectedPlayers < 10
+
+		if pollingActive && !skipPolling {
 			// All players ready but polling is active - send message only once (like DotaTalker.py)
 			if !messageAlreadySent {
 				h.pollingMutex.Lock()
@@ -1937,6 +1941,8 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 				}
 			}
 			return // Don't launch yet
+		} else if skipPolling && pollingActive {
+			log.Printf("[Game %s] Debug mode with small teams (%d players) - skipping poll wait", h.gameID, totalExpectedPlayers)
 		}
 
 		// Launch when all expected players are seated (works for any team size)
@@ -1979,7 +1985,11 @@ func (h *gcHandler) launchGame() {
 	pollingActive := h.pollingActive
 	h.pollingMutex.Unlock()
 
-	if pollingActive {
+	// In debug mode with small teams, skip polling requirement
+	totalExpectedPlayers := len(h.gameConfig.RadiantTeam) + len(h.gameConfig.DireTeam)
+	skipPolling := h.gameConfig.DebugMode && totalExpectedPlayers < 10
+
+	if pollingActive && !skipPolling {
 		log.Printf("[Game %s] All players ready but polling is active — delaying launch", h.gameID)
 		return
 	}
