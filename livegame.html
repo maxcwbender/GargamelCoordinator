@@ -165,7 +165,7 @@
             max-width: 600px;
             margin: 0 auto;
             aspect-ratio: 1;
-            background: #0a0a0f url('https://liquipedia.net/commons/images/0/03/Gamemap_7.40_minimap_dota2_gameasset.png') center/cover;
+            background: #0a0a0f url('https://liquipedia.net/commons/images/thumb/0/03/Gamemap_7.40_minimap_dota2_gameasset.png/600px-Gamemap_7.40_minimap_dota2_gameasset.png') center/115%;
             border: 2px solid #333;
             border-radius: 8px;
             overflow: hidden;
@@ -220,6 +220,27 @@
         .player-dot.dead {
             opacity: 0.3;
             filter: grayscale(100%);
+        }
+
+        .tower {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            transform: translate(-50%, -50%);
+            border: 1px solid rgba(255,255,255,0.5);
+        }
+
+        .tower.radiant {
+            background: #4ade80;
+        }
+
+        .tower.dire {
+            background: #ef4444;
+        }
+
+        .tower.destroyed {
+            opacity: 0.2;
+            background: #333;
         }
 
         /* Player tables */
@@ -363,6 +384,53 @@
             }
         }
 
+        // Tower positions on minimap (as percentages)
+        // Bit order: 0=TopT1, 1=TopT2, 2=TopT3, 3=MidT1, 4=MidT2, 5=MidT3, 6=BotT1, 7=BotT2, 8=BotT3, 9=AncientTop, 10=AncientBot
+        const TOWER_POSITIONS = {
+            radiant: [
+                { bit: 0, x: 15, y: 30 },   // Top T1
+                { bit: 1, x: 10, y: 50 },   // Top T2
+                { bit: 2, x: 8, y: 70 },    // Top T3
+                { bit: 3, x: 35, y: 55 },   // Mid T1
+                { bit: 4, x: 25, y: 68 },   // Mid T2
+                { bit: 5, x: 18, y: 78 },   // Mid T3
+                { bit: 6, x: 55, y: 82 },   // Bot T1
+                { bit: 7, x: 35, y: 88 },   // Bot T2
+                { bit: 8, x: 22, y: 88 },   // Bot T3
+                { bit: 9, x: 12, y: 82 },   // Ancient Top
+                { bit: 10, x: 16, y: 86 },  // Ancient Bot
+            ],
+            dire: [
+                { bit: 0, x: 45, y: 18 },   // Top T1
+                { bit: 1, x: 65, y: 12 },   // Top T2
+                { bit: 2, x: 78, y: 12 },   // Top T3
+                { bit: 3, x: 65, y: 45 },   // Mid T1
+                { bit: 4, x: 75, y: 32 },   // Mid T2
+                { bit: 5, x: 82, y: 22 },   // Mid T3
+                { bit: 6, x: 85, y: 70 },   // Bot T1
+                { bit: 7, x: 90, y: 50 },   // Bot T2
+                { bit: 8, x: 92, y: 30 },   // Bot T3
+                { bit: 9, x: 84, y: 14 },   // Ancient Top
+                { bit: 10, x: 88, y: 18 },  // Ancient Bot
+            ]
+        };
+
+        function renderTowers(towerState, team) {
+            let html = '';
+            const positions = TOWER_POSITIONS[team];
+
+            positions.forEach(tower => {
+                const isAlive = (towerState & (1 << tower.bit)) !== 0;
+                const destroyedClass = isAlive ? '' : ' destroyed';
+                html += '<div class="tower ' + team + destroyedClass + '" ';
+                html += 'style="left: ' + tower.x + '%; top: ' + tower.y + '%;" ';
+                html += 'title="' + team.charAt(0).toUpperCase() + team.slice(1) + ' Tower (Bit ' + tower.bit + ')">';
+                html += '</div>';
+            });
+
+            return html;
+        }
+
         function renderGame(data) {
             if (!data.active) {
                 renderNoGame();
@@ -432,6 +500,14 @@
             if (playersWithPositions === 0) {
                 html += '<div class="minimap-no-positions">Position data not available</div>';
             }
+
+            // Render towers
+            html += renderTowers(data.radiant.towerState || 0, 'radiant');
+            html += renderTowers(data.dire.towerState || 0, 'dire');
+
+            // Log tower state for debugging
+            console.log('[Minimap] Radiant towerState:', data.radiant.towerState, 'binary:', (data.radiant.towerState || 0).toString(2));
+            console.log('[Minimap] Dire towerState:', data.dire.towerState, 'binary:', (data.dire.towerState || 0).toString(2));
 
             html += '</div></div>';
 
