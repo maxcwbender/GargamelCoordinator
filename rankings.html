@@ -284,6 +284,17 @@
       color: #2c3e50;
     }
 
+    .player-name a {
+      color: #2c3e50;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .player-name a:hover {
+      color: #4e9fd1;
+      text-decoration: underline;
+    }
+
     .stat-value {
       font-weight: 600;
       color: #27ae60;
@@ -345,6 +356,17 @@
       font-size: 1.35rem;
       font-weight: 700;
       color: #2c3e50;
+    }
+
+    .potm-name a {
+      color: #2c3e50;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .potm-name a:hover {
+      color: #4e9fd1;
+      text-decoration: underline;
     }
 
     .potm-stats {
@@ -562,6 +584,13 @@
       return div.innerHTML;
     }
 
+    function renderPlayerLink(name, accountId) {
+      if (accountId) {
+        return '<a href="https://www.opendota.com/players/' + accountId + '" target="_blank" rel="noopener">' + escapeHtml(name) + '</a>';
+      }
+      return escapeHtml(name);
+    }
+
     function renderRankings(data) {
       const container = document.getElementById('rankings-container');
       const cacheInfo = document.getElementById('cache-info');
@@ -601,7 +630,7 @@
         }
         html += '<div class="potm-info">';
         html += '<h2>League MVP</h2>';
-        html += '<div class="potm-name">' + escapeHtml(p.name) + '</div>';
+        html += '<div class="potm-name">' + renderPlayerLink(p.name, p.accountId) + '</div>';
         html += '<div class="potm-stats"><strong>' + p.mvpCount + '</strong> MVP' + (p.mvpCount !== 1 ? 's' : '') +
                 ' &middot; <strong>' + p.svpCount + '</strong> SVP' + (p.svpCount !== 1 ? 's' : '') +
                 ' &middot; ' + p.wins + 'W-' + p.losses + 'L</div>';
@@ -635,7 +664,7 @@
         } else {
           html += '<div class="player-avatar"></div>';
         }
-        html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+        html += '<span class="player-name">' + renderPlayerLink(player.name, player.accountId) + '</span>';
         html += '</div></td>';
         html += '<td class="stat-secondary">' + player.wins + '-' + player.losses +
                 ' <span style="color:#aaa">(' + player.matches + ' games)</span></td>';
@@ -672,7 +701,7 @@
         } else {
           html += '<div class="player-avatar"></div>';
         }
-        html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+        html += '<span class="player-name">' + renderPlayerLink(player.name, player.accountId) + '</span>';
         html += '</div></td>';
         html += '<td class="stat-secondary">' +
                 Math.round(player.avgKills) + ' / ' +
@@ -708,7 +737,7 @@
         } else {
           html += '<div class="player-avatar"></div>';
         }
-        html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+        html += '<span class="player-name">' + renderPlayerLink(player.name, player.accountId) + '</span>';
         html += '</div></td>';
         html += '<td class="stat-secondary">' +
                 Math.round(player.avgNetWorth).toLocaleString() +
@@ -742,7 +771,7 @@
         } else {
           html += '<div class="player-avatar"></div>';
         }
-        html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+        html += '<span class="player-name">' + renderPlayerLink(player.name, player.accountId) + '</span>';
         html += '</div></td>';
         html += '<td class="stat-secondary">' +
                 player.wards_placed.toLocaleString() +
@@ -781,7 +810,7 @@
           } else {
             html += '<div class="player-avatar"></div>';
           }
-          html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+          html += '<span class="player-name">' + renderPlayerLink(player.name, player.accountId) + '</span>';
           html += '</div></td>';
           html += '<td class="stat-secondary">' +
                   player.observer_kills.toLocaleString() +
@@ -818,7 +847,7 @@
           } else {
             html += '<div class="player-avatar"></div>';
           }
-          html += '<span class="player-name">' + escapeHtml(player.name) + '</span>';
+          html += '<span class="player-name">' + renderPlayerLink(player.name, player.accountId) + '</span>';
           html += '</div></td>';
           html += '<td class="stat-secondary midas-hide-mobile">' +
                   Math.round(player.avgNetWorth).toLocaleString() + ' gold' +
