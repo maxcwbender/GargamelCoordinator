@@ -1691,10 +1691,12 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 		h.lastKnownMemberCount = memberCount
 
 		// Auto-trigger polling when 7 players join (7 players + bot = 8 total members)
-		// Always require normal player count, even in debug mode
+		// In debug mode with small teams, don't trigger polling at all
 		autoPollSize := 8
+		totalExpectedPlayers := len(h.gameConfig.RadiantTeam) + len(h.gameConfig.DireTeam)
+		skipPollingForDebug := h.gameConfig.DebugMode && totalExpectedPlayers < 10
 
-		if memberCount >= autoPollSize && state == 0 { // UI state
+		if memberCount >= autoPollSize && state == 0 && !skipPollingForDebug { // UI state
 			h.pollingMutex.Lock()
 			if !h.pollingDone && !h.pollingActive && h.pollCallbackURL != "" {
 				h.pollingActive = true
@@ -1706,6 +1708,8 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 			} else {
 				h.pollingMutex.Unlock()
 			}
+		} else if skipPollingForDebug && memberCount >= 2 {
+			log.Printf("[Game %s] Debug mode with small teams (%d expected) - skipping poll trigger", h.gameID, totalExpectedPlayers)
 		}
 	}
 
@@ -1915,7 +1919,8 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 				h.pollingMessageSent = true // Mark as sent to prevent duplicates
 				h.pollingMutex.Unlock()
 
-				log.Printf("[Game %s] All players ready but polling is active — delaying launch", h.gameID)
+				log.Printf("[Game %s] All players ready but polling is active — delaying launch (DebugMode=%v, expectedPlayers=%d)",
+					h.gameID, h.gameConfig.DebugMode, totalExpectedPlayers)
 				if h.dota != nil && h.currentLobbyID != 0 {
 					// Join channel and send message
 					go func() {
@@ -1990,8 +1995,11 @@ func (h *gcHandler) launchGame() {
 	skipPolling := h.gameConfig.DebugMode && totalExpectedPlayers < 10
 
 	if pollingActive && !skipPolling {
-		log.Printf("[Game %s] All players ready but polling is active — delaying launch", h.gameID)
+		log.Printf("[Game %s] All players ready but polling is active — delaying launch (DebugMode=%v, expectedPlayers=%d)",
+			h.gameID, h.gameConfig.DebugMode, totalExpectedPlayers)
 		return
+	} else if pollingActive && skipPolling {
+		log.Printf("[Game %s] Debug mode with small teams (%d players) - bypassing poll wait to launch", h.gameID, totalExpectedPlayers)
 	}
 
 	h.setState("launching")
