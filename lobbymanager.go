@@ -2320,18 +2320,25 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 	log.Printf("[Game %s] createDotaLobby: Connecting to Steam...", config.GameID)
 	handler.client = client
 
-	// IMPORTANT: Check if account might already be in use from a previous session
-	// If the account was not properly logged out, we might get connection errors
-	// Python's steam library handles this automatically, but we need to be aware of it
+	// Fetch live Steam CM server list from Steam's API before connecting.
+	// Without this, Connect() falls back to a hardcoded static list that may contain
+	// dead/unreachable servers (causing "no route to host" errors).
+	if err := steam.InitializeSteamDirectory(); err != nil {
+		log.Printf("[Game %s] Warning: failed to initialize Steam directory (will use static server list): %v", config.GameID, err)
+	} else {
+		log.Printf("[Game %s] Steam directory initialized with live server list", config.GameID)
+	}
+
 	log.Printf("[Game %s] Using account %s (index %d)", config.GameID, config.Username, handler.accountIndex)
 
 	var gcInitialized bool
 	var lobbyCreated bool
 	var connectionRetries int
-	const maxConnectionRetries = 15 // Increased retries for faster recovery
-	retryDelay := 1 * time.Second   // Reduced from 15s to 1s for faster retries
+	const maxConnectionRetries = 15
+	retryDelay := 2 * time.Second
 	var connectionTimeout time.Duration = 30 * time.Second
 	var lastConnectionAttempt time.Time
+	var retrying bool // guards against concurrent retry attempts
 
 	// Start event loop in background - it must keep running
 	// The event loop must continue running to maintain the Steam connection
@@ -2380,19 +2387,23 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 				return
 
 			case <-connectionTimeoutTicker.C:
-				// Check if we've been trying to connect for too long without success
-				if !connected && !lastConnectionAttempt.IsZero() {
+				// Check if we've been trying to connect for too long without success.
+				// Skip if the error/disconnect handler is already performing a retry.
+				if !connected && !retrying && !lastConnectionAttempt.IsZero() {
 					elapsed := time.Since(lastConnectionAttempt)
 					if elapsed > connectionTimeout {
-						log.Printf("[Game %s] Connection timeout after %v, retrying...", config.GameID, elapsed)
+						retrying = true
 						connectionRetries++
 						if connectionRetries <= maxConnectionRetries {
-							lastConnectionAttempt = time.Now()
+							log.Printf("[Game %s] Connection timeout after %v (attempt %d/%d), retrying with new server...",
+								config.GameID, elapsed, connectionRetries, maxConnectionRetries)
 							client.Disconnect()
-							time.Sleep(1 * time.Second)
+							time.Sleep(retryDelay)
+							lastConnectionAttempt = time.Now()
 							client.Connect()
-							retryDelay *= 2
-							connectionTimeout = 30 * time.Second * time.Duration(connectionRetries) // Increase timeout with retries
+							if retryDelay < 30*time.Second {
+								retryDelay *= 2
+							}
 						} else {
 							log.Printf("[Game %s] Connection failed after %d retries, giving up", config.GameID, maxConnectionRetries)
 							handler.setError(fmt.Sprintf("Failed to connect to Steam after %d retries", maxConnectionRetries))
@@ -2401,6 +2412,7 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 							}
 							return
 						}
+						retrying = false
 					}
 				}
 
@@ -2419,9 +2431,10 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 				case *steam.ConnectedEvent:
 					connected = true
 					log.Printf("[Game %s] Connected to Steam, logging in...", config.GameID)
-					// Reset retry counter on successful connection
+					// Reset retry state on successful connection
 					connectionRetries = 0
-					retryDelay = 3 * time.Second
+					retryDelay = 2 * time.Second
+					retrying = false
 					lastConnectionAttempt = time.Time{} // Clear timeout
 					client.Auth.LogOn(&steam.LogOnDetails{
 						Username: config.Username,
@@ -2607,68 +2620,74 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 
 				case error:
 					log.Printf("[Game %s] Steam error: %v", config.GameID, e)
-					// Python's steam library handles connection errors internally via reconnect()
-					// We need to manually detect and retry connection errors
 					errStr := e.Error()
 					if strings.Contains(errStr, "connect: no route to host") ||
 						strings.Contains(errStr, "connection refused") ||
 						strings.Contains(errStr, "timeout") ||
-						strings.Contains(errStr, "Connect failed") {
-						connected = false // Reset connected flag
+						strings.Contains(errStr, "Connect failed") ||
+						strings.Contains(errStr, "use of closed network connection") {
+						connected = false
+						// Skip if a retry is already in progress (e.g. from timeout handler)
+						if retrying {
+							log.Printf("[Game %s] Connection error (already retrying, skipping): %v", config.GameID, e)
+							break
+						}
+						retrying = true
 						connectionRetries++
 						if connectionRetries <= maxConnectionRetries {
-							// Reduced retry delay from 15s to 1s for faster recovery
-							backoffDelay := 1 * time.Second
 							log.Printf("[Game %s] Connection error (attempt %d/%d), will retry in %v...",
-								config.GameID, connectionRetries, maxConnectionRetries, backoffDelay)
-							time.Sleep(backoffDelay)
-							// Try to reconnect (Python's steam.reconnect() does this automatically)
+								config.GameID, connectionRetries, maxConnectionRetries, retryDelay)
 							client.Disconnect()
-							time.Sleep(1 * time.Second)
+							time.Sleep(retryDelay)
+							if retryDelay < 30*time.Second {
+								retryDelay *= 2
+							}
 							lastConnectionAttempt = time.Now()
 							client.Connect()
 						} else {
 							log.Printf("[Game %s] Connection failed after %d retries, giving up", config.GameID, maxConnectionRetries)
 							handler.setError(fmt.Sprintf("Failed to connect to Steam after %d retries: %v", maxConnectionRetries, e))
-							// Release account on failure
 							if accountPool != nil && handler.accountIndex >= 0 {
 								accountPool.Release(handler.accountIndex, config.GameID)
 							}
 							return
 						}
+						retrying = false
 					} else {
-						// Non-connection error, don't retry
 						handler.setError(fmt.Sprintf("Steam error: %v", e))
 					}
 
 				case *steam.DisconnectedEvent:
 					log.Printf("[Game %s] Disconnected from Steam", config.GameID)
-					connected = false // Reset connected flag
+					connected = false
 
-					// Python's steam library automatically handles reconnection via steam.reconnect(maxdelay=15)
-					// We need to manually handle this. Only retry if we haven't created a lobby yet.
 					if handler.currentLobbyID == 0 {
+						// Skip if a retry is already in progress
+						if retrying {
+							log.Printf("[Game %s] Disconnected (already retrying, skipping)", config.GameID)
+							break
+						}
+						retrying = true
 						connectionRetries++
 						if connectionRetries <= maxConnectionRetries {
-							// Reduced retry delay from 15s to 1s for faster recovery
-							backoffDelay := 1 * time.Second
 							log.Printf("[Game %s] Disconnected (attempt %d/%d), will retry in %v...",
-								config.GameID, connectionRetries, maxConnectionRetries, backoffDelay)
-							time.Sleep(backoffDelay)
+								config.GameID, connectionRetries, maxConnectionRetries, retryDelay)
+							time.Sleep(retryDelay)
+							if retryDelay < 30*time.Second {
+								retryDelay *= 2
+							}
 							lastConnectionAttempt = time.Now()
 							client.Connect()
 						} else {
 							log.Printf("[Game %s] Disconnected after %d retries, giving up", config.GameID, maxConnectionRetries)
 							handler.setError("Disconnected from Steam after multiple retries")
-							// Release account on failure
 							if accountPool != nil && handler.accountIndex >= 0 {
 								accountPool.Release(handler.accountIndex, config.GameID)
 							}
 							return
 						}
+						retrying = false
 					} else {
-						// Lobby was created - Python's steam library would auto-reconnect here
-						// We'll attempt a single reconnect for existing lobbies
 						log.Printf("[Game %s] Disconnected but lobby exists (ID: %d), attempting reconnect...", config.GameID, handler.currentLobbyID)
 						go func() {
 							time.Sleep(5 * time.Second)
