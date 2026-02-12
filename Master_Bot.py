@@ -1272,8 +1272,8 @@ class Master_Bot(commands.Bot):
                     logger.info(f"[Game {game_id}] Poll already active, skipping duplicate trigger.")
                     return
 
-            # Mark it active via REST API
-            await self.rest_api.start_polling(game_id)
+            # Note: start_polling is called inside view.start_poll() below,
+            # so we don't call it here to avoid duplicate lobby chat messages.
 
             # Create the poll view
             view = self.GameModePoll(
