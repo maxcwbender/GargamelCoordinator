@@ -289,6 +289,7 @@ type gcHandler struct {
 	keepaliveMutex       sync.Mutex
 	pollingActive        bool
 	pollingDone          bool
+	pollCallbackSent     bool   // True once we've notified Master_Bot to start the poll (prevents duplicate callbacks)
 	pollingMutex         sync.Mutex
 	pollingMessageSent   bool   // Track if we've sent the "polling active" message to avoid duplicates
 	pollCallbackURL      string // URL to notify when polling should be triggered
@@ -1701,11 +1702,12 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 
 		if memberCount >= autoPollSize && state == 0 { // UI state
 			h.pollingMutex.Lock()
-			if !h.pollingDone && !h.pollingActive && h.pollCallbackURL != "" {
-				h.pollingActive = true
+			if !h.pollingDone && !h.pollCallbackSent && h.pollCallbackURL != "" {
+				h.pollCallbackSent = true
 				h.pollingMutex.Unlock()
 
-				// Notify Master_Bot to start polling
+				// Notify Master_Bot to start polling.
+				// pollingActive will be set when Master_Bot confirms via /poll/{id} with action "start".
 				go h.notifyPollingStarted()
 				log.Printf("[Game %s] Lobby has %d members (threshold=%d, debug=%v) — triggering game mode poll",
 					h.gameID, memberCount, autoPollSize, h.gameConfig.DebugMode)
