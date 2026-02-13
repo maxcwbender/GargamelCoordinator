@@ -34,7 +34,8 @@ let isRefreshingStats = false; // Prevent concurrent refreshes
 let liveGameCache = {
     data: null,
     lastFetched: 0,
-    isActive: false
+    isActive: false,
+    gameCount: 0
 };
 
 // ─── Dota 2 Hero & Item Constants (from OpenDota) ────────────────────────────
@@ -702,22 +703,22 @@ async function fetchLiveGame() {
             logger.info(`[LiveGame] League IDs in response: ${JSON.stringify(leagueIds)}`);
         }
 
-        // Filter to our league only
-        const ourGame = games.find(g => g.league_id === LEAGUE_ID);
-        logger.info(`[LiveGame] Looking for league_id=${LEAGUE_ID}, found: ${!!ourGame}`);
+        // Filter to our league only — return ALL matching games
+        const ourGames = games.filter(g => g.league_id === LEAGUE_ID);
+        logger.info(`[LiveGame] Looking for league_id=${LEAGUE_ID}, found ${ourGames.length} game(s)`);
 
-        if (ourGame) {
-            logger.info(`[LiveGame] Found our league game: match_id=${ourGame.match_id}, has scoreboard=${!!ourGame.scoreboard}`);
-            if (ourGame.scoreboard) {
-                logger.info(`[LiveGame] Scoreboard: duration=${ourGame.scoreboard.duration}, radiant=${!!ourGame.scoreboard.radiant}, dire=${!!ourGame.scoreboard.dire}`);
+        ourGames.forEach((game, i) => {
+            logger.info(`[LiveGame] Game ${i + 1}: match_id=${game.match_id}, has scoreboard=${!!game.scoreboard}`);
+            if (game.scoreboard) {
+                logger.info(`[LiveGame] Game ${i + 1} scoreboard: duration=${game.scoreboard.duration}, radiant=${!!game.scoreboard.radiant}, dire=${!!game.scoreboard.dire}`);
             }
-        }
+        });
 
-        return ourGame || null;
+        return ourGames;
     } catch (error) {
         const elapsed = Date.now() - startTime;
         logger.error(`[LiveGame] Failed after ${elapsed}ms:`, error.message || error);
-        return null;
+        return [];
     }
 }
 
@@ -759,51 +760,18 @@ server.get('/api/live-game', async (req, res) => {
     const requestStart = Date.now();
     logger.info('[API /api/live-game] Request received');
 
-    try {
-        const now = Date.now();
+    // Helper: resolve item ID to { name, img } or null
+    function resolveItem(id) {
+        if (!id || id === 0) return null;
+        const item = dotaConstants.items[id];
+        return item ? { id, name: item.name, img: item.img } : { id, name: 'Unknown', img: null };
+    }
 
-        // Return cached data if still fresh
-        if (liveGameCache.data && (now - liveGameCache.lastFetched) < LIVE_GAME_CACHE_TTL) {
-            logger.info('[API /api/live-game] Returning cached data');
-            return res.json(liveGameCache.data);
-        }
-
-        logger.info('[API /api/live-game] Cache miss, fetching fresh data...');
-        const game = await fetchLiveGame();
-        liveGameCache.lastFetched = Date.now();
-        liveGameCache.isActive = !!game;
-
-        if (!game) {
-            logger.info('[API /api/live-game] No game found, returning inactive');
-            liveGameCache.data = { active: false };
-            return res.json(liveGameCache.data);
-        }
-
-        // Defensive checks for game structure
-        if (!game.scoreboard) {
-            logger.warn('[API /api/live-game] Game found but no scoreboard data yet (picking phase?)');
-            liveGameCache.data = { active: false, pending: true, matchId: game.match_id };
-            return res.json(liveGameCache.data);
-        }
-
-        if (!game.scoreboard.radiant || !game.scoreboard.dire) {
-            logger.warn('[API /api/live-game] Scoreboard missing team data (game starting?)');
-            liveGameCache.data = { active: false, pending: true, matchId: game.match_id };
-            return res.json(liveGameCache.data);
-        }
-
+    // Helper: transform a single raw game into frontend format
+    function transformGameData(game) {
         const radiantPlayerList = game.scoreboard.radiant.players || [];
         const direPlayerList = game.scoreboard.dire.players || [];
-        logger.info(`[API /api/live-game] Processing ${radiantPlayerList.length} radiant, ${direPlayerList.length} dire players`);
 
-        // Helper: resolve item ID to { name, img } or null
-        function resolveItem(id) {
-            if (!id || id === 0) return null;
-            const item = dotaConstants.items[id];
-            return item ? { id, name: item.name, img: item.img } : { id, name: 'Unknown', img: null };
-        }
-
-        // Helper: transform a scoreboard player to frontend format
         function transformPlayer(p, team) {
             const playerInfo = (game.players || []).find(pl => pl.account_id === p.account_id);
             const hero = dotaConstants.heroes[playerInfo?.hero_id];
@@ -830,22 +798,7 @@ server.get('/api/live-game', async (req, res) => {
             };
         }
 
-        // Transform data for frontend
-        const radiantPlayers = radiantPlayerList.map(p => transformPlayer(p, 'radiant'));
-        const direPlayers = direPlayerList.map(p => transformPlayer(p, 'dire'));
-
-        // Log raw scoreboard data for debugging
-        logger.info(`[API /api/live-game] Raw scoreboard data: radiant.tower_state=${game.scoreboard.radiant.tower_state}, dire.tower_state=${game.scoreboard.dire.tower_state}`);
-
-        // Log sample player position data
-        if (radiantPlayerList.length > 0) {
-            const p = radiantPlayerList[0];
-            logger.info(`[API /api/live-game] Sample player position: position_x=${p.position_x}, position_y=${p.position_y}`);
-        }
-
-        // Cache the transformed data (not raw API response)
-        liveGameCache.data = {
-            active: true,
+        return {
             matchId: game.match_id,
             duration: game.scoreboard.duration || 0,
             spectators: game.spectators || 0,
@@ -853,14 +806,63 @@ server.get('/api/live-game', async (req, res) => {
                 score: game.scoreboard.radiant.score || 0,
                 towerState: game.scoreboard.radiant.tower_state || 0,
                 barracksState: game.scoreboard.radiant.barracks_state || 0,
-                players: radiantPlayers
+                players: radiantPlayerList.map(p => transformPlayer(p, 'radiant'))
             },
             dire: {
                 score: game.scoreboard.dire.score || 0,
                 towerState: game.scoreboard.dire.tower_state || 0,
                 barracksState: game.scoreboard.dire.barracks_state || 0,
-                players: direPlayers
+                players: direPlayerList.map(p => transformPlayer(p, 'dire'))
             }
+        };
+    }
+
+    try {
+        const now = Date.now();
+
+        // Return cached data if still fresh
+        if (liveGameCache.data && (now - liveGameCache.lastFetched) < LIVE_GAME_CACHE_TTL) {
+            logger.info('[API /api/live-game] Returning cached data');
+            return res.json(liveGameCache.data);
+        }
+
+        logger.info('[API /api/live-game] Cache miss, fetching fresh data...');
+        const rawGames = await fetchLiveGame();
+        liveGameCache.lastFetched = Date.now();
+        liveGameCache.isActive = rawGames.length > 0;
+        liveGameCache.gameCount = rawGames.length;
+
+        if (rawGames.length === 0) {
+            logger.info('[API /api/live-game] No games found, returning inactive');
+            liveGameCache.data = { active: false, gameCount: 0, games: [], pendingGames: [] };
+            return res.json(liveGameCache.data);
+        }
+
+        const transformedGames = [];
+        const pendingGames = [];
+
+        for (const game of rawGames) {
+            // Defensive checks for game structure
+            if (!game.scoreboard || !game.scoreboard.radiant || !game.scoreboard.dire) {
+                logger.warn(`[API /api/live-game] Game match_id=${game.match_id} missing scoreboard data (picking phase?)`);
+                pendingGames.push({ pending: true, matchId: game.match_id });
+                continue;
+            }
+
+            const radiantPlayerList = game.scoreboard.radiant.players || [];
+            const direPlayerList = game.scoreboard.dire.players || [];
+            logger.info(`[API /api/live-game] Processing game match_id=${game.match_id}: ${radiantPlayerList.length} radiant, ${direPlayerList.length} dire players`);
+
+            transformedGames.push(transformGameData(game));
+        }
+
+        logger.info(`[API /api/live-game] Transformed ${transformedGames.length} active game(s), ${pendingGames.length} pending game(s)`);
+
+        liveGameCache.data = {
+            active: transformedGames.length > 0,
+            gameCount: transformedGames.length,
+            games: transformedGames,
+            pendingGames: pendingGames
         };
 
         const elapsed = Date.now() - requestStart;
@@ -872,7 +874,7 @@ server.get('/api/live-game', async (req, res) => {
         logger.error(`[API /api/live-game] ERROR after ${elapsed}ms:`, error.message || error);
         logger.error('[API /api/live-game] Stack:', error.stack);
         // Return inactive rather than crashing
-        return res.json({ active: false, error: 'server_error' });
+        return res.json({ active: false, gameCount: 0, games: [], pendingGames: [], error: 'server_error' });
     }
 });
 
@@ -882,18 +884,19 @@ server.get('/api/live-game/status', async (req, res) => {
 
         // Use cached status if recent
         if ((now - liveGameCache.lastFetched) < LIVE_GAME_CACHE_TTL) {
-            return res.json({ active: liveGameCache.isActive });
+            return res.json({ active: liveGameCache.isActive, gameCount: liveGameCache.gameCount || 0 });
         }
 
         logger.info('[API /api/live-game/status] Cache miss, checking Steam API...');
-        const game = await fetchLiveGame();
-        liveGameCache.isActive = !!game;
+        const games = await fetchLiveGame();
+        liveGameCache.isActive = games.length > 0;
+        liveGameCache.gameCount = games.length;
         liveGameCache.lastFetched = now;
 
-        return res.json({ active: !!game });
+        return res.json({ active: games.length > 0, gameCount: games.length });
     } catch (error) {
         logger.error('[API /api/live-game/status] ERROR:', error.message || error);
-        return res.json({ active: false, error: 'server_error' });
+        return res.json({ active: false, gameCount: 0, error: 'server_error' });
     }
 });
 

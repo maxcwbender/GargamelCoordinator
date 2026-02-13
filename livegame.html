@@ -114,6 +114,69 @@
             50% { opacity: 0.3; }
         }
 
+        /* Game tab navigation */
+        .game-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .game-tab {
+            padding: 10px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            color: #666;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .game-tab:hover {
+            border-color: #4e9fd1;
+            color: #4e9fd1;
+            background: rgba(78, 159, 209, 0.05);
+        }
+
+        .game-tab.active {
+            border-color: #4e9fd1;
+            background: rgba(78, 159, 209, 0.1);
+            color: #4e9fd1;
+        }
+
+        .game-tab .tab-score {
+            font-size: 13px;
+            color: #999;
+            font-weight: 500;
+        }
+
+        .game-tab.active .tab-score {
+            color: #4e9fd1;
+        }
+
+        .game-tab .tab-duration {
+            font-size: 12px;
+            color: #bbb;
+            font-weight: 400;
+        }
+
+        .game-tab.active .tab-duration {
+            color: rgba(78, 159, 209, 0.7);
+        }
+
+        .pending-notice {
+            text-align: center;
+            color: #999;
+            font-size: 13px;
+            margin-top: 12px;
+        }
+
         /* Match info header */
         .match-header {
             background: white;
@@ -431,6 +494,10 @@
 
         /* Responsive */
         @media (max-width: 968px) {
+            .game-tabs {
+                justify-content: center;
+            }
+
             .teams-container {
                 grid-template-columns: 1fr;
             }
@@ -496,14 +563,131 @@
     <script>
         const POLL_INTERVAL = 5000; // Poll every 5 seconds
 
+        // Multi-game state
+        let allGames = [];
+        let pendingGames = [];
+        let selectedGameIndex = 0;
+        let selectedMatchId = null;
+
         async function fetchLiveGame() {
             try {
                 const response = await fetch('/api/live-game');
                 const data = await response.json();
-                renderGame(data);
+
+                if (!data.active || !data.games || data.games.length === 0) {
+                    allGames = [];
+                    pendingGames = data.pendingGames || [];
+
+                    if (pendingGames.length > 0) {
+                        renderPendingGame(pendingGames[0]);
+                    } else {
+                        renderNoGame();
+                    }
+                    return;
+                }
+
+                allGames = data.games;
+                pendingGames = data.pendingGames || [];
+
+                resolveSelectedGame();
+                renderMultiGameView();
             } catch (error) {
+                allGames = [];
+                pendingGames = [];
                 renderNoGame();
             }
+        }
+
+        // Preserve the user's tab selection across poll refreshes
+        function resolveSelectedGame() {
+            if (allGames.length === 0) {
+                selectedGameIndex = 0;
+                selectedMatchId = null;
+                return;
+            }
+
+            // If we were tracking a specific match, find it in the new data
+            if (selectedMatchId !== null) {
+                const idx = allGames.findIndex(g => g.matchId === selectedMatchId);
+                if (idx !== -1) {
+                    selectedGameIndex = idx;
+                    return;
+                }
+            }
+
+            // Default to first game
+            selectedGameIndex = 0;
+            selectedMatchId = allGames[0].matchId;
+        }
+
+        function selectGame(index) {
+            if (index >= 0 && index < allGames.length) {
+                selectedGameIndex = index;
+                selectedMatchId = allGames[index].matchId;
+                renderMultiGameView();
+            }
+        }
+
+        // Orchestrator: renders tabs (if needed) + selected game
+        function renderMultiGameView() {
+            const container = document.getElementById('game-container');
+            let html = '';
+
+            // Live badge
+            html += '<div class="live-badge">';
+            html += '<div class="live-dot"></div>';
+            html += '<span>LIVE</span>';
+            html += '</div>';
+
+            // Game tabs (only if 2+ active games)
+            if (allGames.length > 1) {
+                html += renderGameTabs();
+            }
+
+            // Selected game content
+            const game = allGames[selectedGameIndex];
+            if (game) {
+                html += renderGameContent(game);
+            }
+
+            // Pending games notice
+            if (pendingGames.length > 0) {
+                html += '<div class="pending-notice">';
+                html += pendingGames.length + ' additional game' + (pendingGames.length > 1 ? 's' : '') + ' in picking phase';
+                html += '</div>';
+            }
+
+            container.innerHTML = html;
+
+            // Attach tab click handlers after DOM update
+            if (allGames.length > 1) {
+                document.querySelectorAll('.game-tab').forEach(tab => {
+                    tab.addEventListener('click', function() {
+                        const index = parseInt(this.getAttribute('data-game-index'));
+                        selectGame(index);
+                    });
+                });
+            }
+        }
+
+        function renderGameTabs() {
+            let html = '<div class="game-tabs">';
+
+            allGames.forEach((game, index) => {
+                const isActive = index === selectedGameIndex;
+                const activeClass = isActive ? ' active' : '';
+                const duration = formatDuration(game.duration);
+                const score = game.radiant.score + ' - ' + game.dire.score;
+
+                html += '<button class="game-tab' + activeClass + '" data-game-index="' + index + '">';
+                html += '<span>Game ' + (index + 1) + '</span>';
+                html += '<span class="tab-score">' + score + '</span>';
+                html += '<span class="tab-duration">' + duration + '</span>';
+                html += '</button>';
+            });
+
+            html += '</div>';
+            return html;
         }
 
         // Tower positions on minimap (as percentages)
@@ -591,26 +775,10 @@
             return html;
         }
 
-        function renderGame(data) {
-            if (!data.active) {
-                if (data.pending) {
-                    renderPendingGame(data);
-                } else {
-                    renderNoGame();
-                }
-                return;
-            }
-
+        // Renders a single game's content (header, minimap, teams) — returns HTML string
+        function renderGameContent(data) {
             const duration = formatDuration(data.duration);
-            const container = document.getElementById('game-container');
-
             let html = '';
-
-            // Live badge
-            html += '<div class="live-badge">';
-            html += '<div class="live-dot"></div>';
-            html += '<span>LIVE</span>';
-            html += '</div>';
 
             // Match header
             html += '<div class="match-header">';
@@ -626,7 +794,6 @@
             html += '<div class="minimap">';
             html += '<div class="minimap-grid"></div>';
 
-            // Debug: log position data
             let playersWithPositions = 0;
 
             // Plot radiant players
@@ -697,7 +864,7 @@
 
             html += '</div>';
 
-            container.innerHTML = html;
+            return html;
         }
 
         function renderItemGrid(items) {
