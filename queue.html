@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Queue - Gargamel Dota League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #0f0f1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .navbar-brand img { height: 36px; width: auto; }
+    .navbar-links { display: flex; gap: 8px; list-style: none; }
+    .navbar-links a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: 6px;
+      transition: color 0.2s, background 0.2s;
+    }
+    .navbar-links a:hover { color: #fff; background: rgba(255,255,255,0.08); }
+    .navbar-links a.active { color: #4e9fd1; background: rgba(78,159,209,0.1); }
+    .navbar-auth { display: flex; align-items: center; gap: 10px; }
+    .navbar-auth a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.15);
+      transition: all 0.2s;
+    }
+    .navbar-auth a:hover { color: #fff; border-color: rgba(255,255,255,0.35); }
+    .navbar-auth a.logout { border-color: #ef4444; color: #ef4444; }
+    .navbar-auth a.logout:hover { background: rgba(239,68,68,0.1); }
+
+    /* ── Page layout ────────────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1.5rem;
+      gap: 1.5rem;
+    }
+
+    /* ── Queue header card ──────────────────────────────────── */
+    .queue-header {
+      width: 100%;
+      max-width: 760px;
+      background: #1a1a2e;
+      border: 1px solid rgba(78,159,209,0.2);
+      border-radius: 16px;
+      padding: 1.75rem 2rem;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+
+    .queue-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 0.5rem;
+    }
+
+    .queue-subtitle {
+      font-size: 0.9rem;
+      color: #6b7280;
+    }
+
+    .queue-progress-wrap {
+      margin-top: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .queue-count-label {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #4e9fd1;
+      white-space: nowrap;
+    }
+
+    .progress-bar-bg {
+      flex: 1;
+      height: 10px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4e9fd1, #22c55e);
+      border-radius: 5px;
+      transition: width 0.4s ease;
+    }
+
+    /* Ready check banner */
+    .ready-check-banner {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background: rgba(234,179,8,0.12);
+      border: 1px solid rgba(234,179,8,0.35);
+      border-radius: 8px;
+      color: #eab308;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+
+    .ready-check-banner.visible { display: flex; }
+
+    .pulse-dot {
+      width: 10px;
+      height: 10px;
+      background: #eab308;
+      border-radius: 50%;
+      animation: pulse 1.2s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.75); }
+    }
+
+    /* ── Player grid ────────────────────────────────────────── */
+    .player-grid {
+      width: 100%;
+      max-width: 760px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+
+    .player-card {
+      background: #1a1a2e;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      transition: border-color 0.2s;
+    }
+
+    .player-card:hover { border-color: rgba(78,159,209,0.35); }
+
+    .player-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: #2a2a40;
+      flex-shrink: 0;
+    }
+
+    .player-avatar-placeholder {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: #2a2a40;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      flex-shrink: 0;
+    }
+
+    .player-info { min-width: 0; }
+
+    .player-name {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #e0e0e0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .player-rating {
+      font-size: 0.75rem;
+      color: #6b7280;
+      margin-top: 2px;
+    }
+
+    .rating-badge {
+      margin-left: auto;
+      padding: 3px 8px;
+      background: rgba(78,159,209,0.12);
+      border: 1px solid rgba(78,159,209,0.25);
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #4e9fd1;
+      flex-shrink: 0;
+    }
+
+    .empty-queue {
+      width: 100%;
+      max-width: 760px;
+      text-align: center;
+      padding: 3rem 1rem;
+      color: #6b7280;
+    }
+
+    .empty-queue .empty-icon { font-size: 3rem; margin-bottom: 1rem; opacity: 0.5; }
+    .empty-queue p { font-size: 1rem; }
+
+    /* ── Action buttons ─────────────────────────────────────── */
+    .action-bar {
+      width: 100%;
+      max-width: 760px;
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .queue-btn {
+      flex: 1;
+      min-width: 160px;
+      padding: 14px 20px;
+      border-radius: 10px;
+      border: none;
+      font-size: 0.95rem;
+      font-weight: 700;
+      font-family: 'Inter', sans-serif;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .queue-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .btn-join {
+      background: #4e9fd1;
+      color: #fff;
+    }
+    .btn-join:hover { background: #3b84b3; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(78,159,209,0.35); }
+
+    .btn-leave {
+      background: transparent;
+      color: #ef4444;
+      border: 1.5px solid rgba(239,68,68,0.5);
+    }
+    .btn-leave:hover { background: rgba(239,68,68,0.1); transform: translateY(-1px); }
+
+    .btn-ready {
+      background: rgba(34,197,94,0.12);
+      color: #22c55e;
+      border: 1.5px solid rgba(34,197,94,0.4);
+    }
+    .btn-ready:hover { background: rgba(34,197,94,0.2); transform: translateY(-1px); }
+
+    /* ── Auth notice ────────────────────────────────────────── */
+    .auth-notice {
+      width: 100%;
+      max-width: 760px;
+      padding: 1rem 1.25rem;
+      background: rgba(78,159,209,0.07);
+      border: 1px solid rgba(78,159,209,0.2);
+      border-radius: 10px;
+      font-size: 0.875rem;
+      color: #b0b8c8;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .auth-notice a {
+      color: #4e9fd1;
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .auth-notice a:hover { text-decoration: underline; }
+
+    /* ── Toast ─────────────────────────────────────────────── */
+    .toast-msg {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a2e;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px;
+      padding: 0.75rem 1.5rem;
+      font-size: 0.9rem;
+      color: #e0e0e0;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 999;
+      white-space: nowrap;
+    }
+    .toast-msg.show { opacity: 1; }
+    .toast-msg.success { border-color: rgba(34,197,94,0.4); color: #22c55e; }
+    .toast-msg.error { border-color: rgba(239,68,68,0.4); color: #ef4444; }
+
+    /* ── Live Game Toast ────────────────────────────────────── */
+    .live-toast {
+      position: fixed;
+      top: 80px;
+      right: 20px;
+      background: #1a1a2e;
+      border: 2px solid #ef4444;
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      z-index: 1000;
+      min-width: 280px;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    .live-toast.hidden { display: none; }
+    .live-toast:hover { transform: translateY(-2px); box-shadow: 0 6px 25px rgba(0,0,0,0.4); }
+    .live-toast-content { display: flex; align-items: center; gap: 12px; }
+    .live-toast-icon { font-size: 24px; animation: pulse 1.5s ease-in-out infinite; }
+    .live-toast-message strong { display: block; color: white; font-size: 14px; margin-bottom: 4px; }
+    .live-toast-message p { color: #aaa; font-size: 12px; margin: 0; }
+    .live-toast-close { background: none; border: none; color: #aaa; font-size: 24px; cursor: pointer; padding: 0; margin-left: auto; line-height: 1; }
+    .live-toast-close:hover { color: white; }
+
+    @media (max-width: 600px) {
+      .navbar { padding: 0 1rem; }
+      .navbar-brand span { display: none; }
+      .navbar-links a { padding: 8px 10px; font-size: 0.8rem; }
+      .action-bar { flex-direction: column; }
+      .queue-btn { min-width: unset; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+    <ul class="navbar-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="/matches">Matches</a></li>
+      <li><a href="/rankings">Rankings</a></li>
+      <li><a href="/queue" class="active">Queue</a></li>
+      <li><a href="/about">About</a></li>
+      <li><a href="/livegame">Live Game</a></li>
+    </ul>
+    <div class="navbar-auth" id="navbar-auth"></div>
+  </nav>
+
+  <div class="page-content">
+
+    <!-- Queue header -->
+    <div class="queue-header">
+      <div class="queue-title">🎮 Gargamel League Queue</div>
+      <div class="queue-subtitle" id="queue-subtitle">Loading queue status…</div>
+      <div class="queue-progress-wrap">
+        <div class="queue-count-label" id="queue-count-label">0 / 10</div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
+        </div>
+      </div>
+      <div class="ready-check-banner" id="ready-check-banner">
+        <div class="pulse-dot"></div>
+        Ready check in progress — check your Discord DMs!
+      </div>
+    </div>
+
+    <!-- Auth notice (shown when not fully authenticated) -->
+    <div class="auth-notice" id="auth-notice" style="display:none"></div>
+
+    <!-- Player grid -->
+    <div id="player-section" class="player-grid"></div>
+
+    <!-- Action buttons -->
+    <div class="action-bar">
+      <button class="queue-btn btn-join" id="btn-join" disabled>⚔️ Join Queue</button>
+      <button class="queue-btn btn-leave" id="btn-leave" disabled>🚪 Leave Queue</button>
+      <button class="queue-btn btn-ready" id="btn-ready" disabled>✅ Initiate Ready Check</button>
+    </div>
+
+  </div>
+
+  <!-- Bottom toast notification -->
+  <div class="toast-msg" id="toast"></div>
+
+  <!-- Live Game Toast -->
+  <div id="live-game-toast" class="live-toast hidden" onclick="window.location='/livegame'">
+    <div class="live-toast-content">
+      <div class="live-toast-icon">🔴</div>
+      <div class="live-toast-message">
+        <strong>Live Game in Progress!</strong>
+        <p>Click to watch</p>
+      </div>
+      <button class="live-toast-close" onclick="dismissLiveToast(event)">&times;</button>
+    </div>
+  </div>
+
+  <script>
+    // ── State ──────────────────────────────────────────────────────────────────
+    let currentUser = null;      // from /api/me
+    let queueData = null;        // from /api/queue
+    let isBusy = false;          // prevent double-clicks
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    function escHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    let toastTimer = null;
+    function showToast(msg, type = '') {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = 'toast-msg show' + (type ? ' ' + type : '');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { el.className = 'toast-msg'; }, 3500);
+    }
+
+    // ── Navbar auth ────────────────────────────────────────────────────────────
+    function renderNavAuth(user) {
+      const nav = document.getElementById('navbar-auth');
+      if (user) {
+        nav.innerHTML = `
+          <a href="/profile" style="color:#4e9fd1;border-color:rgba(78,159,209,0.3)">My Profile</a>
+          <a href="/auth/logout" class="logout">Logout</a>`;
+      } else {
+        nav.innerHTML = `<a href="/auth/steam"><img src="https://community.fastly.steamstatic.com/public/images/signinthroughsteam/sits_01.png" alt="Sign in through Steam" style="height:32px;vertical-align:middle"></a>`;
+      }
+    }
+
+    // ── Auth notice ────────────────────────────────────────────────────────────
+    function renderAuthNotice(user) {
+      const notice = document.getElementById('auth-notice');
+      if (!user) {
+        notice.style.display = 'flex';
+        notice.innerHTML = `ℹ️ &nbsp;<span><a href="/auth/steam">Sign in with Steam</a> to join or leave the queue. Spectators can view freely.</span>`;
+      } else if (!user.discordId) {
+        notice.style.display = 'flex';
+        notice.innerHTML = `⚠️ &nbsp;<span>Your Discord account isn't linked yet. <a href="/">Register here</a> to enable queue actions.</span>`;
+      } else {
+        notice.style.display = 'none';
+      }
+    }
+
+    // ── Button state ───────────────────────────────────────────────────────────
+    function updateButtons(user, queue) {
+      const canAct = user && user.discordId;
+      const myDiscordId = user ? user.discordId : null;
+      const inQueue = queue && queue.players
+        ? queue.players.some(p => p.discord_id === myDiscordId)
+        : false;
+      const readyActive = queue && queue.ready_check_active;
+
+      const btnJoin = document.getElementById('btn-join');
+      const btnLeave = document.getElementById('btn-leave');
+      const btnReady = document.getElementById('btn-ready');
+
+      btnJoin.disabled = !canAct || inQueue || readyActive;
+      btnLeave.disabled = !canAct || !inQueue || readyActive;
+      btnReady.disabled = !canAct || readyActive;
+    }
+
+    // ── Player grid ────────────────────────────────────────────────────────────
+    function renderPlayers(queue) {
+      const section = document.getElementById('player-section');
+      const readyActive = queue && queue.ready_check_active;
+
+      // Update ready check banner
+      const banner = document.getElementById('ready-check-banner');
+      banner.classList.toggle('visible', !!readyActive);
+
+      // Progress bar
+      const count = (queue && queue.count) || 0;
+      const teamSize = (queue && queue.team_size) || 5;
+      const maxPlayers = teamSize * 2;
+      document.getElementById('queue-count-label').textContent = `${count} / ${maxPlayers}`;
+      document.getElementById('progress-bar').style.width = `${Math.min(100, (count / maxPlayers) * 100)}%`;
+
+      const subtitle = document.getElementById('queue-subtitle');
+      if (!queue || queue.error) {
+        subtitle.textContent = 'Could not connect to the queue. Bot may be offline.';
+        section.innerHTML = `<div class="empty-queue"><div class="empty-icon">🤖</div><p>Bot is offline or unreachable</p></div>`;
+        return;
+      }
+
+      if (count === 0) {
+        subtitle.textContent = 'No players in queue — be the first to join!';
+        section.innerHTML = `<div class="empty-queue"><div class="empty-icon">🎮</div><p>Queue is empty</p></div>`;
+        return;
+      }
+
+      if (count >= maxPlayers) {
+        subtitle.textContent = `Queue is full! Game starting soon…`;
+      } else {
+        subtitle.textContent = `${maxPlayers - count} more player${maxPlayers - count !== 1 ? 's' : ''} needed to start a game`;
+      }
+
+      section.innerHTML = queue.players.map(p => {
+        const avatarHtml = p.avatar
+          ? `<img class="player-avatar" src="${escHtml(p.avatar)}" alt="avatar" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+          : '';
+        const placeholderStyle = p.avatar ? 'display:none' : '';
+        return `
+          <div class="player-card">
+            ${avatarHtml}
+            <div class="player-avatar-placeholder" style="${placeholderStyle}">👤</div>
+            <div class="player-info">
+              <div class="player-name">${escHtml(p.name)}</div>
+            </div>
+            <div class="rating-badge">${p.rating}</div>
+          </div>`;
+      }).join('');
+    }
+
+    // ── Data fetching ──────────────────────────────────────────────────────────
+    async function fetchUser() {
+      try {
+        const res = await fetch('/api/me');
+        currentUser = await res.json();
+      } catch (_) {
+        currentUser = null;
+      }
+    }
+
+    async function fetchQueue() {
+      try {
+        const res = await fetch('/api/queue');
+        queueData = await res.json();
+      } catch (_) {
+        queueData = { error: 'unreachable', players: [], count: 0, team_size: 5, ready_check_active: false };
+      }
+    }
+
+    async function refreshAll() {
+      await fetchQueue();
+      renderPlayers(queueData);
+      renderAuthNotice(currentUser);
+      updateButtons(currentUser, queueData);
+    }
+
+    // ── Button actions ─────────────────────────────────────────────────────────
+    async function queueAction(endpoint, method = 'POST') {
+      if (isBusy) return;
+      isBusy = true;
+      try {
+        const res = await fetch(endpoint, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: method === 'POST' ? '{}' : undefined,
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showToast(data.error || 'Something went wrong', 'error');
+        } else {
+          const msgs = {
+            '/api/queue/join': 'Joined the queue!',
+            '/api/queue/leave': 'Left the queue.',
+            '/api/queue/ready': 'Ready check initiated! Check your Discord DMs.',
+          };
+          showToast(msgs[endpoint] || 'Done!', 'success');
+          await refreshAll();
+        }
+      } catch (err) {
+        showToast('Network error: ' + err.message, 'error');
+      } finally {
+        isBusy = false;
+      }
+    }
+
+    document.getElementById('btn-join').addEventListener('click', () => queueAction('/api/queue/join'));
+    document.getElementById('btn-leave').addEventListener('click', () => queueAction('/api/queue/leave'));
+    document.getElementById('btn-ready').addEventListener('click', () => queueAction('/api/queue/ready'));
+
+    // ── Live game toast ────────────────────────────────────────────────────────
+    const TOAST_DISMISSED_KEY = 'liveGameToastDismissed';
+    const TOAST_DISMISS_DURATION = 5 * 60 * 1000;
+
+    async function checkLiveGame() {
+      const dismissed = localStorage.getItem(TOAST_DISMISSED_KEY);
+      if (dismissed && (Date.now() - parseInt(dismissed)) < TOAST_DISMISS_DURATION) return;
+      try {
+        const r = await fetch('/api/live-game/status');
+        const d = await r.json();
+        const toast = document.getElementById('live-game-toast');
+        if (d.active) { toast.classList.remove('hidden'); }
+        else { toast.classList.add('hidden'); localStorage.removeItem(TOAST_DISMISSED_KEY); }
+      } catch (_) {}
+    }
+
+    function dismissLiveToast(e) {
+      e.stopPropagation();
+      localStorage.setItem(TOAST_DISMISSED_KEY, Date.now().toString());
+      document.getElementById('live-game-toast').classList.add('hidden');
+    }
+
+    // ── Init ───────────────────────────────────────────────────────────────────
+    (async () => {
+      await fetchUser();
+      renderNavAuth(currentUser);
+      await refreshAll();
+      // Poll queue every 5 seconds
+      setInterval(refreshAll, 5000);
+      // Check live game every 15 seconds
+      checkLiveGame();
+      setInterval(checkLiveGame, 15000);
+    })();
+  </script>
+</body>
+</html>

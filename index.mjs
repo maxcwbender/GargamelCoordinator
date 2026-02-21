@@ -3,7 +3,8 @@ import Database from 'better-sqlite3';
 import express from 'express';
 import net from 'net';
 import { readFileSync } from 'fs';
-import pino from 'pino'
+import pino from 'pino';
+import session from 'express-session';
 const logger = pino({
   transport: {
     target: 'pino-pretty',
@@ -15,6 +16,15 @@ let config = JSON.parse(readFileSync('./config.json'));
 
 const server = express();
 server.use(express.json());
+
+// ─── Session middleware ───────────────────────────────────────────────────────
+server.use(session({
+    secret: config.SESSION_SECRET || 'gargamel-secret-fallback',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { maxAge: 7 * 24 * 60 * 60 * 1000 }, // 7 days
+}));
+
 server.use(express.static('.'));
 
 // ─── OpenDota API caching layer ─────────────────────────────────────────────
@@ -734,6 +744,192 @@ server.use((req, res, next) => {
     next();
 });
 
+// ─── Steam OpenID Auth ────────────────────────────────────────────────────────
+const STEAM_OPENID = 'https://steamcommunity.com/openid/login';
+const STEAM_OPENID_NS = 'http://specs.openid.net/auth/2.0';
+const STEAM_OPENID_IDENTITY = 'http://specs.openid.net/auth/2.0/identifier_select';
+const STEAM_ID_REGEX = /https:\/\/steamcommunity\.com\/openid\/id\/(\d+)/;
+const BOT_API_BASE = `http://127.0.0.1:${config.RESULT_CALLBACK_PORT || 9998}`;
+
+// GET /auth/steam → redirect user to Steam's OpenID login
+server.get('/auth/steam', (_req, res) => {
+    const siteUrl = config.SITE_URL || 'http://localhost:3000';
+    const returnTo = `${siteUrl}/auth/steam/return`;
+    const params = new URLSearchParams({
+        'openid.ns': STEAM_OPENID_NS,
+        'openid.mode': 'checkid_setup',
+        'openid.return_to': returnTo,
+        'openid.realm': siteUrl,
+        'openid.identity': STEAM_OPENID_IDENTITY,
+        'openid.claimed_id': STEAM_OPENID_IDENTITY,
+    });
+    return res.redirect(`${STEAM_OPENID}?${params.toString()}`);
+});
+
+// GET /auth/steam/return → validate with Steam, create session
+server.get('/auth/steam/return', async (req, res) => {
+    try {
+        const params = new URLSearchParams(req.query);
+
+        // Must be a positive assertion from Steam
+        if (params.get('openid.mode') !== 'id_res') {
+            logger.warn('[Auth] Steam OpenID returned non-id_res mode');
+            return res.redirect('/?auth=cancelled');
+        }
+
+        // Validate with Steam's check_authentication endpoint
+        params.set('openid.mode', 'check_authentication');
+        const verifyRes = await fetch(STEAM_OPENID, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString(),
+        });
+        const verifyText = await verifyRes.text();
+
+        if (!verifyText.includes('is_valid:true')) {
+            logger.warn('[Auth] Steam OpenID validation failed');
+            return res.redirect('/?auth=invalid');
+        }
+
+        // Extract SteamID64 from the claimed_id URL
+        const claimedId = req.query['openid.claimed_id'] || '';
+        const match = claimedId.match(STEAM_ID_REGEX);
+        if (!match) {
+            logger.warn('[Auth] Could not extract SteamID from claimed_id:', claimedId);
+            return res.redirect('/?auth=error');
+        }
+        const steamId = match[1];
+
+        // Fetch Steam profile (name + avatar)
+        let steamName = steamId;
+        let steamAvatar = null;
+        if (STEAM_API_KEY) {
+            try {
+                const profileRes = await fetch(
+                    `${STEAM_API_BASE}/ISteamUser/GetPlayerSummaries/v0002/?key=${STEAM_API_KEY}&steamids=${steamId}`
+                );
+                const profileData = await profileRes.json();
+                const player = profileData?.response?.players?.[0];
+                if (player) {
+                    steamName = player.personaname || steamId;
+                    steamAvatar = player.avatarfull || player.avatar || null;
+                }
+            } catch (err) {
+                logger.warn('[Auth] Failed to fetch Steam profile:', err.message);
+            }
+        }
+
+        // Look up Discord ID from DB
+        const userRow = db.prepare('SELECT discord_id FROM users WHERE steam_id = ?').get(steamId);
+        const discordId = userRow ? userRow.discord_id : null;
+
+        req.session.user = { steamId, steamName, steamAvatar, discordId };
+        logger.info(`[Auth] Steam login: steamId=${steamId} name=${steamName} discordId=${discordId}`);
+
+        return res.redirect('/profile');
+    } catch (err) {
+        logger.error('[Auth] Unhandled error in /auth/steam/return:', err.message);
+        return res.redirect('/?auth=error');
+    }
+});
+
+// GET /auth/logout → destroy session and redirect home
+server.get('/auth/logout', (req, res) => {
+    req.session.destroy(() => res.redirect('/'));
+});
+
+// GET /api/me → return current session user (or null)
+server.get('/api/me', (req, res) => {
+    if (!req.session.user) return res.json(null);
+
+    // Always refresh discord_id from DB in case it was linked after login
+    const { steamId } = req.session.user;
+    const userRow = db.prepare('SELECT discord_id FROM users WHERE steam_id = ?').get(steamId);
+    const discordId = userRow ? userRow.discord_id : null;
+
+    // Update session with fresh discord_id
+    if (discordId !== req.session.user.discordId) {
+        req.session.user.discordId = discordId;
+    }
+
+    return res.json(req.session.user);
+});
+
+// ─── Queue API proxy ──────────────────────────────────────────────────────────
+// GET /api/queue → forward to bot's internal queue endpoint (public, no auth required)
+server.get('/api/queue', async (_req, res) => {
+    try {
+        const botRes = await fetch(`${BOT_API_BASE}/api/queue`);
+        if (!botRes.ok) {
+            return res.status(503).json({ error: 'Bot unavailable', players: [], count: 0, team_size: 5, ready_check_active: false });
+        }
+        const data = await botRes.json();
+        return res.json(data);
+    } catch (err) {
+        logger.warn('[Queue API] Bot unreachable:', err.message);
+        return res.status(503).json({ error: 'Bot unavailable', players: [], count: 0, team_size: 5, ready_check_active: false });
+    }
+});
+
+// Auth guard for queue mutation endpoints
+function requireQueueAuth(req, res, next) {
+    const user = req.session.user;
+    if (!user) return res.status(401).json({ error: 'Not logged in' });
+    if (!user.discordId) return res.status(403).json({ error: 'Discord account not linked. Please register first.' });
+    next();
+}
+
+// POST /api/queue/join
+server.post('/api/queue/join', requireQueueAuth, async (req, res) => {
+    const { discordId } = req.session.user;
+    try {
+        const botRes = await fetch(`${BOT_API_BASE}/api/queue/join`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ discord_id: discordId }),
+        });
+        const data = await botRes.json();
+        return res.status(botRes.status).json(data);
+    } catch (err) {
+        logger.error('[Queue Join] Bot unreachable:', err.message);
+        return res.status(503).json({ error: 'Bot unavailable' });
+    }
+});
+
+// POST /api/queue/leave
+server.post('/api/queue/leave', requireQueueAuth, async (req, res) => {
+    const { discordId } = req.session.user;
+    try {
+        const botRes = await fetch(`${BOT_API_BASE}/api/queue/leave`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ discord_id: discordId }),
+        });
+        const data = await botRes.json();
+        return res.status(botRes.status).json(data);
+    } catch (err) {
+        logger.error('[Queue Leave] Bot unreachable:', err.message);
+        return res.status(503).json({ error: 'Bot unavailable' });
+    }
+});
+
+// POST /api/queue/ready
+server.post('/api/queue/ready', requireQueueAuth, async (_req, res) => {
+    try {
+        const botRes = await fetch(`${BOT_API_BASE}/api/queue/ready_check`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+        const data = await botRes.json();
+        return res.status(botRes.status).json(data);
+    } catch (err) {
+        logger.error('[Queue Ready] Bot unreachable:', err.message);
+        return res.status(503).json({ error: 'Bot unavailable' });
+    }
+});
+
+// ─── Page routes ──────────────────────────────────────────────────────────────
 server.get('/', (request, response) => {
     logger.info('GET: ' + request.url);
     logger.info('------------------------------------------');
@@ -754,6 +950,14 @@ server.get('/rankings', (req, res) => {
 
 server.get('/livegame', (req, res) => {
     return res.sendFile('livegame.html', { root: '.' });
+});
+
+server.get('/queue', (_req, res) => {
+    return res.sendFile('queue.html', { root: '.' });
+});
+
+server.get('/profile', (_req, res) => {
+    return res.sendFile('profile.html', { root: '.' });
 });
 
 server.get('/api/live-game', async (req, res) => {

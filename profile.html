@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Profile - Gargamel Dota League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #0f0f1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .navbar-brand img { height: 36px; width: auto; }
+    .navbar-links { display: flex; gap: 8px; list-style: none; }
+    .navbar-links a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: 6px;
+      transition: color 0.2s, background 0.2s;
+    }
+    .navbar-links a:hover { color: #fff; background: rgba(255,255,255,0.08); }
+    .navbar-links a.active { color: #4e9fd1; background: rgba(78,159,209,0.1); }
+    .navbar-auth { display: flex; align-items: center; gap: 10px; }
+    .navbar-auth a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.15);
+      transition: all 0.2s;
+    }
+    .navbar-auth a:hover { color: #fff; border-color: rgba(255,255,255,0.35); }
+    .navbar-auth a.logout { border-color: #ef4444; color: #ef4444; }
+    .navbar-auth a.logout:hover { background: rgba(239,68,68,0.1); }
+
+    /* ── Page ───────────────────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 3rem 2rem;
+    }
+
+    .profile-card {
+      background: #1a1a2e;
+      border: 1px solid rgba(78,159,209,0.2);
+      border-radius: 16px;
+      padding: 2.5rem;
+      max-width: 520px;
+      width: 100%;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+
+    .profile-header {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .profile-avatar {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      border: 3px solid #4e9fd1;
+      object-fit: cover;
+      background: #2a2a40;
+    }
+
+    .profile-avatar-placeholder {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      border: 3px solid #4e9fd1;
+      background: #2a2a40;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+      color: #4e9fd1;
+    }
+
+    .profile-name {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+
+    .profile-steam-id {
+      font-size: 0.75rem;
+      color: #6b7280;
+      font-family: monospace;
+    }
+
+    .section-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #6b7280;
+      margin-bottom: 1rem;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem;
+      border-radius: 10px;
+      background: #0f0f1a;
+      border: 1px solid rgba(255,255,255,0.06);
+      margin-bottom: 0.75rem;
+    }
+
+    .status-label {
+      font-size: 0.9rem;
+      color: #b0b8c8;
+      font-weight: 500;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 20px;
+    }
+
+    .status-badge.linked {
+      background: rgba(34,197,94,0.15);
+      color: #22c55e;
+      border: 1px solid rgba(34,197,94,0.3);
+    }
+
+    .status-badge.unlinked {
+      background: rgba(239,68,68,0.15);
+      color: #ef4444;
+      border: 1px solid rgba(239,68,68,0.3);
+    }
+
+    .discord-id-display {
+      font-size: 0.8rem;
+      color: #6b7280;
+      margin-top: 4px;
+      font-family: monospace;
+      text-align: right;
+    }
+
+    .action-section {
+      margin-top: 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 12px 20px;
+      border-radius: 8px;
+      border: none;
+      font-size: 0.95rem;
+      font-weight: 600;
+      font-family: 'Inter', sans-serif;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: #4e9fd1;
+      color: #fff;
+    }
+    .btn-primary:hover { background: #3b84b3; }
+
+    .btn-outline {
+      background: transparent;
+      color: #b0b8c8;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .btn-outline:hover { color: #fff; border-color: rgba(255,255,255,0.35); }
+
+    .btn-danger {
+      background: transparent;
+      color: #ef4444;
+      border: 1px solid rgba(239,68,68,0.3);
+    }
+    .btn-danger:hover { background: rgba(239,68,68,0.1); }
+
+    .loading-placeholder {
+      text-align: center;
+      color: #6b7280;
+      padding: 3rem 0;
+      font-size: 1rem;
+    }
+
+    .not-logged-in {
+      text-align: center;
+      padding: 3rem 2rem;
+    }
+    .not-logged-in h2 { color: #fff; margin-bottom: 1rem; font-size: 1.4rem; }
+    .not-logged-in p { color: #6b7280; margin-bottom: 2rem; font-size: 0.95rem; line-height: 1.6; }
+    .steam-login-btn img { height: 44px; }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+    <ul class="navbar-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="/matches">Matches</a></li>
+      <li><a href="/rankings">Rankings</a></li>
+      <li><a href="/queue">Queue</a></li>
+      <li><a href="/about">About</a></li>
+      <li><a href="/livegame">Live Game</a></li>
+    </ul>
+    <div class="navbar-auth" id="navbar-auth"></div>
+  </nav>
+
+  <div class="page-content">
+    <div class="profile-card" id="profile-card">
+      <div class="loading-placeholder">Loading profile…</div>
+    </div>
+  </div>
+
+  <script>
+    async function loadProfile() {
+      const card = document.getElementById('profile-card');
+      let user = null;
+
+      try {
+        const res = await fetch('/api/me');
+        user = await res.json();
+      } catch (e) {
+        // ignore
+      }
+
+      // Update navbar auth area
+      const navAuth = document.getElementById('navbar-auth');
+      if (user) {
+        navAuth.innerHTML = `
+          <a href="/profile" class="active" style="color:#4e9fd1;border-color:rgba(78,159,209,0.3)">My Profile</a>
+          <a href="/auth/logout" class="logout">Logout</a>`;
+      } else {
+        navAuth.innerHTML = `<a href="/auth/steam"><img src="https://community.fastly.steamstatic.com/public/images/signinthroughsteam/sits_01.png" alt="Sign in through Steam" style="height:32px;vertical-align:middle"></a>`;
+      }
+
+      if (!user) {
+        card.innerHTML = `
+          <div class="not-logged-in">
+            <h2>Not Logged In</h2>
+            <p>Sign in with your Steam account to view your profile and join the queue.</p>
+            <a href="/auth/steam" class="steam-login-btn">
+              <img src="https://community.fastly.steamstatic.com/public/images/signinthroughsteam/sits_01.png" alt="Sign in through Steam">
+            </a>
+          </div>`;
+        return;
+      }
+
+      const avatarHtml = user.steamAvatar
+        ? `<img class="profile-avatar" src="${escHtml(user.steamAvatar)}" alt="Steam avatar">`
+        : `<div class="profile-avatar-placeholder">👤</div>`;
+
+      const discordSection = user.discordId
+        ? `<div class="status-badge linked">✅ Linked</div>
+           <div class="discord-id-display">${escHtml(user.discordId)}</div>`
+        : `<div class="status-badge unlinked">❌ Not Linked</div>`;
+
+      const actionButtons = user.discordId
+        ? `<a href="/queue" class="btn btn-primary">Go to Queue</a>
+           <a href="/auth/logout" class="btn btn-danger">Log Out</a>`
+        : `<a href="/" class="btn btn-primary">Register Discord Account</a>
+           <p style="font-size:0.8rem;color:#6b7280;text-align:center;margin-top:0.5rem">
+             Complete Discord registration to join the queue. Your Steam account is already saved.
+           </p>
+           <a href="/auth/logout" class="btn btn-danger">Log Out</a>`;
+
+      card.innerHTML = `
+        <div class="profile-header">
+          ${avatarHtml}
+          <div>
+            <div class="profile-name">${escHtml(user.steamName)}</div>
+            <div class="profile-steam-id">SteamID: ${escHtml(user.steamId)}</div>
+          </div>
+        </div>
+
+        <div class="section-title">Account Status</div>
+
+        <div class="status-row">
+          <div>
+            <div class="status-label">Steam Account</div>
+          </div>
+          <div class="status-badge linked">✅ Logged In</div>
+        </div>
+
+        <div class="status-row">
+          <div>
+            <div class="status-label">Discord Account</div>
+          </div>
+          <div style="text-align:right">
+            ${discordSection}
+          </div>
+        </div>
+
+        <div class="action-section">
+          ${actionButtons}
+        </div>`;
+    }
+
+    function escHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    loadProfile();
+  </script>
+</body>
+</html>

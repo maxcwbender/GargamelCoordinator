@@ -79,6 +79,21 @@
             background: rgba(78, 159, 209, 0.1);
         }
 
+        .navbar-auth { display: flex; align-items: center; gap: 10px; }
+        .navbar-auth a {
+            color: #b0b8c8;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            transition: all 0.2s;
+        }
+        .navbar-auth a:hover { color: #fff; border-color: rgba(255, 255, 255, 0.35); }
+        .navbar-auth a.logout { border-color: #ef4444; color: #ef4444; }
+        .navbar-auth a.logout:hover { background: rgba(239, 68, 68, 0.1); }
+
         /* Page content */
         .page-content {
             flex: 1;
@@ -549,9 +564,11 @@
             <li><a href="/">Home</a></li>
             <li><a href="/matches">Matches</a></li>
             <li><a href="/rankings">Rankings</a></li>
+            <li><a href="/queue">Queue</a></li>
             <li><a href="/about">About</a></li>
             <li><a href="/livegame" class="active">Live Game</a></li>
         </ul>
+        <div class="navbar-auth" id="navbar-auth"></div>
     </nav>
 
     <div class="page-content">
@@ -968,6 +985,19 @@
 
         // Poll for updates
         setInterval(fetchLiveGame, POLL_INTERVAL);
+
+        // Navbar auth
+        (async () => {
+            let user = null;
+            try { const r = await fetch('/api/me'); user = await r.json(); } catch (_) {}
+            const nav = document.getElementById('navbar-auth');
+            if (!nav) return;
+            if (user) {
+                nav.innerHTML = '<a href="/profile" style="color:#4e9fd1;border-color:rgba(78,159,209,0.3)">My Profile</a><a href="/auth/logout" class="logout">Logout</a>';
+            } else {
+                nav.innerHTML = '<a href="/auth/steam"><img src="https://community.fastly.steamstatic.com/public/images/signinthroughsteam/sits_01.png" alt="Sign in through Steam" style="height:32px;vertical-align:middle"></a>';
+            }
+        })();
     </script>
 </body>
 </html>

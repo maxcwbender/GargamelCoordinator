@@ -666,16 +666,18 @@ class Master_Bot(commands.Bot):
         roles = getattr(member, "roles", [])
         return any(getattr(r, "name", None) == role_name for r in roles)
 
-    async def start_ready_check(self, interaction: discord.Interaction, sleep_time: int = 60):
-        # Only Mods are allowed to start ready checks
-        if not self._has_role(interaction.user, "Mod"):
-            logger.warning(f"User {interaction.user.id} has no mod role and tried to start a ready check.")
-            return await interaction.response.send_message("Only authorized users can start a ready check.",
-                                                           ephemeral=True)
-        else:
+    async def start_ready_check(self, interaction: Optional[discord.Interaction], sleep_time: int = 60):
+        # Mod check only applies when called from Discord (interaction is present)
+        if interaction is not None:
+            if not self._has_role(interaction.user, "Mod"):
+                logger.warning(f"User {interaction.user.id} has no mod role and tried to start a ready check.")
+                return await interaction.response.send_message("Only authorized users can start a ready check.",
+                                                               ephemeral=True)
             await interaction.response.send_message(
                 "Initiating ready check", ephemeral=True
             )
+        else:
+            logger.info("Ready check initiated from web interface")
         logger.info("Initiated ready check")
         if self.ready_check_status:
             if interaction and not interaction.response.is_done():
@@ -1453,7 +1455,82 @@ class Master_Bot(commands.Bot):
                 logger.exception(f"Error handling game started callback: {e}")
                 return web.json_response({"error": str(e)}, status=500)
         
+        # ── Queue API (consumed by the Node.js web server) ────────────────────
+        async def handle_get_queue(request):
+            """Return current queue state as JSON for the website."""
+            queue_data = self.coordinator.get_queue()  # [(discord_id, rating), ...]
+            players = []
+            for discord_id, rating in queue_data:
+                member = self.the_guild.get_member(discord_id) if self.the_guild else None
+                players.append({
+                    "discord_id": str(discord_id),
+                    "rating": rating,
+                    "name": member.display_name if member else str(discord_id),
+                    "avatar": str(member.display_avatar.url) if member and member.display_avatar else None,
+                })
+            return web.json_response({
+                "players": players,
+                "count": len(players),
+                "team_size": self.config["TEAM_SIZE"],
+                "ready_check_active": self.ready_check_status,
+            })
+
+        async def handle_queue_join(request):
+            """Add a player to the queue by discord_id."""
+            try:
+                data = await request.json()
+            except Exception:
+                return web.json_response({"error": "Invalid JSON"}, status=400)
+            discord_id_raw = data.get("discord_id")
+            if not discord_id_raw:
+                return web.json_response({"error": "Missing discord_id"}, status=400)
+            try:
+                discord_id = int(discord_id_raw)
+            except (ValueError, TypeError):
+                return web.json_response({"error": "Invalid discord_id"}, status=400)
+
+            if self.coordinator.in_queue(discord_id):
+                return web.json_response({"error": "Already in queue"}, status=409)
+
+            rating = DB.fetch_rating(str(discord_id))
+            if rating is None:
+                return web.json_response({"error": "User not registered"}, status=404)
+
+            self.coordinator.add_player(discord_id, rating)
+            asyncio.create_task(self.update_queue_status_message())
+            return web.json_response({"ok": True, "queue_size": len(self.coordinator.queue)})
+
+        async def handle_queue_leave(request):
+            """Remove a player from the queue by discord_id."""
+            try:
+                data = await request.json()
+            except Exception:
+                return web.json_response({"error": "Invalid JSON"}, status=400)
+            discord_id_raw = data.get("discord_id")
+            if not discord_id_raw:
+                return web.json_response({"error": "Missing discord_id"}, status=400)
+            try:
+                discord_id = int(discord_id_raw)
+            except (ValueError, TypeError):
+                return web.json_response({"error": "Invalid discord_id"}, status=400)
+
+            removed = self.coordinator.remove_player(discord_id)
+            if removed:
+                asyncio.create_task(self.update_queue_status_message())
+            return web.json_response({"ok": removed})
+
+        async def handle_queue_ready_check(request):  # noqa: ARG001
+            """Trigger a ready check (web-initiated, no Discord interaction)."""
+            if self.ready_check_status:
+                return web.json_response({"error": "Ready check already in progress"}, status=409)
+            asyncio.create_task(self.start_ready_check(None))
+            return web.json_response({"ok": True, "message": "Ready check initiated"})
+
         app = web.Application()
+        app.router.add_get("/api/queue", handle_get_queue)
+        app.router.add_post("/api/queue/join", handle_queue_join)
+        app.router.add_post("/api/queue/leave", handle_queue_leave)
+        app.router.add_post("/api/queue/ready_check", handle_queue_ready_check)
         app.router.add_post("/game_result", handle_game_result)
         app.router.add_post("/poll_callback", handle_poll_callback)
         app.router.add_post("/lobby_ready", handle_lobby_ready)
