@@ -1492,9 +1492,13 @@ class Master_Bot(commands.Bot):
             if self.coordinator.in_queue(discord_id):
                 return web.json_response({"error": "Already in queue"}, status=409)
 
-            rating = DB.fetch_rating(str(discord_id))
-            if rating is None:
+            row = DB.con.execute(
+                "SELECT rating FROM users WHERE CAST(discord_id AS TEXT) = ?",
+                (str(discord_id),)
+            ).fetchone()
+            if row is None or row[0] is None:
                 return web.json_response({"error": "User not registered"}, status=404)
+            rating = row[0]
 
             self.coordinator.add_player(discord_id, rating)
             asyncio.create_task(self.update_queue_status_message())
