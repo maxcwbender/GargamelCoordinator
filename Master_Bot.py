@@ -1726,6 +1726,13 @@ class Master_Bot(commands.Bot):
 
                 await self.make_game(radiant, dire, cut_players)
 
+                # Update queue to indicate a game launched
+                remaining = len(self.coordinator.queue)
+                if remaining < self.config["TEAM_SIZE"] * 2:
+                    await self.update_queue_status_message(
+                        content="A game has launched! Await being moved into your voice channels. 🚀"
+                    )
+
                 if len(self.coordinator.queue) >= self.config["TEAM_SIZE"] * 2:
                     await self.update_queue_status_message(
                         content="@here Still enough players! Starting another game in **15 seconds** ⏳"

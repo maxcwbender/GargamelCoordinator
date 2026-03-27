@@ -292,6 +292,7 @@ type gcHandler struct {
 	pollCallbackSent     bool   // True once we've notified Master_Bot to start the poll (prevents duplicate callbacks)
 	pollingMutex         sync.Mutex
 	pollingMessageSent   bool   // Track if we've sent the "polling active" message to avoid duplicates
+	pollEndedMessageSent bool   // Track if we've sent the "polling ended but not seated" message to avoid duplicates
 	pollCallbackURL      string // URL to notify when polling should be triggered
 	lobbyReadyURL        string // URL to notify when lobby is established
 	lobbyReadyNotified   bool   // Track if lobby ready callback has been sent
@@ -1572,9 +1573,6 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 
 				if shouldSendInvites {
 					h.setState("waiting")
-					// Notify Master_Bot that lobby is ready (only when we have a valid lobbyID)
-					// This must be called when we first receive the lobby ID
-					h.notifyLobbyReady()
 
 					// Send invites when lobby is first created (equivalent to lobby_new event in Python)
 					// Wait a short time for GC to be fully ready
@@ -1589,6 +1587,10 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 						} else {
 							log.Printf("[Game %s] Skipping invites - lobby ID changed from %d to %d", h.gameID, lobbyIDForInvites, h.currentLobbyID)
 						}
+
+						// Notify Master_Bot that lobby is ready AFTER invites are sent
+						// This triggers Discord channel creation and player moves
+						h.notifyLobbyReady()
 					}()
 				}
 			}
@@ -1637,6 +1639,12 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 
 			matchID := lobby.GetMatchId()
 			matchOutcome := lobby.GetMatchOutcome()
+
+			// Notify Master_Bot that the game started (with match ID) before sending results.
+			// This ensures the match row is INSERT'd before the result UPDATE arrives.
+			if matchID != 0 {
+				h.notifyGameStarted(matchID)
+			}
 
 			if h.pendingResults == nil {
 				h.pendingResults = make(map[uint64]*GameResult)
@@ -1899,9 +1907,35 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 	h.pollingMutex.Unlock()
 
 	if pollingJustEnded && (radiantCount < expectedRadiantCount || direCount < expectedDireCount) {
-		// Polling finished but not all players seated
-		if h.dota != nil && h.currentLobbyID != 0 {
-			h.dota.SendChannelMessage(h.currentLobbyID, "Game polling finished, but not all players are seated. Game will launch once all players are on their assigned teams.")
+		// Polling finished but not all players seated - send message only once
+		h.pollingMutex.Lock()
+		pollEndedMsgSent := h.pollEndedMessageSent
+		if !pollEndedMsgSent {
+			h.pollEndedMessageSent = true
+		}
+		h.pollingMutex.Unlock()
+
+		if !pollEndedMsgSent && h.dota != nil && h.currentLobbyID != 0 {
+			go func() {
+				channelName := fmt.Sprintf("Lobby_%d", h.currentLobbyID)
+				channelType := protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				joinResp, err := h.dota.JoinChatChannel(ctx, channelName, channelType, false)
+				if err == nil && joinResp != nil && joinResp.GetResult() == protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
+					channelID := joinResp.GetChannelId()
+					if channelID != 0 {
+						h.dota.SendChannelMessage(channelID, "Game polling finished, but not all players are seated. Game will launch once all players are on their assigned teams.")
+					} else {
+						h.dota.SendChannelMessage(h.currentLobbyID, "Game polling finished, but not all players are seated. Game will launch once all players are on their assigned teams.")
+					}
+				} else {
+					h.dota.SendChannelMessage(h.currentLobbyID, "Game polling finished, but not all players are seated. Game will launch once all players are on their assigned teams.")
+				}
+			}()
+			log.Printf("[Game %s] Sent poll-ended-not-seated message to lobby", h.gameID)
 		}
 	}
 
