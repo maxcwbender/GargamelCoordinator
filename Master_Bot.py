@@ -1730,7 +1730,7 @@ class Master_Bot(commands.Bot):
                 remaining = len(self.coordinator.queue)
                 if remaining < self.config["TEAM_SIZE"] * 2:
                     await self.update_queue_status_message(
-                        content="A game has launched! Await being moved into your voice channels. 🚀"
+                        content="A game has launched! Players will be moved into your voice channels shortly."
                     )
 
                 if len(self.coordinator.queue) >= self.config["TEAM_SIZE"] * 2:
