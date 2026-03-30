@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Top Rankings - Gargamel Dota League</title>
+  <title>Season 2 Rankings - Gargamel Dota League</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
@@ -544,7 +544,7 @@
 
   <div class="page-content">
     <div class="page-header">
-      <h1>Top Rankings</h1>
+      <h1>Season 2 Rankings</h1>
       <p>Best players in the Gargamel League</p>
       <div id="cache-info" class="cache-info"></div>
     </div>
@@ -599,7 +599,7 @@
         const hoursAgo = Math.round(data.cacheMaxAge / (60 * 60 * 1000));
         cacheInfo.textContent =
           'Data refreshed ' + timeAgo(data.lastUpdated) +
-          ' \u00B7 based on ' + (data.matchesAnalyzed || 0) + ' matches' +
+          ' \u00B7 based on ' + (data.matchesAnalyzed || 0) + ' Season 2 matches' +
           ' \u00B7 updates every ' + hoursAgo + ' hours' +
           (data.minMatchesRequired ? ' \u00B7 min ' + data.minMatchesRequired + ' games to qualify' : '');
       }

@@ -383,9 +383,10 @@ async function refreshPlayerStats() {
         logger.info('Refreshing player statistics...');
         const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
 
-        // Take up to 100 most recent matches for comprehensive stats
-        const matchesToFetch = matchIds.slice(0, 100);
-        logger.info(`Fetching ${matchesToFetch.length} matches for player statistics...`);
+        // Season 2 starts from this match onward — fetch all Season 2 matches
+        const SEASON_2_FIRST_MATCH = 8745386473;
+        const matchesToFetch = matchIds.filter(id => id >= SEASON_2_FIRST_MATCH);
+        logger.info(`Fetching ${matchesToFetch.length} Season 2 matches for player statistics...`);
 
         const playerMap = new Map(); // accountId -> { name, wins, losses, kills, deaths, assists, matches }
 
@@ -569,10 +570,10 @@ async function refreshPlayerStats() {
         // Load avatars and MVP counts from DB and merge with player stats
         const avatarQuery = db.prepare('SELECT account_id, avatar_url FROM player_avatars');
         const avatars = new Map(avatarQuery.all().map(row => [row.account_id, row.avatar_url]));
-        const mvpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'mvp' GROUP BY account_id");
-        const mvpCounts = new Map(mvpQuery.all().map(row => [row.account_id, row.cnt]));
-        const svpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'svp' GROUP BY account_id");
-        const svpCounts = new Map(svpQuery.all().map(row => [row.account_id, row.cnt]));
+        const mvpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'mvp' AND match_id >= ? GROUP BY account_id");
+        const mvpCounts = new Map(mvpQuery.all(SEASON_2_FIRST_MATCH).map(row => [row.account_id, row.cnt]));
+        const svpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'svp' AND match_id >= ? GROUP BY account_id");
+        const svpCounts = new Map(svpQuery.all(SEASON_2_FIRST_MATCH).map(row => [row.account_id, row.cnt]));
 
         // Convert to array and calculate derived stats
         const players = Array.from(playerMap.entries()).map(([accountId, stats]) => ({
@@ -636,7 +637,7 @@ if (dbStats.players.length > 0) {
     playerStatsCache = {
         data: dbStats.players,
         lastFetched: dbStats.lastFetched,
-        matchesAnalyzed: 100, // Approximate
+        matchesAnalyzed: 0, // Will be updated on next refresh
     };
     logger.info(`Loaded player stats from database, last updated ${new Date(dbStats.lastFetched).toISOString()}`);
 }
@@ -926,15 +927,9 @@ server.get('/api/top-rankings', async (req, res) => {
 
     const players = playerStatsCache.data || [];
 
-    // Dynamic minimum match threshold to filter statistical outliers.
-    // Uses 25% of the median match count (minimum 10) so the bar rises
-    // as the league plays more games.
-    const matchCounts = players.map(p => p.matches).sort((a, b) => a - b);
-    const median = matchCounts.length > 0
-        ? matchCounts[Math.floor(matchCounts.length / 2)]
-        : 0;
-    const minMatches = Math.max(10, Math.floor(median * 0.25));
-    const qualified = players.filter(p => p.matches >= minMatches);
+    // TODO: Re-enable minimum match threshold once Season 2 has more games (e.g. Math.max(10, ...))
+    const minMatches = 0;
+    const qualified = players;
 
     // Top 10 by win rate
     const topByWinRate = [...qualified]

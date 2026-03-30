@@ -170,9 +170,10 @@ class TheCoordinator:
 
         # --- Step 1: Calculate weights based on time waited ---
         for user, (rating, join_time, rand) in self.queue.items():
-            wait_time = now - join_time
-            # Weight function: stronger bias for longer waits
-            weights.append(max(wait_time, 1.0) ** 2)
+            wait_minutes = max((now - join_time) / 60.0, 0.1)
+            # Soft curve: flat for first ~5 min (fair among simultaneous joiners),
+            # ramps steeply after 10+ min, effectively guaranteed by 30 min.
+            weights.append(1 + (wait_minutes / 5.0) ** 3)
             users.append(user)
 
         # --- Step 2: Weighted random selection ---
