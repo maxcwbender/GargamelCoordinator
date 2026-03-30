@@ -191,7 +191,7 @@ function loadPlayerStatsFromDB() {
 
         logger.info(`Loaded ${players.length} player stats from database`);
         return {
-            players: players.filter(p => p.matches >= 3),
+            players, // TODO: Re-enable minimum match filter once Season 2 has more games
             lastFetched: oldestUpdate,
         };
     } catch (err) {
@@ -628,8 +628,8 @@ async function refreshPlayerStats() {
             svpCount: svpCounts.get(accountId) || 0,
         }));
 
-        // Filter out players with very few matches
-        const qualifiedPlayers = players.filter(p => p.matches >= 3);
+        // TODO: Re-enable minimum match filter once Season 2 has more games (e.g. p.matches >= 3)
+        const qualifiedPlayers = players;
 
         playerStatsCache = {
             data: qualifiedPlayers,
