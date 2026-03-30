@@ -385,10 +385,13 @@ async function refreshPlayerStats() {
         logger.info('Refreshing player statistics...');
         const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
 
-        // Season 2 starts from this match onward — fetch all Season 2 matches
+        // Season 2 starts from this match onward (list is newest-first from OpenDota)
         const SEASON_2_FIRST_MATCH = 8745386473;
-        const matchesToFetch = matchIds.filter(id => id >= SEASON_2_FIRST_MATCH);
-        logger.info(`Fetching ${matchesToFetch.length} Season 2 matches for player statistics...`);
+        const season2StartIdx = matchIds.indexOf(SEASON_2_FIRST_MATCH);
+        const matchesToFetch = season2StartIdx >= 0
+            ? matchIds.slice(0, season2StartIdx + 1)
+            : matchIds.filter(id => id >= SEASON_2_FIRST_MATCH); // fallback if match not found
+        logger.info(`Fetching ${matchesToFetch.length} Season 2 matches for player statistics (first match at index ${season2StartIdx})...`);
 
         const playerMap = new Map(); // accountId -> { name, wins, losses, kills, deaths, assists, matches }
 
@@ -569,13 +572,14 @@ async function refreshPlayerStats() {
         const accountIds = Array.from(playerMap.keys());
         await fetchAndSaveAvatars(accountIds);
 
-        // Load avatars and MVP counts from DB and merge with player stats
+        // Load avatars and MVP counts from DB — filter MVPs to only Season 2 matches
         const avatarQuery = db.prepare('SELECT account_id, avatar_url FROM player_avatars');
         const avatars = new Map(avatarQuery.all().map(row => [row.account_id, row.avatar_url]));
-        const mvpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'mvp' AND match_id >= ? GROUP BY account_id");
-        const mvpCounts = new Map(mvpQuery.all(SEASON_2_FIRST_MATCH).map(row => [row.account_id, row.cnt]));
-        const svpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'svp' AND match_id >= ? GROUP BY account_id");
-        const svpCounts = new Map(svpQuery.all(SEASON_2_FIRST_MATCH).map(row => [row.account_id, row.cnt]));
+        const matchIdPlaceholders = matchesToFetch.map(() => '?').join(',');
+        const mvpQuery = db.prepare(`SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'mvp' AND match_id IN (${matchIdPlaceholders}) GROUP BY account_id`);
+        const mvpCounts = new Map(mvpQuery.all(...matchesToFetch).map(row => [row.account_id, row.cnt]));
+        const svpQuery = db.prepare(`SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'svp' AND match_id IN (${matchIdPlaceholders}) GROUP BY account_id`);
+        const svpCounts = new Map(svpQuery.all(...matchesToFetch).map(row => [row.account_id, row.cnt]));
 
         // Convert to array and calculate derived stats
         const players = Array.from(playerMap.entries()).map(([accountId, stats]) => ({
