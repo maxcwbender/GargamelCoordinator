@@ -22,7 +22,7 @@ const OPENDOTA_BASE = 'https://api.opendota.com/api';
 const LEAGUE_ID = 18388;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes - keeps us well under 3000 calls/day
 const PLAYER_STATS_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours for player stats
-const SEASON_2_START_MS = new Date('2026-03-27T00:00:00Z').getTime(); // Season 2 start date
+const CURRENT_SEASON = 2;
 
 // ─── Steam API for live games ────────────────────────────────────────────────
 const STEAM_API_KEY = config.STEAM_API_KEY || '';
@@ -98,6 +98,7 @@ const columnMigrations = [
     'ALTER TABLE player_stats ADD COLUMN observer_kills INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_time_total INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_count INTEGER DEFAULT 0',
+    'ALTER TABLE player_stats ADD COLUMN season INTEGER DEFAULT 1',
 ];
 for (const sql of columnMigrations) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }
@@ -151,11 +152,11 @@ function loadPlayerStatsFromDB() {
                 ON ps.account_id = mv.account_id
             LEFT JOIN (SELECT account_id, COUNT(*) AS svp_count FROM match_mvps WHERE award_type = 'svp' GROUP BY account_id) sv
                 ON ps.account_id = sv.account_id
-            WHERE ps.last_updated >= ?
+            WHERE ps.season = ?
         `;
 
-        // better-sqlite3 has synchronous methods — only load Season 2 data
-        const rows = db.prepare(query).all(SEASON_2_START_MS);
+        // better-sqlite3 has synchronous methods — only load current season data
+        const rows = db.prepare(query).all(CURRENT_SEASON);
 
         const players = rows.map(row => ({
             accountId: row.account_id,
@@ -205,8 +206,8 @@ function savePlayerStatsToDB(playerMap) {
         const now = Date.now();
         const insertStats = db.prepare(`
             INSERT OR REPLACE INTO player_stats
-            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, wards_placed, observer_kills, obs_ward_time_total, obs_ward_count, matches, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, wards_placed, observer_kills, obs_ward_time_total, obs_ward_count, matches, last_updated, season)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         for (const [accountId, stats] of playerMap.entries()) {
@@ -225,7 +226,8 @@ function savePlayerStatsToDB(playerMap) {
                 stats.obs_ward_time_total || 0,
                 stats.obs_ward_count || 0,
                 stats.matches,
-                now
+                now,
+                CURRENT_SEASON
             );
         }
 
