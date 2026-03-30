@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recent Matches - Gargamel Dota League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f9f9f9;
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .navbar-brand img {
+      height: 36px;
+      width: auto;
+    }
+
+    .navbar-links {
+      display: flex;
+      gap: 8px;
+      list-style: none;
+    }
+
+    .navbar-links a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: 6px;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .navbar-links a:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .navbar-links a.active {
+      color: #4e9fd1;
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    /* ── Page content ──────────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      padding: 3rem 2rem;
+      max-width: 900px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .page-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .page-header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 6px;
+    }
+
+    .page-header p {
+      color: #888;
+      font-size: 0.9rem;
+    }
+
+    .cache-info {
+      color: #aaa;
+      font-size: 0.8rem;
+      margin-top: 4px;
+    }
+
+    /* ── States ─────────────────────────────────────────────── */
+    .loading-spinner {
+      text-align: center;
+      padding: 60px 0;
+      color: #888;
+      font-size: 1rem;
+    }
+
+    .spinner-ring {
+      display: inline-block;
+      width: 36px;
+      height: 36px;
+      border: 3px solid #e0e0e0;
+      border-top-color: #4e9fd1;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 12px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #e0e0e0;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+    }
+
+    .empty-state h2 {
+      color: #2c3e50;
+      font-size: 1.25rem;
+      margin-bottom: 8px;
+    }
+
+    .empty-state p {
+      color: #888;
+      font-size: 0.95rem;
+    }
+
+    .error-state {
+      text-align: center;
+      padding: 40px 20px;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #e0e0e0;
+    }
+
+    .error-state p {
+      color: #c0392b;
+      margin-bottom: 16px;
+    }
+
+    .retry-btn {
+      background: #4e9fd1;
+      color: #fff;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+      transition: background 0.3s ease;
+    }
+
+    .retry-btn:hover {
+      background: #3b84b3;
+    }
+
+    /* ── Match cards ───────────────────────────────────────── */
+    .match-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .match-card {
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #e0e0e0;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+      overflow: hidden;
+      transition: box-shadow 0.2s ease;
+    }
+
+    .match-card:hover {
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+    }
+
+    .match-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 20px;
+      background: #fafafa;
+      border-bottom: 1px solid #f0f0f0;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .match-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .match-id {
+      font-size: 0.75rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .match-id a {
+      color: #4e9fd1;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      background: rgba(78, 159, 209, 0.08);
+    }
+
+    .match-id a:hover {
+      background: rgba(78, 159, 209, 0.15);
+      color: #3b84b3;
+    }
+
+    .match-id a::after {
+      content: '↗';
+      font-size: 0.9rem;
+      opacity: 0.7;
+    }
+
+    .match-date {
+      font-size: 0.75rem;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .match-date::before {
+      content: '📅';
+      font-size: 0.85rem;
+    }
+
+    .match-mode {
+      font-size: 0.75rem;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .match-duration {
+      font-size: 0.75rem;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .match-duration::before {
+      content: '⏱️';
+      font-size: 0.85rem;
+    }
+
+    .match-winner {
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 20px;
+    }
+
+    .winner-radiant {
+      color: #27ae60;
+      background: rgba(39, 174, 96, 0.1);
+    }
+
+    .winner-dire {
+      color: #c0392b;
+      background: rgba(192, 57, 43, 0.1);
+    }
+
+    .match-body {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 0;
+    }
+
+    /* ── Team panels ───────────────────────────────────────── */
+    .team-panel {
+      padding: 16px 20px;
+    }
+
+    .team-radiant {
+      border-right: 1px solid #f0f0f0;
+    }
+
+    .team-dire {
+      border-left: 1px solid #f0f0f0;
+    }
+
+    .team-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .label-radiant {
+      color: #27ae60;
+    }
+
+    .label-dire {
+      color: #c0392b;
+    }
+
+    .team-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .indicator-radiant {
+      background: #27ae60;
+    }
+
+    .indicator-dire {
+      background: #c0392b;
+    }
+
+    .player-list {
+      list-style: none;
+    }
+
+    .player-list li {
+      font-size: 0.85rem;
+      color: #555;
+      padding: 3px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      position: relative;
+    }
+
+    .player-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      background: #e0e0e0;
+      object-fit: cover;
+    }
+
+    .player-name-text {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .player-name-text a {
+      color: #555;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .player-name-text a:hover {
+      color: #4e9fd1;
+      text-decoration: underline;
+    }
+
+    .player-mvp .player-name-text a {
+      color: #b8860b;
+    }
+
+    .player-svp .player-name-text a {
+      color: #708090;
+    }
+
+    .player-mvp {
+      background: linear-gradient(90deg, rgba(255, 215, 0, 0.18) 0%, rgba(255, 215, 0, 0.06) 100%);
+      border-radius: 4px;
+    }
+
+    .player-mvp .player-name-text {
+      font-weight: 700;
+      color: #b8860b;
+    }
+
+    .player-svp {
+      background: linear-gradient(90deg, rgba(192, 192, 192, 0.2) 0%, rgba(192, 192, 192, 0.06) 100%);
+      border-radius: 4px;
+    }
+
+    .player-svp .player-name-text {
+      font-weight: 700;
+      color: #708090;
+    }
+
+    .vp-star {
+      position: absolute;
+      right: 0;
+      font-size: 0.75rem;
+    }
+
+    .vp-star.gold {
+      color: #daa520;
+    }
+
+    .vp-star.silver {
+      color: #a0a0a0;
+    }
+
+    /* ── Score divider ─────────────────────────────────────── */
+    .score-divider {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 16px 20px;
+      min-width: 80px;
+      background: #fafafa;
+    }
+
+    .score-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #aaa;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .score-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #2c3e50;
+      line-height: 1;
+    }
+
+    .score-separator {
+      width: 20px;
+      height: 2px;
+      background: #ddd;
+      margin: 8px 0;
+    }
+
+    .score-radiant {
+      color: #27ae60;
+    }
+
+    .score-dire {
+      color: #c0392b;
+    }
+
+    /* ── Responsive ────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .navbar {
+        padding: 0 1rem;
+      }
+
+      .navbar-brand span {
+        display: none;
+      }
+
+      .navbar-links a {
+        padding: 8px 10px;
+        font-size: 0.8rem;
+      }
+
+      .page-content {
+        padding: 2rem 1rem;
+      }
+
+      .match-body {
+        grid-template-columns: 1fr;
+      }
+
+      .team-radiant {
+        border-right: none;
+        border-bottom: 1px solid #f0f0f0;
+      }
+
+      .team-dire {
+        border-left: none;
+        border-top: 1px solid #f0f0f0;
+      }
+
+      .score-divider {
+        flex-direction: row;
+        gap: 12px;
+        padding: 12px 20px;
+      }
+
+      .score-separator {
+        width: 2px;
+        height: 20px;
+        margin: 0;
+      }
+    }
+
+    /* ── Live Game Toast ────────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      top: 80px;
+      right: 20px;
+      background: #1a1a2e;
+      border: 2px solid #ef4444;
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      z-index: 1000;
+      min-width: 280px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .toast.hidden {
+      display: none;
+    }
+
+    .toast:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 25px rgba(0, 0, 0, 0.4);
+    }
+
+    .toast-content {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toast-icon {
+      font-size: 24px;
+      animation: toast-pulse 1.5s ease-in-out infinite;
+    }
+
+    .toast-message strong {
+      display: block;
+      color: white;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .toast-message p {
+      color: #aaa;
+      font-size: 12px;
+      margin: 0;
+    }
+
+    .toast-close {
+      background: none;
+      border: none;
+      color: #aaa;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0;
+      margin-left: auto;
+      line-height: 1;
+    }
+
+    .toast-close:hover {
+      color: white;
+    }
+
+    @keyframes toast-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+  </style>
+</head>
+
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+    <ul class="navbar-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="/matches" class="active">Matches</a></li>
+      <li><a href="/rankings">Rankings</a></li>
+      <li><a href="/about">About</a></li>
+      <li><a href="/livegame">Live Game</a></li>
+    </ul>
+  </nav>
+
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Recent Matches</h1>
+      <p>Last 10 matches from Gargamel League</p>
+      <div id="cache-info" class="cache-info"></div>
+    </div>
+
+    <div id="match-container">
+      <div class="loading-spinner">
+        <div class="spinner-ring"></div>
+        <div>Loading matches...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function formatDuration(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return m + ':' + String(s).padStart(2, '0');
+    }
+
+    function formatMatchDate(timestamp) {
+      const date = new Date(timestamp * 1000); // Convert Unix timestamp to milliseconds
+      const now = new Date();
+      const diff = now - date;
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const days = Math.floor(hours / 24);
+
+      // If less than 24 hours ago, show relative time
+      if (hours < 24) {
+        if (hours < 1) return 'Less than an hour ago';
+        return hours === 1 ? '1 hour ago' : hours + ' hours ago';
+      }
+
+      // If less than 7 days ago, show days
+      if (days < 7) {
+        return days === 1 ? 'Yesterday' : days + ' days ago';
+      }
+
+      // Otherwise show full date
+      const options = { month: 'short', day: 'numeric', year: 'numeric' };
+      return date.toLocaleDateString('en-US', options);
+    }
+
+    function timeAgo(timestamp) {
+      const now = Date.now();
+      const diff = now - timestamp;
+      const mins = Math.floor(diff / 60000);
+      if (mins < 1) return 'just now';
+      if (mins < 60) return mins + 'm ago';
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) return hrs + 'h ago';
+      const days = Math.floor(hrs / 24);
+      return days + 'd ago';
+    }
+
+    var GAME_MODES = {
+      0: 'Unknown', 1: 'All Pick', 2: "Captain's Mode", 3: 'Random Draft',
+      4: 'Single Draft', 5: 'All Random', 6: 'Intro', 7: 'Diretide',
+      8: "Greeviling", 9: 'Tutorial', 10: 'Mid Only', 11: 'Least Played',
+      12: 'Limited Heroes', 13: 'Compendium', 14: 'All Pick', 15: 'Custom',
+      16: "Captain's Draft", 17: 'Balanced Draft', 18: 'Ability Draft',
+      19: 'Event', 20: 'All Random DM', 21: '1v1 Mid', 22: 'All Draft',
+      23: 'Turbo', 24: 'Mutation'
+    };
+
+    function renderMatches(data) {
+      const container = document.getElementById('match-container');
+      const cacheInfo = document.getElementById('cache-info');
+
+      if (data.lastUpdated) {
+        cacheInfo.textContent = 'Data refreshed ' + timeAgo(data.lastUpdated) +
+          ' \u00B7 auto-refreshes every ' + Math.round(data.cacheMaxAge / 60000) + ' min';
+      }
+
+      if (!data.matches || data.matches.length === 0) {
+        container.innerHTML =
+          '<div class="empty-state">' +
+            '<h2>No matches yet</h2>' +
+            '<p>Matches will appear here once games are played in the Gargamel League.</p>' +
+          '</div>';
+        return;
+      }
+
+      let html = '<div class="match-list">';
+
+      for (const match of data.matches) {
+        const radiantPlayers = match.players.filter(function(p) { return p.isRadiant; });
+        const direPlayers = match.players.filter(function(p) { return !p.isRadiant; });
+        const winnerClass = match.radiant_win ? 'winner-radiant' : 'winner-dire';
+        const winnerText = match.radiant_win ? 'Radiant Victory' : 'Dire Victory';
+
+        html += '<div class="match-card">';
+
+        // Header
+        html += '<div class="match-header">';
+
+        // Left side: Match info (ID and date)
+        html += '<div class="match-info">';
+        html += '<span class="match-id"><a href="https://www.opendota.com/matches/' +
+          match.match_id + '" target="_blank" rel="noopener">View on OpenDota</a></span>';
+        if (match.start_time) {
+          html += '<span class="match-date">' + formatMatchDate(match.start_time) + '</span>';
+        }
+        if (match.game_mode != null) {
+          html += '<span class="match-mode">' + escapeHtml(GAME_MODES[match.game_mode] || 'Mode ' + match.game_mode) + '</span>';
+        }
+        html += '</div>';
+
+        // Center: Winner badge
+        html += '<span class="match-winner ' + winnerClass + '">' + winnerText + '</span>';
+
+        // Right: Duration
+        if (match.duration) {
+          html += '<span class="match-duration">' + formatDuration(match.duration) + '</span>';
+        }
+
+        html += '</div>';
+
+        // Body
+        html += '<div class="match-body">';
+
+        // Radiant panel
+        html += '<div class="team-panel team-radiant">';
+        html += '<div class="team-label label-radiant">' +
+          '<span class="team-indicator indicator-radiant"></span>Radiant</div>';
+        html += '<ul class="player-list">';
+        for (const p of radiantPlayers) {
+          var liClass = p.isMVP ? 'player-mvp' : (p.isSVP ? 'player-svp' : '');
+          html += '<li' + (liClass ? ' class="' + liClass + '"' : '') + '>';
+          if (p.avatar) {
+            html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
+          } else {
+            html += '<div class="player-avatar"></div>';
+          }
+          html += '<span class="player-name-text">' + renderPlayerLink(p.personaname, p.account_id) + '</span>';
+          if (p.isMVP) html += '<span class="vp-star gold" title="Match MVP">&#9733;</span>';
+          if (p.isSVP) html += '<span class="vp-star silver" title="Match SVP">&#9733;</span>';
+          html += '</li>';
+        }
+        html += '</ul></div>';
+
+        // Score divider
+        html += '<div class="score-divider">';
+        html += '<div class="score-label">Kills</div>';
+        html += '<div class="score-value score-radiant">' +
+          (match.radiant_score != null ? match.radiant_score : '-') + '</div>';
+        html += '<div class="score-separator"></div>';
+        html += '<div class="score-value score-dire">' +
+          (match.dire_score != null ? match.dire_score : '-') + '</div>';
+        html += '</div>';
+
+        // Dire panel
+        html += '<div class="team-panel team-dire">';
+        html += '<div class="team-label label-dire">' +
+          '<span class="team-indicator indicator-dire"></span>Dire</div>';
+        html += '<ul class="player-list">';
+        for (const p of direPlayers) {
+          var liClass = p.isMVP ? 'player-mvp' : (p.isSVP ? 'player-svp' : '');
+          html += '<li' + (liClass ? ' class="' + liClass + '"' : '') + '>';
+          if (p.avatar) {
+            html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
+          } else {
+            html += '<div class="player-avatar"></div>';
+          }
+          html += '<span class="player-name-text">' + renderPlayerLink(p.personaname, p.account_id) + '</span>';
+          if (p.isMVP) html += '<span class="vp-star gold" title="Match MVP">&#9733;</span>';
+          if (p.isSVP) html += '<span class="vp-star silver" title="Match SVP">&#9733;</span>';
+          html += '</li>';
+        }
+        html += '</ul></div>';
+
+        html += '</div>'; // match-body
+        html += '</div>'; // match-card
+      }
+
+      html += '</div>';
+      container.innerHTML = html;
+    }
+
+    function escapeHtml(str) {
+      var div = document.createElement('div');
+      div.appendChild(document.createTextNode(str));
+      return div.innerHTML;
+    }
+
+    function renderPlayerLink(name, accountId) {
+      if (accountId) {
+        return '<a href="https://www.opendota.com/players/' + accountId + '" target="_blank" rel="noopener">' + escapeHtml(name) + '</a>';
+      }
+      return escapeHtml(name);
+    }
+
+    function loadMatches() {
+      var container = document.getElementById('match-container');
+      container.innerHTML =
+        '<div class="loading-spinner">' +
+          '<div class="spinner-ring"></div>' +
+          '<div>Loading matches...</div>' +
+        '</div>';
+
+      fetch('/api/recent-matches')
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function(data) {
+          renderMatches(data);
+        })
+        .catch(function(err) {
+          container.innerHTML =
+            '<div class="error-state">' +
+              '<p>Failed to load matches: ' + escapeHtml(err.message) + '</p>' +
+              '<button class="retry-btn" onclick="loadMatches()">Retry</button>' +
+            '</div>';
+        });
+    }
+
+    loadMatches();
+
+    // ── Live Game Toast ──────────────────────────────────────────────────────
+    const TOAST_POLL_INTERVAL = 15000; // Check every 15 seconds
+    const TOAST_DISMISSED_KEY = 'liveGameToastDismissed';
+    const TOAST_DISMISS_DURATION = 5 * 60 * 1000; // 5 minutes
+
+    async function checkLiveGameStatus() {
+      // Don't check if we're already on the live game page
+      if (window.location.pathname === '/livegame') {
+        return;
+      }
+
+      // Check if toast was recently dismissed
+      const dismissed = localStorage.getItem(TOAST_DISMISSED_KEY);
+      if (dismissed && (Date.now() - parseInt(dismissed)) < TOAST_DISMISS_DURATION) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/live-game/status');
+        const data = await response.json();
+
+        if (data.active) {
+          showToast();
+        } else {
+          hideToast();
+          // Clear dismissed flag if no game is active
+          localStorage.removeItem(TOAST_DISMISSED_KEY);
+        }
+      } catch (error) {
+        console.error('Failed to check live game status:', error);
+      }
+    }
+
+    function showToast() {
+      const toast = document.getElementById('live-game-toast');
+      if (toast) {
+        toast.classList.remove('hidden');
+        toast.onclick = () => {
+          window.location.href = '/livegame';
+        };
+      }
+    }
+
+    function hideToast() {
+      const toast = document.getElementById('live-game-toast');
+      if (toast) {
+        toast.classList.add('hidden');
+      }
+    }
+
+    function dismissToast(event) {
+      event.stopPropagation();
+      localStorage.setItem(TOAST_DISMISSED_KEY, Date.now().toString());
+      hideToast();
+    }
+
+    // Initial check
+    checkLiveGameStatus();
+
+    // Poll for live game status
+    setInterval(checkLiveGameStatus, TOAST_POLL_INTERVAL);
+  </script>
+
+  <!-- Live Game Toast -->
+  <div id="live-game-toast" class="toast hidden">
+    <div class="toast-content">
+      <div class="toast-icon">🔴</div>
+      <div class="toast-message">
+        <strong>Live Game in Progress!</strong>
+        <p>Click to watch</p>
+      </div>
+      <button class="toast-close" onclick="dismissToast(event)">&times;</button>
+    </div>
+  </div>
+</body>
+
+</html>

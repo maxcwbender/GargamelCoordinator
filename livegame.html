@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Game - Gargamel League</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #f9f9f9;
+            color: #333;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Navbar */
+        .navbar {
+            background: #1a1a2e;
+            padding: 0 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 60px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .navbar-brand {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #fff;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .navbar-brand img {
+            height: 36px;
+            width: auto;
+        }
+
+        .navbar-links {
+            display: flex;
+            gap: 8px;
+            list-style: none;
+        }
+
+        .navbar-links a {
+            color: #b0b8c8;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: color 0.2s ease, background 0.2s ease;
+        }
+
+        .navbar-links a:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .navbar-links a.active {
+            color: #4e9fd1;
+            background: rgba(78, 159, 209, 0.1);
+        }
+
+        /* Page content */
+        .page-content {
+            flex: 1;
+            max-width: 1400px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Live indicator */
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #ef4444;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: white;
+            border-radius: 50%;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* Game tab navigation */
+        .game-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .game-tab {
+            padding: 10px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            color: #666;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .game-tab:hover {
+            border-color: #4e9fd1;
+            color: #4e9fd1;
+            background: rgba(78, 159, 209, 0.05);
+        }
+
+        .game-tab.active {
+            border-color: #4e9fd1;
+            background: rgba(78, 159, 209, 0.1);
+            color: #4e9fd1;
+        }
+
+        .game-tab .tab-score {
+            font-size: 13px;
+            color: #999;
+            font-weight: 500;
+        }
+
+        .game-tab.active .tab-score {
+            color: #4e9fd1;
+        }
+
+        .game-tab .tab-duration {
+            font-size: 12px;
+            color: #bbb;
+            font-weight: 400;
+        }
+
+        .game-tab.active .tab-duration {
+            color: rgba(78, 159, 209, 0.7);
+        }
+
+        .pending-notice {
+            text-align: center;
+            color: #999;
+            font-size: 13px;
+            margin-top: 12px;
+        }
+
+        /* Match info header */
+        .match-header {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .match-time {
+            font-size: 32px;
+            font-weight: 700;
+            color: #4ade80;
+        }
+
+        .match-score {
+            font-size: 48px;
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+
+        .spectator-count {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .delay-notice {
+            color: #999;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+
+        /* Minimap container */
+        .minimap-container {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .minimap-container h3 {
+            margin-bottom: 16px;
+            text-align: center;
+            color: #1a1a2e;
+            font-size: 20px;
+        }
+
+        .minimap {
+            position: relative;
+            width: 100%;
+            max-width: 300px;
+            margin: 0 auto;
+            aspect-ratio: 1;
+            background: #0a0a0f url('minimap_background.png') center/cover;
+            border: 2px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .minimap-grid {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 10% 10%;
+        }
+
+        .minimap-no-positions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(255,255,255,0.5);
+            font-size: 14px;
+            text-align: center;
+            padding: 10px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 4px;
+        }
+
+        .player-dot {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid rgba(255,255,255,0.8);
+            transform: translate(-50%, -50%);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .player-dot.radiant {
+            background: #4ade80;
+            box-shadow: 0 0 10px #4ade80;
+        }
+
+        .player-dot.dire {
+            background: #ef4444;
+            box-shadow: 0 0 10px #ef4444;
+        }
+
+        .player-dot.dead {
+            opacity: 0.3;
+            filter: grayscale(100%);
+        }
+
+        .tower {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            transform: translate(-50%, -50%);
+            border: 1px solid rgba(255,255,255,0.5);
+        }
+
+        .tower.radiant {
+            background: #4ade80;
+        }
+
+        .tower.dire {
+            background: #ef4444;
+        }
+
+        .tower.destroyed {
+            opacity: 0.2;
+            background: #333;
+        }
+
+        .barracks {
+            position: absolute;
+            width: 7px;
+            height: 7px;
+            transform: translate(-50%, -50%);
+            border: 1px solid rgba(255,255,255,0.4);
+            border-radius: 1px;
+        }
+
+        .barracks.radiant {
+            background: rgba(74, 222, 128, 0.7);
+        }
+
+        .barracks.dire {
+            background: rgba(239, 68, 68, 0.7);
+        }
+
+        .barracks.destroyed {
+            opacity: 0.2;
+            background: #333;
+        }
+
+        /* Player tables */
+        .teams-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-top: 24px;
+        }
+
+        .team-card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .team-card.radiant {
+            border-left: 4px solid #4ade80;
+        }
+
+        .team-card.dire {
+            border-left: 4px solid #ef4444;
+        }
+
+        .team-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .team-name {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+
+        .team-score {
+            font-size: 32px;
+            font-weight: 700;
+        }
+
+        .players-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .players-table th {
+            text-align: left;
+            padding: 12px 8px;
+            border-bottom: 2px solid #e0e0e0;
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .players-table td {
+            padding: 12px 8px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .player-name-cell {
+            font-weight: 600;
+            color: #1a1a2e;
+        }
+
+        .player-name-cell a {
+            color: #1a1a2e;
+            text-decoration: none;
+            transition: color 0.2s ease;
+        }
+
+        .player-name-cell a:hover {
+            color: #4e9fd1;
+            text-decoration: underline;
+        }
+
+        .kda-cell {
+            font-family: 'Courier New', monospace;
+            color: #666;
+        }
+
+        .net-worth-cell {
+            color: #f59e0b;
+            font-weight: 600;
+        }
+
+        .hero-cell {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .hero-icon {
+            width: 48px;
+            height: 27px;
+            object-fit: cover;
+            border-radius: 3px;
+            background: #1a1a2e;
+            flex-shrink: 0;
+        }
+
+        .hero-placeholder {
+            width: 48px;
+            height: 27px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+
+        .item-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 28px);
+            grid-template-rows: repeat(2, 20px);
+            gap: 1px;
+        }
+
+        .item-slot {
+            width: 28px;
+            height: 20px;
+            border-radius: 2px;
+            object-fit: cover;
+            background: #1a1a2e;
+        }
+
+        .item-empty {
+            width: 28px;
+            height: 20px;
+            background: #2a2a3e;
+            border-radius: 2px;
+        }
+
+        .cs-cell {
+            color: #888;
+            font-size: 13px;
+        }
+
+        .gpm-cell {
+            color: #888;
+            font-size: 13px;
+        }
+
+        /* No game state */
+        .no-game {
+            text-align: center;
+            padding: 80px 20px;
+            color: #999;
+        }
+
+        .no-game h2 {
+            font-size: 32px;
+            margin-bottom: 16px;
+            color: #333;
+        }
+
+        .no-game p {
+            color: #666;
+        }
+
+        /* Responsive */
+        @media (max-width: 968px) {
+            .game-tabs {
+                justify-content: center;
+            }
+
+            .teams-container {
+                grid-template-columns: 1fr;
+            }
+
+            .match-header {
+                flex-direction: column;
+                gap: 16px;
+                text-align: center;
+            }
+
+            .hide-mobile {
+                display: none;
+            }
+
+            .hero-icon {
+                width: 36px;
+                height: 20px;
+            }
+
+            .hero-placeholder {
+                width: 36px;
+                height: 20px;
+            }
+
+            .item-grid {
+                grid-template-columns: repeat(3, 24px);
+                grid-template-rows: repeat(2, 17px);
+            }
+
+            .item-slot {
+                width: 24px;
+                height: 17px;
+            }
+
+            .item-empty {
+                width: 24px;
+                height: 17px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">
+            <img src="GargamelPuppets.png" alt="Logo">
+            <span>Gargamel League</span>
+        </a>
+        <ul class="navbar-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/matches">Matches</a></li>
+            <li><a href="/rankings">Rankings</a></li>
+            <li><a href="/about">About</a></li>
+            <li><a href="/livegame" class="active">Live Game</a></li>
+        </ul>
+    </nav>
+
+    <div class="page-content">
+        <div id="game-container">
+            <!-- Will be populated by JavaScript -->
+        </div>
+    </div>
+
+    <script>
+        const POLL_INTERVAL = 5000; // Poll every 5 seconds
+
+        // Multi-game state
+        let allGames = [];
+        let pendingGames = [];
+        let selectedGameIndex = 0;
+        let selectedMatchId = null;
+
+        async function fetchLiveGame() {
+            try {
+                const response = await fetch('/api/live-game');
+                const data = await response.json();
+
+                if (!data.active || !data.games || data.games.length === 0) {
+                    allGames = [];
+                    pendingGames = data.pendingGames || [];
+
+                    if (pendingGames.length > 0) {
+                        renderPendingGame(pendingGames[0]);
+                    } else {
+                        renderNoGame();
+                    }
+                    return;
+                }
+
+                allGames = data.games;
+                pendingGames = data.pendingGames || [];
+
+                resolveSelectedGame();
+                renderMultiGameView();
+            } catch (error) {
+                allGames = [];
+                pendingGames = [];
+                renderNoGame();
+            }
+        }
+
+        // Preserve the user's tab selection across poll refreshes
+        function resolveSelectedGame() {
+            if (allGames.length === 0) {
+                selectedGameIndex = 0;
+                selectedMatchId = null;
+                return;
+            }
+
+            // If we were tracking a specific match, find it in the new data
+            if (selectedMatchId !== null) {
+                const idx = allGames.findIndex(g => g.matchId === selectedMatchId);
+                if (idx !== -1) {
+                    selectedGameIndex = idx;
+                    return;
+                }
+            }
+
+            // Default to first game
+            selectedGameIndex = 0;
+            selectedMatchId = allGames[0].matchId;
+        }
+
+        function selectGame(index) {
+            if (index >= 0 && index < allGames.length) {
+                selectedGameIndex = index;
+                selectedMatchId = allGames[index].matchId;
+                renderMultiGameView();
+            }
+        }
+
+        // Orchestrator: renders tabs (if needed) + selected game
+        function renderMultiGameView() {
+            const container = document.getElementById('game-container');
+            let html = '';
+
+            // Live badge
+            html += '<div class="live-badge">';
+            html += '<div class="live-dot"></div>';
+            html += '<span>LIVE</span>';
+            html += '</div>';
+
+            // Game tabs (only if 2+ active games)
+            if (allGames.length > 1) {
+                html += renderGameTabs();
+            }
+
+            // Selected game content
+            const game = allGames[selectedGameIndex];
+            if (game) {
+                html += renderGameContent(game);
+            }
+
+            // Pending games notice
+            if (pendingGames.length > 0) {
+                html += '<div class="pending-notice">';
+                html += pendingGames.length + ' additional game' + (pendingGames.length > 1 ? 's' : '') + ' in picking phase';
+                html += '</div>';
+            }
+
+            container.innerHTML = html;
+
+            // Attach tab click handlers after DOM update
+            if (allGames.length > 1) {
+                document.querySelectorAll('.game-tab').forEach(tab => {
+                    tab.addEventListener('click', function() {
+                        const index = parseInt(this.getAttribute('data-game-index'));
+                        selectGame(index);
+                    });
+                });
+            }
+        }
+
+        function renderGameTabs() {
+            let html = '<div class="game-tabs">';
+
+            allGames.forEach((game, index) => {
+                const isActive = index === selectedGameIndex;
+                const activeClass = isActive ? ' active' : '';
+                const duration = formatDuration(game.duration);
+                const score = game.radiant.score + ' - ' + game.dire.score;
+
+                html += '<button class="game-tab' + activeClass + '" data-game-index="' + index + '">';
+                html += '<span>Game ' + (index + 1) + '</span>';
+                html += '<span class="tab-score">' + score + '</span>';
+                html += '<span class="tab-duration">' + duration + '</span>';
+                html += '</button>';
+            });
+
+            html += '</div>';
+            return html;
+        }
+
+        // Tower positions on minimap (as percentages)
+        // Radiant base is bottom-left, Dire base is top-right
+        // Bit order: 0=TopT1, 1=TopT2, 2=TopT3, 3=MidT1, 4=MidT2, 5=MidT3, 6=BotT1, 7=BotT2, 8=BotT3, 9=AncientTop, 10=AncientBot
+        const TOWER_POSITIONS = {
+            radiant: [
+                { bit: 0, x: 8, y: 25 },    // Top T1 - left edge, near top
+                { bit: 1, x: 8, y: 48 },    // Top T2 - left edge, middle
+                { bit: 2, x: 13, y: 73 },   // Top T3 - near base, upper
+                { bit: 3, x: 44, y: 56 },   // Mid T1 - near river
+                { bit: 4, x: 32, y: 68 },   // Mid T2 - toward base
+                { bit: 5, x: 24, y: 76 },   // Mid T3 - near base
+                { bit: 6, x: 72, y: 92 },   // Bot T1 - bottom edge, right side
+                { bit: 7, x: 48, y: 92 },   // Bot T2 - bottom edge, middle
+                { bit: 8, x: 26, y: 87 },   // Bot T3 - near base, bottom
+                { bit: 9, x: 17, y: 80 },   // Ancient Top
+                { bit: 10, x: 21, y: 84 },  // Ancient Bot
+            ],
+            dire: [
+                { bit: 0, x: 28, y: 8 },    // Top T1 - top edge, left side
+                { bit: 1, x: 52, y: 8 },    // Top T2 - top edge, middle
+                { bit: 2, x: 74, y: 13 },   // Top T3 - near base, top
+                { bit: 3, x: 56, y: 44 },   // Mid T1 - near river
+                { bit: 4, x: 68, y: 32 },   // Mid T2 - toward base
+                { bit: 5, x: 76, y: 24 },   // Mid T3 - near base
+                { bit: 6, x: 92, y: 75 },   // Bot T1 - right edge, near bottom
+                { bit: 7, x: 92, y: 52 },   // Bot T2 - right edge, middle
+                { bit: 8, x: 87, y: 27 },   // Bot T3 - near base, lower
+                { bit: 9, x: 80, y: 16 },   // Ancient Top
+                { bit: 10, x: 84, y: 20 },  // Ancient Bot
+            ]
+        };
+
+        function renderTowers(towerState, team) {
+            let html = '';
+            const positions = TOWER_POSITIONS[team];
+
+            positions.forEach(tower => {
+                const isAlive = (towerState & (1 << tower.bit)) !== 0;
+                const destroyedClass = isAlive ? '' : ' destroyed';
+                html += '<div class="tower ' + team + destroyedClass + '" ';
+                html += 'style="left: ' + tower.x + '%; top: ' + tower.y + '%;" ';
+                html += 'title="' + team.charAt(0).toUpperCase() + team.slice(1) + ' Tower (Bit ' + tower.bit + ')">';
+                html += '</div>';
+            });
+
+            return html;
+        }
+
+        // Barracks positions on minimap
+        // Bit order: 0=TopMelee, 1=TopRanged, 2=MidMelee, 3=MidRanged, 4=BotMelee, 5=BotRanged
+        const BARRACKS_POSITIONS = {
+            radiant: [
+                { bit: 0, x: 11, y: 74, label: 'Top Melee' },
+                { bit: 1, x: 15, y: 74, label: 'Top Ranged' },
+                { bit: 2, x: 22, y: 78, label: 'Mid Melee' },
+                { bit: 3, x: 26, y: 78, label: 'Mid Ranged' },
+                { bit: 4, x: 24, y: 89, label: 'Bot Melee' },
+                { bit: 5, x: 28, y: 89, label: 'Bot Ranged' },
+            ],
+            dire: [
+                { bit: 0, x: 72, y: 11, label: 'Top Melee' },
+                { bit: 1, x: 76, y: 11, label: 'Top Ranged' },
+                { bit: 2, x: 74, y: 22, label: 'Mid Melee' },
+                { bit: 3, x: 78, y: 22, label: 'Mid Ranged' },
+                { bit: 4, x: 85, y: 25, label: 'Bot Melee' },
+                { bit: 5, x: 89, y: 25, label: 'Bot Ranged' },
+            ]
+        };
+
+        function renderBarracks(barracksState, team) {
+            let html = '';
+            const positions = BARRACKS_POSITIONS[team];
+
+            positions.forEach(rax => {
+                const isAlive = (barracksState & (1 << rax.bit)) !== 0;
+                const destroyedClass = isAlive ? '' : ' destroyed';
+                html += '<div class="barracks ' + team + destroyedClass + '" ';
+                html += 'style="left: ' + rax.x + '%; top: ' + rax.y + '%;" ';
+                html += 'title="' + team.charAt(0).toUpperCase() + team.slice(1) + ' ' + rax.label + '">';
+                html += '</div>';
+            });
+
+            return html;
+        }
+
+        // Renders a single game's content (header, minimap, teams) — returns HTML string
+        function renderGameContent(data) {
+            const duration = formatDuration(data.duration);
+            let html = '';
+
+            // Match header
+            html += '<div class="match-header">';
+            html += '<div class="match-time">' + duration + '</div>';
+            html += '<div class="match-score">' + data.radiant.score + ' - ' + data.dire.score + '</div>';
+            html += '<div><div class="spectator-count">' + data.spectators + ' watching</div>';
+            html += '<div class="delay-notice">Live feed is on a ~2 minute delay</div></div>';
+            html += '</div>';
+
+            // Minimap
+            html += '<div class="minimap-container">';
+            html += '<h3>Live Minimap</h3>';
+            html += '<div class="minimap">';
+            html += '<div class="minimap-grid"></div>';
+
+            let playersWithPositions = 0;
+
+            // Plot radiant players
+            data.radiant.players.forEach(p => {
+                const hasPosition = p.posX != null && p.posY != null;
+                if (hasPosition) {
+                    playersWithPositions++;
+                    const x = (p.posX / 255) * 100;
+                    const y = 100 - (p.posY / 255) * 100;
+                    const deadClass = p.respawnTimer > 0 ? ' dead' : '';
+                    const heroLabel = p.heroName ? p.heroName + ' - ' : '';
+                    html += '<div class="player-dot radiant' + deadClass + '" ';
+                    html += 'style="left: ' + x + '%; top: ' + y + '%;" ';
+                    html += 'title="' + heroLabel + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
+                    html += '</div>';
+                }
+            });
+
+            // Plot dire players
+            data.dire.players.forEach(p => {
+                const hasPosition = p.posX != null && p.posY != null;
+                if (hasPosition) {
+                    playersWithPositions++;
+                    const x = (p.posX / 255) * 100;
+                    const y = 100 - (p.posY / 255) * 100;
+                    const deadClass = p.respawnTimer > 0 ? ' dead' : '';
+                    const heroLabel = p.heroName ? p.heroName + ' - ' : '';
+                    html += '<div class="player-dot dire' + deadClass + '" ';
+                    html += 'style="left: ' + x + '%; top: ' + y + '%;" ';
+                    html += 'title="' + heroLabel + escapeHtml(p.name) + ' (Lvl ' + p.level + ')">';
+                    html += '</div>';
+                }
+            });
+
+            // Show message if no position data available
+            if (playersWithPositions === 0) {
+                html += '<div class="minimap-no-positions">Position data not available</div>';
+            }
+
+            // Render towers and barracks
+            html += renderTowers(data.radiant.towerState || 0, 'radiant');
+            html += renderTowers(data.dire.towerState || 0, 'dire');
+            html += renderBarracks(data.radiant.barracksState || 0, 'radiant');
+            html += renderBarracks(data.dire.barracksState || 0, 'dire');
+
+            html += '</div></div>';
+
+            // Teams container
+            html += '<div class="teams-container">';
+
+            // Radiant team
+            html += '<div class="team-card radiant">';
+            html += '<div class="team-header">';
+            html += '<div class="team-name">Radiant</div>';
+            html += '<div class="team-score" style="color: #4ade80;">' + data.radiant.score + '</div>';
+            html += '</div>';
+            html += renderPlayerTable(data.radiant.players);
+            html += '</div>';
+
+            // Dire team
+            html += '<div class="team-card dire">';
+            html += '<div class="team-header">';
+            html += '<div class="team-name">Dire</div>';
+            html += '<div class="team-score" style="color: #ef4444;">' + data.dire.score + '</div>';
+            html += '</div>';
+            html += renderPlayerTable(data.dire.players);
+            html += '</div>';
+
+            html += '</div>';
+
+            return html;
+        }
+
+        function renderItemGrid(items) {
+            let html = '<div class="item-grid">';
+            for (let i = 0; i < 6; i++) {
+                const item = items && items[i];
+                if (item && item.img) {
+                    html += '<img src="' + escapeHtml(item.img) + '" alt="' + escapeHtml(item.name) + '" title="' + escapeHtml(item.name) + '" class="item-slot" onerror="this.className=\'item-empty\';this.removeAttribute(\'src\')">';
+                } else {
+                    html += '<div class="item-empty"></div>';
+                }
+            }
+            html += '</div>';
+            return html;
+        }
+
+        function renderPlayerTable(players) {
+            let html = '<table class="players-table">';
+            html += '<thead><tr>';
+            html += '<th>Player</th>';
+            html += '<th>Lvl</th>';
+            html += '<th>K/D/A</th>';
+            html += '<th class="hide-mobile">LH/DN</th>';
+            html += '<th class="hide-mobile">GPM</th>';
+            html += '<th>Net Worth</th>';
+            html += '<th>Items</th>';
+            html += '</tr></thead>';
+            html += '<tbody>';
+
+            players.forEach(p => {
+                html += '<tr>';
+
+                // Hero + Player name
+                html += '<td><div class="hero-cell">';
+                if (p.heroImg) {
+                    html += '<img src="' + escapeHtml(p.heroImg) + '" alt="' + escapeHtml(p.heroName || '') + '" title="' + escapeHtml(p.heroName || '') + '" class="hero-icon" onerror="this.className=\'hero-placeholder\';this.removeAttribute(\'src\')">';
+                } else {
+                    html += '<div class="hero-placeholder"></div>';
+                }
+                if (p.accountId) {
+                    html += '<a href="https://www.opendota.com/players/' + p.accountId + '" target="_blank" rel="noopener" class="player-name-cell">' + escapeHtml(p.name) + '</a>';
+                } else {
+                    html += '<span class="player-name-cell">' + escapeHtml(p.name) + '</span>';
+                }
+                html += '</div></td>';
+
+                html += '<td>' + p.level + '</td>';
+                html += '<td class="kda-cell">' + p.kills + '/' + p.deaths + '/' + p.assists + '</td>';
+                html += '<td class="cs-cell hide-mobile">' + (p.lastHits || 0) + '/' + (p.denies || 0) + '</td>';
+                html += '<td class="gpm-cell hide-mobile">' + (p.gpm || 0) + '</td>';
+                html += '<td class="net-worth-cell">' + p.netWorth.toLocaleString() + '</td>';
+                html += '<td>' + renderItemGrid(p.items) + '</td>';
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function renderNoGame() {
+            const container = document.getElementById('game-container');
+            container.innerHTML = `
+                <div class="no-game">
+                    <h2>No Live Games</h2>
+                    <p>There are no active games in the league right now.</p>
+                    <p style="margin-top: 12px;">This page will update automatically when a game starts.</p>
+                </div>
+            `;
+        }
+
+        function renderPendingGame(data) {
+            const container = document.getElementById('game-container');
+            container.innerHTML = `
+                <div class="no-game">
+                    <div class="live-badge" style="display: inline-flex; margin-bottom: 20px;">
+                        <div class="live-dot"></div>
+                        <span>LIVE</span>
+                    </div>
+                    <h2>Game Starting...</h2>
+                    <p>A live game has been detected and is currently in the picking phase.</p>
+                    <p style="margin-top: 12px;">Live stats will appear once the game begins.</p>
+                    ${data.matchId ? '<p style="margin-top: 8px; color: #666; font-size: 12px;">Match ID: ' + data.matchId + '</p>' : ''}
+                </div>
+            `;
+        }
+
+        function formatDuration(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return mins + ':' + (secs < 10 ? '0' : '') + secs;
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // Initial fetch
+        fetchLiveGame();
+
+        // Poll for updates
+        setInterval(fetchLiveGame, POLL_INTERVAL);
+    </script>
+</body>
+</html>

@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About - Gargamel Dota League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f9f9f9;
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .navbar-brand img {
+      height: 36px;
+      width: auto;
+    }
+
+    .navbar-links {
+      display: flex;
+      gap: 8px;
+      list-style: none;
+    }
+
+    .navbar-links a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: 6px;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .navbar-links a:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .navbar-links a.active {
+      color: #4e9fd1;
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    /* ── Page content ──────────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .about-container {
+      background: #ffffff;
+      padding: 48px;
+      border-radius: 12px;
+      max-width: 720px;
+      width: 100%;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      border: 1px solid #e0e0e0;
+    }
+
+    .about-container h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+
+    .about-subtitle {
+      text-align: center;
+      color: #4e9fd1;
+      font-weight: 600;
+      font-size: 1rem;
+      margin-bottom: 32px;
+    }
+
+    .about-section {
+      margin-bottom: 28px;
+    }
+
+    .about-section h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #4e9fd1;
+      display: inline-block;
+    }
+
+    .about-section p {
+      font-size: 0.95rem;
+      color: #555;
+      line-height: 1.7;
+    }
+
+    .feature-list {
+      list-style: none;
+      margin-top: 12px;
+    }
+
+    .feature-list li {
+      padding: 10px 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.95rem;
+      color: #555;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .feature-list li:last-child {
+      border-bottom: none;
+    }
+
+    .feature-icon {
+      color: #4e9fd1;
+      font-weight: 700;
+      flex-shrink: 0;
+      width: 20px;
+      text-align: center;
+    }
+
+    .cta-box {
+      background: #f0f7fc;
+      border: 1px solid #d0e6f5;
+      border-radius: 8px;
+      padding: 24px;
+      text-align: center;
+      margin-top: 32px;
+    }
+
+    .cta-box p {
+      color: #2c3e50;
+      font-size: 0.95rem;
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+
+    .cta-button {
+      display: inline-block;
+      background: #4e9fd1;
+      color: #fff;
+      padding: 12px 28px;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-size: 0.95rem;
+      transition: background 0.3s ease;
+    }
+
+    .cta-button:hover {
+      background: #3b84b3;
+    }
+
+    @media (max-width: 480px) {
+      .navbar {
+        padding: 0 1rem;
+      }
+
+      .navbar-brand span {
+        display: none;
+      }
+
+      .navbar-links a {
+        padding: 8px 10px;
+        font-size: 0.8rem;
+      }
+
+      .about-container {
+        padding: 24px;
+      }
+
+      .about-container h1 {
+        font-size: 1.5rem;
+      }
+    }
+
+    /* ── Live Game Toast ────────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      top: 80px;
+      right: 20px;
+      background: #1a1a2e;
+      border: 2px solid #ef4444;
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      z-index: 1000;
+      min-width: 280px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .toast.hidden {
+      display: none;
+    }
+
+    .toast:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 25px rgba(0, 0, 0, 0.4);
+    }
+
+    .toast-content {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toast-icon {
+      font-size: 24px;
+      animation: toast-pulse 1.5s ease-in-out infinite;
+    }
+
+    .toast-message strong {
+      display: block;
+      color: white;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .toast-message p {
+      color: #aaa;
+      font-size: 12px;
+      margin: 0;
+    }
+
+    .toast-close {
+      background: none;
+      border: none;
+      color: #aaa;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0;
+      margin-left: auto;
+      line-height: 1;
+    }
+
+    .toast-close:hover {
+      color: white;
+    }
+
+    @keyframes toast-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+  </style>
+</head>
+
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+    <ul class="navbar-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="/matches">Matches</a></li>
+      <li><a href="/rankings">Rankings</a></li>
+      <li><a href="/about" class="active">About</a></li>
+      <li><a href="/livegame">Live Game</a></li>
+    </ul>
+  </nav>
+
+  <div class="page-content">
+    <div class="about-container">
+      <h1>Gargamel Dota League</h1>
+      <div class="about-subtitle">Community-Run Inhouse League</div>
+
+      <div class="about-section">
+        <h2>What is Gargamel?</h2>
+        <p>
+          Gargamel League is an in-house Dota 2 Community.  Every game in Gargamel is organized
+          through our Discord Server where a Discord bot that handles matchmaking, team balancing, and lobby creation
+          automatically.
+        </p>
+      </div>
+
+      <div class="about-section">
+        <h2>Why is it called Gargamel?</h2>
+        <p>
+          Gargamel was the name of the man who hated and hunted down the Smurfs.  So we made a league based around  
+          vouching and inviting friends to play in custom lobbies of 5v5 for fun, with no room for Smurfs.
+        </p>
+      </div>
+
+      <div class="about-section">
+        <h2>How It Works</h2>
+        <p>
+          Players register through our website by authenticating via Discord. Once registered,
+          the Discord Bot invites you to the Discord Server.  After the moderators and members vouch for you,
+          you can start queuing up for matches directly in Discord itself.  When enough players are ready,
+          the Bot automatically balances teams based on Players' ratings, creates a lobby in Dota 2 for 
+          the match, and invites all players.  Wins and losses are tracked via the Bot and your Gargamel 
+          MMR is adjusted for each match played.  As everyone knows, Garg MMR is more important than Ranked MMR.
+        </p>
+      </div>
+
+      <div class="about-section">
+        <h2>What's the Skill Level Like?</h2>
+        <p>
+          Gargamel MMRs range anywhere from Herald to Immortal with numerical number ranked.  The bot does its best 
+          to balance matches to ensure everyone has a good time.  Over time, MMRs are adjusted by the system 
+          as if you were playing a real Ranked game, keeping matchups dynamically fair.
+        </p>
+      </div>
+
+      <div class="about-section">
+        <h2>About The Bot</h2>
+        <ul class="feature-list">
+          <li>
+            <span class="feature-icon">+</span>
+            <span>Provides Automated matchmaking and team balancing based on player skill ratings</span>
+          </li>
+          <li>
+            <span class="feature-icon">+</span>
+            <span>Auto-creates Dota 2 lobbies, no manual lobby setup required.</span>
+          </li>
+          <li>
+            <span class="feature-icon">+</span>
+            <span>Fully Discord based.  Queue, voice chat, and meme away from one community location.</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="about-section">
+        <h2>Why play In-houses?</h2>
+        <p>
+          In-house leagues primarily provide a unique Community aspect to their matches compared to
+          pub matches or ranked Dota play.  Games are played exclusively among registered Discord 
+          members of the Gargamel community, leading to better communication, and over time a community
+          and culture of memes built from the ground up to be enjoyable for everyone involved.
+        </p>
+      </div>
+
+      <div class="cta-box">
+        <p>Ready to join the Gargamel League? Register by authenticating via Discord.</p>
+        <a href="/" class="cta-button">Register Now</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── Live Game Toast ──────────────────────────────────────────────────────
+    const TOAST_POLL_INTERVAL = 15000; // Check every 15 seconds
+    const TOAST_DISMISSED_KEY = 'liveGameToastDismissed';
+    const TOAST_DISMISS_DURATION = 5 * 60 * 1000; // 5 minutes
+
+    async function checkLiveGameStatus() {
+      // Don't check if we're already on the live game page
+      if (window.location.pathname === '/livegame') {
+        return;
+      }
+
+      // Check if toast was recently dismissed
+      const dismissed = localStorage.getItem(TOAST_DISMISSED_KEY);
+      if (dismissed && (Date.now() - parseInt(dismissed)) < TOAST_DISMISS_DURATION) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/live-game/status');
+        const data = await response.json();
+
+        if (data.active) {
+          showToast();
+        } else {
+          hideToast();
+          // Clear dismissed flag if no game is active
+          localStorage.removeItem(TOAST_DISMISSED_KEY);
+        }
+      } catch (error) {
+        console.error('Failed to check live game status:', error);
+      }
+    }
+
+    function showToast() {
+      const toast = document.getElementById('live-game-toast');
+      if (toast) {
+        toast.classList.remove('hidden');
+        toast.onclick = () => {
+          window.location.href = '/livegame';
+        };
+      }
+    }
+
+    function hideToast() {
+      const toast = document.getElementById('live-game-toast');
+      if (toast) {
+        toast.classList.add('hidden');
+      }
+    }
+
+    function dismissToast(event) {
+      event.stopPropagation();
+      localStorage.setItem(TOAST_DISMISSED_KEY, Date.now().toString());
+      hideToast();
+    }
+
+    // Initial check
+    checkLiveGameStatus();
+
+    // Poll for live game status
+    setInterval(checkLiveGameStatus, TOAST_POLL_INTERVAL);
+  </script>
+
+  <!-- Live Game Toast -->
+  <div id="live-game-toast" class="toast hidden">
+    <div class="toast-content">
+      <div class="toast-icon">🔴</div>
+      <div class="toast-message">
+        <strong>Live Game in Progress!</strong>
+        <p>Click to watch</p>
+      </div>
+      <button class="toast-close" onclick="dismissToast(event)">&times;</button>
+    </div>
+  </div>
+</body>
+
+</html>

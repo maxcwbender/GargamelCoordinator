@@ -21,6 +21,68 @@
       color: #333;
       min-height: 100vh;
       display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .navbar-brand img {
+      height: 36px;
+      width: auto;
+    }
+
+    .navbar-links {
+      display: flex;
+      gap: 8px;
+      list-style: none;
+    }
+
+    .navbar-links a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: 6px;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .navbar-links a:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .navbar-links a.active {
+      color: #4e9fd1;
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    /* ── Main content area ──────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      display: flex;
       justify-content: center;
       align-items: center;
       padding: 2rem;
@@ -95,6 +157,19 @@
     }
 
     @media (max-width: 480px) {
+      .navbar {
+        padding: 0 1rem;
+      }
+
+      .navbar-brand span {
+        display: none;
+      }
+
+      .navbar-links a {
+        padding: 8px 10px;
+        font-size: 0.8rem;
+      }
+
       .terminal-window {
         padding: 24px;
       }
@@ -107,10 +182,94 @@
         font-size: 1.5rem;
       }
     }
+
+    /* ── Live Game Toast ────────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      top: 80px;
+      right: 20px;
+      background: #1a1a2e;
+      border: 2px solid #ef4444;
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      z-index: 1000;
+      min-width: 280px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .toast.hidden {
+      display: none;
+    }
+
+    .toast:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 25px rgba(0, 0, 0, 0.4);
+    }
+
+    .toast-content {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toast-icon {
+      font-size: 24px;
+      animation: toast-pulse 1.5s ease-in-out infinite;
+    }
+
+    .toast-message strong {
+      display: block;
+      color: white;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .toast-message p {
+      color: #aaa;
+      font-size: 12px;
+      margin: 0;
+    }
+
+    .toast-close {
+      background: none;
+      border: none;
+      color: #aaa;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0;
+      margin-left: auto;
+      line-height: 1;
+    }
+
+    .toast-close:hover {
+      color: white;
+    }
+
+    @keyframes toast-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
   </style>
 </head>
 
 <body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+    <ul class="navbar-links">
+      <li><a href="/" class="active">Home</a></li>
+      <li><a href="/matches">Matches</a></li>
+      <li><a href="/rankings">Rankings</a></li>
+      <li><a href="/about">About</a></li>
+      <li><a href="/livegame">Live Game</a></li>
+    </ul>
+  </nav>
+
+  <div class="page-content">
   <div class="terminal-window">
     <div class="system-header">
       <div class="logo-title">Gargamel Dota League</div>
@@ -122,10 +281,25 @@
 
       <div class="auth-description">
         To participate in Gargamel League matches, you need to link your Discord account to your Steam account.<br><br>
-        Click the button below to authenticate and join the Gargamel Discord Server.
+        Select your current rank then click the button below to authenticate and join the Gargamel Discord Server.
       </div>
       <div style="color: red; font-size: 0.75rem; text-align: center; margin-bottom: 20px;">
         Warning: Before clicking the link, please ensure your Discord User Settings have your Steam Account added under Connections
+      </div>
+      <div style="margin-bottom: 20px;">
+        <label for="rank-select" style="display: block; font-weight: 600; margin-bottom: 8px; color: #2c3e50;">Your Current Dota 2 Rank *</label>
+        <select id="rank-select" style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem; font-family: 'Inter', sans-serif; background: white; cursor: pointer;">
+          <option value="">-- Select Your Rank --</option>
+          <option value="Rusty">I'm rusty or don't know my rank</option>
+          <option value="Herald">Herald</option>
+          <option value="Guardian">Guardian</option>
+          <option value="Crusader">Crusader</option>
+          <option value="Archon">Archon</option>
+          <option value="Legend">Legend</option>
+          <option value="Ancient">Ancient</option>
+          <option value="Divine">Divine</option>
+          <option value="Immortal">Immortal</option>
+        </select>
       </div>
       <a id="neural-login" class="authenticate-button"
         href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2Fwww.gargamel-league.com%2F&scope=identify+connections+guilds.join">
@@ -148,6 +322,7 @@
       <div class="status-message">There was a problem linking your accounts. Please try again.</div>
       <button class="authenticate-button" onclick="location.reload()">Retry</button>
     </div>
+  </div>
   </div>
 
   <script>
@@ -176,14 +351,32 @@
 
       if (!accessToken) {
         showState('auth-state');
+        
+        // Add rank validation before allowing OAuth redirect
+        const loginButton = document.getElementById('neural-login');
+        loginButton.addEventListener('click', (e) => {
+          const rankSelect = document.getElementById('rank-select');
+          if (!rankSelect.value) {
+            e.preventDefault();
+            alert('Please select your Dota 2 rank before registering!');
+            rankSelect.style.borderColor = '#ff4444';
+            return false;
+          }
+          // Store rank in sessionStorage so we can retrieve it after OAuth redirect
+          sessionStorage.setItem('selectedRank', rankSelect.value);
+        });
         return;
       }
 
       showState('loading-state');
 
+      // Retrieve the rank that was selected before OAuth
+      const selectedRank = sessionStorage.getItem('selectedRank');
+      sessionStorage.removeItem('selectedRank'); // Clean up
+
       fetch('https://www.gargamel-league.com/', {
         method: 'PUT',
-        body: JSON.stringify({ accessToken, tokenType }),
+        body: JSON.stringify({ accessToken, tokenType, rank: selectedRank }),
         headers: { 'Content-Type': 'application/json' }
       }).then(async response => {
         const data = await response.json().catch(() => ({}));
@@ -204,7 +397,81 @@
         showState('error-state');
       });
     };
+
+    // ── Live Game Toast ──────────────────────────────────────────────────────
+    const TOAST_POLL_INTERVAL = 15000; // Check every 15 seconds
+    const TOAST_DISMISSED_KEY = 'liveGameToastDismissed';
+    const TOAST_DISMISS_DURATION = 5 * 60 * 1000; // 5 minutes
+
+    async function checkLiveGameStatus() {
+      // Don't check if we're already on the live game page
+      if (window.location.pathname === '/livegame') {
+        return;
+      }
+
+      // Check if toast was recently dismissed
+      const dismissed = localStorage.getItem(TOAST_DISMISSED_KEY);
+      if (dismissed && (Date.now() - parseInt(dismissed)) < TOAST_DISMISS_DURATION) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/live-game/status');
+        const data = await response.json();
+
+        if (data.active) {
+          showToast();
+        } else {
+          hideToast();
+          // Clear dismissed flag if no game is active
+          localStorage.removeItem(TOAST_DISMISSED_KEY);
+        }
+      } catch (error) {
+        console.error('Failed to check live game status:', error);
+      }
+    }
+
+    function showToast() {
+      const toast = document.getElementById('live-game-toast');
+      if (toast) {
+        toast.classList.remove('hidden');
+        toast.onclick = () => {
+          window.location.href = '/livegame';
+        };
+      }
+    }
+
+    function hideToast() {
+      const toast = document.getElementById('live-game-toast');
+      if (toast) {
+        toast.classList.add('hidden');
+      }
+    }
+
+    function dismissToast(event) {
+      event.stopPropagation();
+      localStorage.setItem(TOAST_DISMISSED_KEY, Date.now().toString());
+      hideToast();
+    }
+
+    // Initial check
+    checkLiveGameStatus();
+
+    // Poll for live game status
+    setInterval(checkLiveGameStatus, TOAST_POLL_INTERVAL);
   </script>
+
+  <!-- Live Game Toast -->
+  <div id="live-game-toast" class="toast hidden">
+    <div class="toast-content">
+      <div class="toast-icon">🔴</div>
+      <div class="toast-message">
+        <strong>Live Game in Progress!</strong>
+        <p>Click to watch</p>
+      </div>
+      <button class="toast-close" onclick="dismissToast(event)">&times;</button>
+    </div>
+  </div>
 </body>
 
 </html>

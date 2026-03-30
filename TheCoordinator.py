@@ -67,7 +67,7 @@ class TheCoordinator:
         # Access game state through Master_Bot
         game_map_inverse = self.discordBot.game_map_inverse
         game_map = self.discordBot.game_map
-        dota_talker = self.discordBot.dota_talker
+        # Note: dota_talker no longer exists - we use REST API now
         lobby_messages = self.discordBot.lobby_messages
 
         # --- Step 1: Gather players currently in game ---
@@ -129,14 +129,22 @@ class TheCoordinator:
         for pid in radiant_users + dire_users:
             game_map[pid] = game_id
 
-        # --- Step 5: Update Dota lobby teams ---
+        # --- Step 5: Update REST API teams ---
+        # Convert Discord IDs to Steam IDs
         radiant_steam = [fetch_steam_id(str(pid)) for pid in radiant_users]
         dire_steam = [fetch_steam_id(str(pid)) for pid in dire_users]
-        logger.info(f"Radiant steam: {radiant_steam}")
-        logger.info(f"Dire steam: {dire_steam}")
-        success = dota_talker.update_lobby_teams(game_id, radiant_steam, dire_steam)
-        if not success:
-            logger.warning(f"[Coordinator] Failed to update Dota lobby for game {game_id}")
+        logger.info(f"[Coordinator] Rebalanced teams - Radiant steam: {radiant_steam}, Dire steam: {dire_steam}")
+        
+        # Update teams in REST API
+        try:
+            rest_api = self.discordBot.rest_api
+            success = await rest_api.update_game_teams(game_id, radiant_steam, dire_steam)
+            if success:
+                logger.info(f"[Coordinator] Successfully updated REST API teams for game {game_id}")
+            else:
+                logger.warning(f"[Coordinator] Failed to update REST API teams for game {game_id}")
+        except Exception as e:
+            logger.exception(f"[Coordinator] Exception updating REST API teams: {e}")
 
         # Removed redundant message updating
         # --- Step 6: Update the Discord embed ---

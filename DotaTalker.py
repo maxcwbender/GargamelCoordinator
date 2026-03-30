@@ -172,8 +172,8 @@ class ClientWrapper:
             "allchat",             # sometimes exposed as a toggle
         }
 
-        # Start auto polling with 1 player join (besides coordinator) on debug mode, otherwise 7 players
-        self.auto_poll_size = 1 if self.config.get("DEBUG_MODE", False) else 6
+        # Start auto polling when 6 players join (besides coordinator) - always require normal player count
+        self.auto_poll_size = 6
 
     # ---------------- Thread lifecycle ----------------
 
