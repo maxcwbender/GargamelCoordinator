@@ -22,6 +22,7 @@ const OPENDOTA_BASE = 'https://api.opendota.com/api';
 const LEAGUE_ID = 18388;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes - keeps us well under 3000 calls/day
 const PLAYER_STATS_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours for player stats
+const SEASON_2_START_MS = new Date('2026-03-27T00:00:00Z').getTime(); // Season 2 start date
 
 // ─── Steam API for live games ────────────────────────────────────────────────
 const STEAM_API_KEY = config.STEAM_API_KEY || '';
@@ -150,10 +151,11 @@ function loadPlayerStatsFromDB() {
                 ON ps.account_id = mv.account_id
             LEFT JOIN (SELECT account_id, COUNT(*) AS svp_count FROM match_mvps WHERE award_type = 'svp' GROUP BY account_id) sv
                 ON ps.account_id = sv.account_id
+            WHERE ps.last_updated >= ?
         `;
 
-        // better-sqlite3 has synchronous methods
-        const rows = db.prepare(query).all();
+        // better-sqlite3 has synchronous methods — only load Season 2 data
+        const rows = db.prepare(query).all(SEASON_2_START_MS);
 
         const players = rows.map(row => ({
             accountId: row.account_id,
@@ -631,15 +633,15 @@ setInterval(() => {
     refreshMatchCache();
 }, CACHE_TTL_MS);
 
-// Load player stats from database on startup
+// Load Season 2 player stats from database on startup (filtered by SEASON_2_START_MS)
 const dbStats = loadPlayerStatsFromDB();
 if (dbStats.players.length > 0) {
     playerStatsCache = {
         data: dbStats.players,
         lastFetched: dbStats.lastFetched,
-        matchesAnalyzed: 0, // Will be updated on next refresh
+        matchesAnalyzed: dbStats.players.length > 0 ? dbStats.players[0].matches : 0,
     };
-    logger.info(`Loaded player stats from database, last updated ${new Date(dbStats.lastFetched).toISOString()}`);
+    logger.info(`Loaded ${dbStats.players.length} Season 2 player stats from database, last updated ${new Date(dbStats.lastFetched).toISOString()}`);
 }
 
 // Refresh player stats if cache is stale (older than 12 hours) or empty
@@ -661,7 +663,6 @@ if (Date.now() - dbStats.lastFetched > PLAYER_STATS_TTL_MS || dbStats.players.le
                 playerStatsCache.data = updatedStats.players;
                 logger.info('Player stats cache updated with new avatars');
             }
-            // Refresh match cache to include new avatars
             return refreshMatchCache();
         }).then(() => {
             logger.info('Match cache refreshed with new avatars');
