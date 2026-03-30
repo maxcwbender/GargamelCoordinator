@@ -384,14 +384,30 @@ async function refreshPlayerStats() {
     try {
         logger.info('Refreshing player statistics...');
         const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
+        logger.info(`OpenDota returned ${matchIds.length} total match IDs for league ${LEAGUE_ID}`);
+        logger.info(`First 10 match IDs (newest): ${matchIds.slice(0, 10).join(', ')}`);
+        logger.info(`Last 10 match IDs (oldest): ${matchIds.slice(-10).join(', ')}`);
 
         // Season 2 starts from this match onward (list is newest-first from OpenDota)
         const SEASON_2_FIRST_MATCH = 8745386473;
         const season2StartIdx = matchIds.indexOf(SEASON_2_FIRST_MATCH);
+        logger.info(`Season 2 first match ${SEASON_2_FIRST_MATCH} found at index ${season2StartIdx} (${season2StartIdx === -1 ? 'NOT FOUND' : 'found'})`);
+
+        // Also check if it exists as a string (in case OpenDota returns strings)
+        const season2StartIdxStr = matchIds.indexOf(String(SEASON_2_FIRST_MATCH));
+        if (season2StartIdxStr >= 0 && season2StartIdx === -1) {
+            logger.warn(`Match ID found as STRING at index ${season2StartIdxStr} — OpenDota is returning strings, not numbers!`);
+        }
+
+        // Log types for debugging
+        if (matchIds.length > 0) {
+            logger.info(`Match ID type check: typeof matchIds[0] = ${typeof matchIds[0]}, value = ${matchIds[0]}`);
+        }
+
         const matchesToFetch = season2StartIdx >= 0
             ? matchIds.slice(0, season2StartIdx + 1)
-            : matchIds.filter(id => id >= SEASON_2_FIRST_MATCH); // fallback if match not found
-        logger.info(`Fetching ${matchesToFetch.length} Season 2 matches for player statistics (first match at index ${season2StartIdx})...`);
+            : matchIds.filter(id => Number(id) >= SEASON_2_FIRST_MATCH); // fallback: coerce to number
+        logger.info(`Fetching ${matchesToFetch.length} Season 2 matches: [${matchesToFetch.join(', ')}]`);
 
         const playerMap = new Map(); // accountId -> { name, wins, losses, kills, deaths, assists, matches }
 
@@ -921,6 +937,15 @@ server.get('/api/recent-matches', async (req, res) => {
         lastUpdated: matchCache.lastFetched,
         cacheMaxAge: CACHE_TTL_MS,
     });
+});
+
+server.post('/api/refresh-rankings', async (req, res) => {
+    if (isRefreshingStats) {
+        return res.json({ status: 'already_refreshing' });
+    }
+    logger.info('Manual rankings refresh triggered via API');
+    refreshPlayerStats();
+    return res.json({ status: 'refresh_started' });
 });
 
 server.get('/api/top-rankings', async (req, res) => {
