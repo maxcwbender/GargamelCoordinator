@@ -770,11 +770,6 @@
         for (const p of radiantPlayers) {
           var liClass = p.isMVP ? 'player-mvp' : (p.isSVP ? 'player-svp' : '');
           html += '<li' + (liClass ? ' class="' + liClass + '"' : '') + '>';
-          if (p.avatar) {
-            html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
-          } else {
-            html += '<div class="player-avatar"></div>';
-          }
           if (p.heroImg) {
             html += '<img src="' + escapeHtml(p.heroImg) + '" alt="' + escapeHtml(p.heroName || '') + '" title="' + escapeHtml(p.heroName || '') + '" class="player-hero" onerror="this.className=\'player-hero-placeholder\';this.removeAttribute(\'src\')">';
           } else {
@@ -805,11 +800,6 @@
         for (const p of direPlayers) {
           var liClass = p.isMVP ? 'player-mvp' : (p.isSVP ? 'player-svp' : '');
           html += '<li' + (liClass ? ' class="' + liClass + '"' : '') + '>';
-          if (p.avatar) {
-            html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
-          } else {
-            html += '<div class="player-avatar"></div>';
-          }
           if (p.heroImg) {
             html += '<img src="' + escapeHtml(p.heroImg) + '" alt="' + escapeHtml(p.heroName || '') + '" title="' + escapeHtml(p.heroName || '') + '" class="player-hero" onerror="this.className=\'player-hero-placeholder\';this.removeAttribute(\'src\')">';
           } else {
