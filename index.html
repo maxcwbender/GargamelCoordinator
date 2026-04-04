@@ -301,6 +301,12 @@
           <option value="Immortal">Immortal</option>
         </select>
       </div>
+      <div style="margin-bottom: 20px; position: relative;">
+        <label for="referral-input" style="display: block; font-weight: 600; margin-bottom: 8px; color: #2c3e50;">Referred By (optional)</label>
+        <input id="referral-input" type="text" autocomplete="off" placeholder="Start typing a Discord name..."
+          style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem; font-family: 'Inter', sans-serif; background: white; box-sizing: border-box;">
+        <div id="referral-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; max-height: 180px; overflow-y: auto; background: white; border: 2px solid #e0e0e0; border-top: none; border-radius: 0 0 8px 8px; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
+      </div>
       <a id="neural-login" class="authenticate-button"
         href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2Fwww.gargamel-league.com%2F&scope=identify+connections+guilds.join">
         Register for the Gargamel League
@@ -351,7 +357,48 @@
 
       if (!accessToken) {
         showState('auth-state');
-        
+
+        // Referral autocomplete setup
+        let discordMembers = [];
+        fetch('/api/discord-members')
+          .then(r => r.json())
+          .then(names => { discordMembers = names; })
+          .catch(() => {});
+
+        const referralInput = document.getElementById('referral-input');
+        const referralDropdown = document.getElementById('referral-dropdown');
+
+        referralInput.addEventListener('input', () => {
+          const query = referralInput.value.trim().toLowerCase();
+          referralDropdown.innerHTML = '';
+          if (query.length < 2) { referralDropdown.style.display = 'none'; return; }
+
+          const matches = discordMembers
+            .filter(name => name.toLowerCase().includes(query))
+            .slice(0, 20);
+
+          if (matches.length === 0) { referralDropdown.style.display = 'none'; return; }
+
+          matches.forEach(name => {
+            const item = document.createElement('div');
+            item.textContent = name;
+            item.style.cssText = 'padding: 10px 12px; cursor: pointer; font-size: 0.95rem; border-bottom: 1px solid #f0f0f0;';
+            item.addEventListener('mouseenter', () => item.style.background = '#f0f4ff');
+            item.addEventListener('mouseleave', () => item.style.background = 'white');
+            item.addEventListener('mousedown', (e) => {
+              e.preventDefault();
+              referralInput.value = name;
+              referralDropdown.style.display = 'none';
+            });
+            referralDropdown.appendChild(item);
+          });
+          referralDropdown.style.display = 'block';
+        });
+
+        referralInput.addEventListener('blur', () => {
+          setTimeout(() => { referralDropdown.style.display = 'none'; }, 150);
+        });
+
         // Add rank validation before allowing OAuth redirect
         const loginButton = document.getElementById('neural-login');
         loginButton.addEventListener('click', (e) => {
@@ -362,21 +409,24 @@
             rankSelect.style.borderColor = '#ff4444';
             return false;
           }
-          // Store rank in sessionStorage so we can retrieve it after OAuth redirect
+          // Store rank and referral in sessionStorage so we can retrieve them after OAuth redirect
           sessionStorage.setItem('selectedRank', rankSelect.value);
+          sessionStorage.setItem('referredBy', referralInput.value.trim());
         });
         return;
       }
 
       showState('loading-state');
 
-      // Retrieve the rank that was selected before OAuth
+      // Retrieve the rank and referral that were selected before OAuth
       const selectedRank = sessionStorage.getItem('selectedRank');
-      sessionStorage.removeItem('selectedRank'); // Clean up
+      const referredBy = sessionStorage.getItem('referredBy');
+      sessionStorage.removeItem('selectedRank');
+      sessionStorage.removeItem('referredBy');
 
       fetch('https://www.gargamel-league.com/', {
         method: 'PUT',
-        body: JSON.stringify({ accessToken, tokenType, rank: selectedRank }),
+        body: JSON.stringify({ accessToken, tokenType, rank: selectedRank, referredBy: referredBy || undefined }),
         headers: { 'Content-Type': 'application/json' }
       }).then(async response => {
         const data = await response.json().catch(() => ({}));

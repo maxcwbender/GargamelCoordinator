@@ -99,6 +99,7 @@ const columnMigrations = [
     'ALTER TABLE player_stats ADD COLUMN obs_ward_time_total INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_count INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN season INTEGER DEFAULT 1',
+    'ALTER TABLE users ADD COLUMN referred_by TEXT',
 ];
 for (const sql of columnMigrations) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }
@@ -1021,11 +1022,46 @@ server.get('/api/top-rankings', async (req, res) => {
     });
 });
 
+// ─── Discord member names for referral autocomplete ─────────────────────────
+let discordMembersCache = { data: [], lastFetched: 0 };
+const MEMBERS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+server.get('/api/discord-members', async (req, res) => {
+    try {
+        if (Date.now() - discordMembersCache.lastFetched < MEMBERS_CACHE_TTL && discordMembersCache.data.length > 0) {
+            return res.json(discordMembersCache.data);
+        }
+
+        // Fetch guild members from Discord API (up to 1000)
+        const members = [];
+        let after = '0';
+        // Fetch in batches of 1000 (Discord API max per request)
+        const memberRes = await fetch(`https://discord.com/api/guilds/${config.GUILD_ID}/members?limit=1000&after=${after}`, {
+            headers: { 'Authorization': `Bot ${config.BOT_TOKEN}` },
+        });
+        if (memberRes.ok) {
+            const batch = await memberRes.json();
+            for (const m of batch) {
+                const displayName = m.nick || m.user?.global_name || m.user?.username;
+                if (displayName && !m.user?.bot) {
+                    members.push(displayName);
+                }
+            }
+        }
+
+        discordMembersCache = { data: members, lastFetched: Date.now() };
+        return res.json(members);
+    } catch (err) {
+        logger.error('Error fetching discord members:', err);
+        return res.json(discordMembersCache.data || []);
+    }
+});
+
 server.put('/', async (req, res) => {
     logger.info('PUT: ' + JSON.stringify(req.body));
     logger.info('------------------------------------------');
 
-    const { tokenType, accessToken, rank } = req.body;
+    const { tokenType, accessToken, rank, referredBy } = req.body;
 
     if (!tokenType || !accessToken) {
         logger.error("Returning 400: Either missing tokentype or accesstoken.  tokenType: ${tokenType}  accessToken: ${accessToken}")
@@ -1092,13 +1128,14 @@ server.put('/', async (req, res) => {
         // Insert user into database with rating
         try {
             const stmt = db.prepare(`
-                INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched, rating)
-                VALUES (?, ?, datetime('now'), ?, 0, ?)
+                INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched, rating, referred_by)
+                VALUES (?, ?, datetime('now'), ?, 0, ?, ?)
                 ON CONFLICT(discord_id) DO UPDATE SET
                     steam_id = excluded.steam_id,
-                    rating = excluded.rating
+                    rating = excluded.rating,
+                    referred_by = excluded.referred_by
             `);
-            stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, rating);
+            stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, rating, referredBy || null);
         } catch (err) {
             logger.error('DB upsert error:', err.message);
         }

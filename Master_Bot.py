@@ -2030,7 +2030,7 @@ class Master_Bot(commands.Bot):
 
             pending_registrants = DB.fetch_all(
                 """
-                SELECT discord_id, rating, dateCreated, modsRemaining
+                SELECT discord_id, rating, dateCreated, modsRemaining, referred_by
                 FROM users
                 WHERE modsRemaining > 0
                 ORDER BY dateCreated ASC
@@ -2062,22 +2062,23 @@ class Master_Bot(commands.Bot):
             )
 
             for registrant in pending_registrants[:25]:  # Discord embed field limit
-                discord_id, rating, date_created, mods_remaining = registrant
+                discord_id, rating, date_created, mods_remaining, referred_by = registrant
                 rating_display = rating if rating else "Not set"
-                
+
                 # Try to get user's display name
                 try:
                     member = await self.the_guild.fetch_member(discord_id)
                     user_name = member.display_name if member else f"User {discord_id}"
                 except:
                     user_name = f"User {discord_id}"
-                
+
                 # Mark if already reviewed by this mod
                 status_marker = "✅ (you reviewed)" if discord_id in already_reviewed else "⏳ Available"
-                
+                referral_line = f"\n**Referred By:** {referred_by}" if referred_by else ""
+
                 embed.add_field(
                     name=f"{user_name} (<@{discord_id}>)",
-                    value=f"**Status:** {status_marker}\n**Rating:** {rating_display}\n**Registered:** {date_created}\n**Mods Remaining:** {mods_remaining}",
+                    value=f"**Status:** {status_marker}\n**Rating:** {rating_display}\n**Registered:** {date_created}\n**Mods Remaining:** {mods_remaining}{referral_line}",
                     inline=False
                 )
 
@@ -3324,10 +3325,12 @@ class Master_Bot(commands.Bot):
             if modsRemaining > 0:
                 mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
                 if mod_chan:
-                    # Get rating information to include in notification
+                    # Get rating and referral information to include in notification
                     rating = DB.fetch_one(f"SELECT rating FROM users WHERE discord_id = {discord_id}")
+                    referred_by = DB.fetch_one(f"SELECT referred_by FROM users WHERE discord_id = {discord_id}")
                     rating_text = f" (Rating: **{rating}**)" if rating else ""
-                    await mod_chan.send(f"<@{discord_id}> joined registration queue!{rating_text}")
+                    referral_text = f" | Referred by: **{referred_by}**" if referred_by else ""
+                    await mod_chan.send(f"<@{discord_id}> joined registration queue!{rating_text}{referral_text}")
                     logger.info(f"[on_steam_id_found] Sent notification to mod channel for {discord_id}")
                 else:
                     logger.error(f"[on_steam_id_found] Could not find mod channel: {self.config.get('MOD_CHANNEL_ID')}")

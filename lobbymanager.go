@@ -1698,30 +1698,33 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 
 	if memberCount != h.lastKnownMemberCount {
 		h.lastKnownMemberCount = memberCount
+	}
 
-		// Auto-trigger polling when enough human players join.
-		// Normal mode: 7 players + bot = 8 total members
-		// Debug mode: 2 human players + bot = 3 total members (lower threshold for testing)
-		totalExpectedPlayers := len(h.gameConfig.RadiantTeam) + len(h.gameConfig.DireTeam)
-		autoPollSize := 8
-		if h.gameConfig.DebugMode && totalExpectedPlayers < 10 {
-			autoPollSize = 3 // 2 human players + bot
-		}
+	// Auto-trigger polling when enough human players join.
+	// Normal mode: 7 players + bot = 8 total members
+	// Debug mode: 2 human players + bot = 3 total members (lower threshold for testing)
+	// NOTE: This check runs on every lobby update (not just count changes) because
+	// the lobby state may not be 0 (UI) at the exact moment the player count threshold
+	// is reached — if it were gated on count changes, the trigger could be permanently missed.
+	totalExpectedPlayers := len(h.gameConfig.RadiantTeam) + len(h.gameConfig.DireTeam)
+	autoPollSize := 8
+	if h.gameConfig.DebugMode && totalExpectedPlayers < 10 {
+		autoPollSize = 3 // 2 human players + bot
+	}
 
-		if memberCount >= autoPollSize && state == 0 { // UI state
-			h.pollingMutex.Lock()
-			if !h.pollingDone && !h.pollCallbackSent && h.pollCallbackURL != "" {
-				h.pollCallbackSent = true
-				h.pollingMutex.Unlock()
+	if memberCount >= autoPollSize && state == 0 { // UI state
+		h.pollingMutex.Lock()
+		if !h.pollingDone && !h.pollCallbackSent && h.pollCallbackURL != "" {
+			h.pollCallbackSent = true
+			h.pollingMutex.Unlock()
 
-				// Notify Master_Bot to start polling.
-				// pollingActive will be set when Master_Bot confirms via /poll/{id} with action "start".
-				go h.notifyPollingStarted()
-				log.Printf("[Game %s] Lobby has %d members (threshold=%d, debug=%v) — triggering game mode poll",
-					h.gameID, memberCount, autoPollSize, h.gameConfig.DebugMode)
-			} else {
-				h.pollingMutex.Unlock()
-			}
+			// Notify Master_Bot to start polling.
+			// pollingActive will be set when Master_Bot confirms via /poll/{id} with action "start".
+			go h.notifyPollingStarted()
+			log.Printf("[Game %s] Lobby has %d members (threshold=%d, debug=%v) — triggering game mode poll",
+				h.gameID, memberCount, autoPollSize, h.gameConfig.DebugMode)
+		} else {
+			h.pollingMutex.Unlock()
 		}
 	}
 

@@ -26,6 +26,7 @@ def init_database():
             obs_ward_count INTEGER DEFAULT 0,
             matches INTEGER DEFAULT 0,
             last_updated INTEGER NOT NULL,
+            season INTEGER DEFAULT 1,
             UNIQUE(account_id)
         )
     ''')
