@@ -323,6 +323,9 @@ async function refreshMatchCache() {
                         (p.obs_placed || 0) * 0.5 +
                         (p.observer_kills || 0) * 0.5;
 
+                    // Resolve hero portrait from cached constants
+                    const hero = dotaConstants.heroes[p.hero_id];
+
                     return {
                         account_id: p.account_id,
                         personaname: p.personaname || 'Anonymous',
@@ -332,6 +335,9 @@ async function refreshMatchCache() {
                         deaths: p.deaths,
                         assists: p.assists,
                         avatar: avatar,
+                        hero_id: p.hero_id || null,
+                        heroName: hero?.name || null,
+                        heroImg: hero?.img || null,
                         mvpScore,
                     };
                 });

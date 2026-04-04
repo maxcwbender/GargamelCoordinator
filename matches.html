@@ -379,6 +379,23 @@
       object-fit: cover;
     }
 
+    .player-hero {
+      width: 32px;
+      height: 18px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      background: #1a1a2e;
+      object-fit: cover;
+    }
+
+    .player-hero-placeholder {
+      width: 32px;
+      height: 18px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      background: #e0e0e0;
+    }
+
     .player-name-text {
       white-space: nowrap;
       overflow: hidden;
@@ -523,6 +540,16 @@
         width: 2px;
         height: 20px;
         margin: 0;
+      }
+
+      .player-hero {
+        width: 26px;
+        height: 15px;
+      }
+
+      .player-hero-placeholder {
+        width: 26px;
+        height: 15px;
       }
     }
 
@@ -748,6 +775,11 @@
           } else {
             html += '<div class="player-avatar"></div>';
           }
+          if (p.heroImg) {
+            html += '<img src="' + escapeHtml(p.heroImg) + '" alt="' + escapeHtml(p.heroName || '') + '" title="' + escapeHtml(p.heroName || '') + '" class="player-hero" onerror="this.className=\'player-hero-placeholder\';this.removeAttribute(\'src\')">';
+          } else {
+            html += '<div class="player-hero-placeholder"></div>';
+          }
           html += '<span class="player-name-text">' + renderPlayerLink(p.personaname, p.account_id) + '</span>';
           if (p.isMVP) html += '<span class="vp-star gold" title="Match MVP">&#9733;</span>';
           if (p.isSVP) html += '<span class="vp-star silver" title="Match SVP">&#9733;</span>';
@@ -777,6 +809,11 @@
             html += '<img src="' + escapeHtml(p.avatar) + '" alt="" class="player-avatar">';
           } else {
             html += '<div class="player-avatar"></div>';
+          }
+          if (p.heroImg) {
+            html += '<img src="' + escapeHtml(p.heroImg) + '" alt="' + escapeHtml(p.heroName || '') + '" title="' + escapeHtml(p.heroName || '') + '" class="player-hero" onerror="this.className=\'player-hero-placeholder\';this.removeAttribute(\'src\')">';
+          } else {
+            html += '<div class="player-hero-placeholder"></div>';
           }
           html += '<span class="player-name-text">' + renderPlayerLink(p.personaname, p.account_id) + '</span>';
           if (p.isMVP) html += '<span class="vp-star gold" title="Match MVP">&#9733;</span>';

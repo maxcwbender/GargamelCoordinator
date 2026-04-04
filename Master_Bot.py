@@ -3247,18 +3247,11 @@ class Master_Bot(commands.Bot):
             game_id (int): The ID of the game to cancel.
         """
         try:
-            radiant, dire = self.game_map_inverse[game_id]
-            del self.game_map_inverse[game_id]
+            radiant, dire = self.game_map_inverse.pop(game_id)
 
             for player in radiant:
-                del self.game_map[player]
+                self.game_map.pop(player, None)
             for player in dire:
-                del self.game_map[player]
-
-            players = self.game_map_inverse.get(game_id, set())
-            self.game_map_inverse.pop(game_id, None)
-
-            for player in players:
                 self.game_map.pop(player, None)
 
             radiant_channel, dire_channel = self.game_channels.pop(game_id)
@@ -3552,8 +3545,6 @@ class Master_Bot(commands.Bot):
                             logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
 
                     send_tasks.append(send_message())
-                    self.game_map[member_id] = game_id
-                    self.game_map_inverse[game_id][1].add(member_id)
 
             await asyncio.gather(*send_tasks)
 
