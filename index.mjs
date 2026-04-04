@@ -23,6 +23,7 @@ const LEAGUE_ID = 18388;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes - keeps us well under 3000 calls/day
 const PLAYER_STATS_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours for player stats
 const CURRENT_SEASON = 2;
+const SEASON_2_FIRST_MATCH = 8745386473;
 
 // ─── Steam API for live games ────────────────────────────────────────────────
 const STEAM_API_KEY = config.STEAM_API_KEY || '';
@@ -149,9 +150,9 @@ function loadPlayerStatsFromDB() {
                    COALESCE(sv.svp_count, 0) AS svp_count
             FROM player_stats ps
             LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
-            LEFT JOIN (SELECT account_id, COUNT(*) AS mvp_count FROM match_mvps WHERE award_type = 'mvp' GROUP BY account_id) mv
+            LEFT JOIN (SELECT account_id, COUNT(*) AS mvp_count FROM match_mvps WHERE award_type = 'mvp' AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY account_id) mv
                 ON ps.account_id = mv.account_id
-            LEFT JOIN (SELECT account_id, COUNT(*) AS svp_count FROM match_mvps WHERE award_type = 'svp' GROUP BY account_id) sv
+            LEFT JOIN (SELECT account_id, COUNT(*) AS svp_count FROM match_mvps WHERE award_type = 'svp' AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY account_id) sv
                 ON ps.account_id = sv.account_id
             WHERE ps.season = ?
         `;
@@ -392,7 +393,6 @@ async function refreshPlayerStats() {
         logger.info(`Last 10 match IDs (oldest): ${matchIds.slice(-10).join(', ')}`);
 
         // Season 2 starts from this match onward (list is newest-first from OpenDota)
-        const SEASON_2_FIRST_MATCH = 8745386473;
         const season2StartIdx = matchIds.indexOf(SEASON_2_FIRST_MATCH);
         logger.info(`Season 2 first match ${SEASON_2_FIRST_MATCH} found at index ${season2StartIdx} (${season2StartIdx === -1 ? 'NOT FOUND' : 'found'})`);
 
@@ -966,9 +966,8 @@ server.get('/api/top-rankings', async (req, res) => {
 
     const players = playerStatsCache.data || [];
 
-    // TODO: Re-enable minimum match threshold once Season 2 has more games (e.g. Math.max(10, ...))
-    const minMatches = 0;
-    const qualified = players;
+    const minMatches = 3;
+    const qualified = players.filter(p => p.matches >= minMatches);
 
     // Top 10 by win rate
     const topByWinRate = [...qualified]
