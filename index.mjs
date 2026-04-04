@@ -951,6 +951,12 @@ server.post('/api/refresh-rankings', async (req, res) => {
     return res.json({ status: 'refresh_started' });
 });
 
+server.post('/api/refresh-discord-members', async (req, res) => {
+    logger.info('Manual Discord members refresh triggered via API');
+    await refreshDiscordMembers();
+    return res.json({ status: 'refreshed', count: discordMembersCache.data.length });
+});
+
 server.get('/api/top-rankings', async (req, res) => {
     // Don't refresh if already refreshing
     if (!isRefreshingStats && Date.now() - playerStatsCache.lastFetched > PLAYER_STATS_TTL_MS) {
@@ -1022,39 +1028,67 @@ server.get('/api/top-rankings', async (req, res) => {
     });
 });
 
-// ─── Discord member names for referral autocomplete ─────────────────────────
+// ─── Discord member names + avatars for referral autocomplete ───────────────
 let discordMembersCache = { data: [], lastFetched: 0 };
-const MEMBERS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const DISCORD_MEMBERS_TTL = 12 * 60 * 60 * 1000; // 12 hours
 
-server.get('/api/discord-members', async (req, res) => {
+async function refreshDiscordMembers() {
     try {
-        if (Date.now() - discordMembersCache.lastFetched < MEMBERS_CACHE_TTL && discordMembersCache.data.length > 0) {
-            return res.json(discordMembersCache.data);
-        }
-
-        // Fetch guild members from Discord API (up to 1000)
         const members = [];
         let after = '0';
-        // Fetch in batches of 1000 (Discord API max per request)
-        const memberRes = await fetch(`https://discord.com/api/guilds/${config.GUILD_ID}/members?limit=1000&after=${after}`, {
-            headers: { 'Authorization': `Bot ${config.BOT_TOKEN}` },
-        });
-        if (memberRes.ok) {
+        let hasMore = true;
+
+        // Fetch all guild members in batches of 1000 (Discord API max per request)
+        while (hasMore) {
+            const memberRes = await fetch(
+                `https://discord.com/api/guilds/${config.GUILD_ID}/members?limit=1000&after=${after}`, {
+                headers: { 'Authorization': `Bot ${config.BOT_TOKEN}` },
+            });
+            if (!memberRes.ok) break;
+
             const batch = await memberRes.json();
+            if (batch.length === 0) { hasMore = false; break; }
+
             for (const m of batch) {
                 const displayName = m.nick || m.user?.global_name || m.user?.username;
                 if (displayName && !m.user?.bot) {
-                    members.push(displayName);
+                    // Build Discord CDN avatar URL (64px for small circular display)
+                    let avatar = null;
+                    if (m.user?.avatar) {
+                        const ext = m.user.avatar.startsWith('a_') ? 'gif' : 'png';
+                        avatar = `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.${ext}?size=64`;
+                    } else if (m.user?.id) {
+                        // Default Discord avatar based on user ID
+                        const index = (BigInt(m.user.id) >> 22n) % 6n;
+                        avatar = `https://cdn.discordapp.com/embed/avatars/${index}.png`;
+                    }
+                    members.push({ name: displayName, avatar });
                 }
             }
+
+            after = batch[batch.length - 1].user.id;
+            if (batch.length < 1000) hasMore = false;
         }
 
-        discordMembersCache = { data: members, lastFetched: Date.now() };
-        return res.json(members);
+        if (members.length > 0) {
+            discordMembersCache = { data: members, lastFetched: Date.now() };
+            logger.info(`Refreshed Discord members cache: ${members.length} members with avatars`);
+        }
     } catch (err) {
-        logger.error('Error fetching discord members:', err);
-        return res.json(discordMembersCache.data || []);
+        logger.error('Error refreshing Discord members cache:', err);
     }
+}
+
+// Initial fetch + periodic refresh every 12 hours
+refreshDiscordMembers();
+setInterval(refreshDiscordMembers, DISCORD_MEMBERS_TTL);
+
+server.get('/api/discord-members', async (req, res) => {
+    // If cache is empty (first request before initial fetch completes), trigger a fetch
+    if (discordMembersCache.data.length === 0) {
+        await refreshDiscordMembers();
+    }
+    return res.json(discordMembersCache.data);
 });
 
 server.put('/', async (req, res) => {
