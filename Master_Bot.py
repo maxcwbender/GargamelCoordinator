@@ -3177,9 +3177,12 @@ class Master_Bot(commands.Bot):
 
     async def _move_members_with_rate_limit(self, members: list, target_channel: discord.VoiceChannel, game_id: int):
         """
-        Move members to target channel with rate limiting.
-        Discord rate limits voice channel moves to 10 per 10 seconds.
-        
+        Move members to target channel.
+        discord.py handles rate limiting internally via X-RateLimit headers and
+        automatic 429 retry, so we fire all moves concurrently and let the HTTP
+        client pace them. A small per-member stagger avoids a thundering-herd
+        burst against the per-route bucket.
+
         Args:
             members: List of discord.Member objects to move
             target_channel: Target voice channel
@@ -3187,7 +3190,7 @@ class Master_Bot(commands.Bot):
         """
         if not members:
             return
-        
+
         # Filter out members that don't need to be moved
         members_to_move = []
         for member in members:
@@ -3196,48 +3199,33 @@ class Master_Bot(commands.Bot):
             if member.voice.channel.id == target_channel.id:
                 continue
             members_to_move.append(member)
-        
+
         if not members_to_move:
             logger.info(f"[Game {game_id}] No members need to be moved")
             return
-        
-        logger.info(f"[Game {game_id}] Moving {len(members_to_move)} members to General channel (rate-limited)")
-        
-        # Discord rate limit: 10 moves per 10 seconds
-        # Using batches of 5 for smoother experience and safety margin
-        BATCH_SIZE = 5
-        RATE_LIMIT_DELAY = 6.0  # seconds between batches (safe with batches of 5)
-        
-        # Process in batches
-        for i in range(0, len(members_to_move), BATCH_SIZE):
-            batch = members_to_move[i:i + BATCH_SIZE]
-            batch_num = (i // BATCH_SIZE) + 1
-            total_batches = (len(members_to_move) + BATCH_SIZE - 1) // BATCH_SIZE
-            
-            logger.info(f"[Game {game_id}] Moving batch {batch_num}/{total_batches} ({len(batch)} members)")
-            
-            # Create move tasks for this batch
-            move_tasks = []
-            for member in batch:
-                try:
-                    move_tasks.append(member.move_to(target_channel))
-                except Exception as e:
-                    logger.warning(f"[Game {game_id}] Failed to queue move for {member.display_name}: {e}")
-            
-            # Execute batch
-            if move_tasks:
-                results = await asyncio.gather(*move_tasks, return_exceptions=True)
-                # Log any failures
-                for member, result in zip(batch, results):
-                    if isinstance(result, Exception):
-                        logger.warning(f"[Game {game_id}] Failed to move {member.display_name} to General: {result}")
-            
-            # Wait before next batch (except for the last batch)
-            if i + BATCH_SIZE < len(members_to_move):
-                logger.debug(f"[Game {game_id}] Waiting {RATE_LIMIT_DELAY}s before next batch (rate limit)")
-                await asyncio.sleep(RATE_LIMIT_DELAY)
-        
-        logger.info(f"[Game {game_id}] Completed moving all members to General channel")
+
+        logger.info(f"[Game {game_id}] Moving {len(members_to_move)} members to {target_channel.name}")
+
+        async def _move_one(member: discord.Member, index: int):
+            """Move a single member with a small stagger to spread requests."""
+            if index > 0:
+                await asyncio.sleep(0.15 * index)
+            try:
+                await member.move_to(target_channel)
+                logger.info(f"[Game {game_id}] Moved {member.display_name} to {target_channel.name}")
+            except discord.HTTPException as e:
+                logger.warning(
+                    f"[Game {game_id}] Failed to move {member.display_name}: "
+                    f"{e.status} {e.text}"
+                )
+            except Exception as e:
+                logger.warning(f"[Game {game_id}] Failed to move {member.display_name}: {e}")
+
+        await asyncio.gather(*[
+            _move_one(member, i) for i, member in enumerate(members_to_move)
+        ])
+
+        logger.info(f"[Game {game_id}] Completed moving all members to {target_channel.name}")
 
     async def clear_game(self, game_id: int):
         """
@@ -3261,16 +3249,25 @@ class Master_Bot(commands.Bot):
                 logger.error(f"[Game {game_id}] General voice channel not found!")
                 return
             
-            # Get all members from both channels (including spectators)
-            all_members = list(radiant_channel.members) + list(dire_channel.members)
-            
+            # Get all members from both channels, players first then spectators
+            player_ids = radiant | dire
+            all_in_voice = list(radiant_channel.members) + list(dire_channel.members)
+            players = [m for m in all_in_voice if m.id in player_ids]
+            spectators = [m for m in all_in_voice if m.id not in player_ids]
+
             # Log members being moved
-            for member in all_members:
+            for member in players:
                 logger.info(
-                    f"[Game {game_id}] {member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
-            
-            # Move all members with rate limiting
-            await self._move_members_with_rate_limit(all_members, target_channel, game_id)
+                    f"[Game {game_id}] Player {member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
+            for member in spectators:
+                logger.info(
+                    f"[Game {game_id}] Spectator {member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
+
+            # Move players first, then spectators after
+            await self._move_members_with_rate_limit(players, target_channel, game_id)
+            if spectators:
+                logger.info(f"[Game {game_id}] Now moving {len(spectators)} spectators")
+                await self._move_members_with_rate_limit(spectators, target_channel, game_id)
             
             # Delete channels after all members are moved
             await asyncio.gather(
@@ -3564,16 +3561,26 @@ class Master_Bot(commands.Bot):
             message = await channel.send(embed=embed, view=view)
 
             try:
-                tasks = [
-                    self.the_guild.get_member(member).move_to(radiant_channel)
-                    for member in radiant
-                    if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
-                ] + [
-                    self.the_guild.get_member(member).move_to(dire_channel)
-                    for member in dire
-                    if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
-                ]
-                await asyncio.gather(*tasks)
+                # Collect all members that need moving into game channels
+                all_game_members = []
+                for member_id in radiant:
+                    m = self.the_guild.get_member(member_id)
+                    if m and m.voice:
+                        all_game_members.append((m, radiant_channel))
+                for member_id in dire:
+                    m = self.the_guild.get_member(member_id)
+                    if m and m.voice:
+                        all_game_members.append((m, dire_channel))
+
+                # Use _move_members_with_rate_limit style stagger
+                async def _move(member, channel, idx):
+                    if idx > 0:
+                        await asyncio.sleep(0.15 * idx)
+                    await member.move_to(channel)
+
+                await asyncio.gather(*[
+                    _move(m, ch, i) for i, (m, ch) in enumerate(all_game_members)
+                ], return_exceptions=True)
             except Exception as e:
                 logger.exception(f"Unexpected Exception: {e}")
 

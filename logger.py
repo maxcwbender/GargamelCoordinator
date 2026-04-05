@@ -6,7 +6,6 @@ def setup_logging():
 
     #TODO: Capture Stdout/Stderr  or just use logging.info instead of prints
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    # logging.getLogger('discord.http').setLevel(logging.DEBUG)
     logging.basicConfig(
         level=logging.INFO,  # Capture everything from DEBUG and up
         format='[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
@@ -15,6 +14,19 @@ def setup_logging():
             logging.StreamHandler(sys.stdout)
         ]
     )
+
+    # Log discord.py HTTP internals (rate-limit headers, 429 retries) to a separate file.
+    # These are DEBUG-level messages that the root INFO logger would drop.
+    discord_http_logger = logging.getLogger('discord.http')
+    discord_http_logger.setLevel(logging.DEBUG)
+    discord_http_handler = logging.FileHandler(
+        f'logs/Discord_HTTP_{timestamp}.txt', encoding='utf-8'
+    )
+    discord_http_handler.setLevel(logging.DEBUG)
+    discord_http_handler.setFormatter(
+        logging.Formatter('[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s')
+    )
+    discord_http_logger.addHandler(discord_http_handler)
 
     # Redirect unhandled exceptions (tracebacks) to logging
     def handle_exception(exc_type, exc_value, exc_traceback):
