@@ -27,6 +27,7 @@ def setup_logging():
         logging.Formatter('[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s')
     )
     discord_http_logger.addHandler(discord_http_handler)
+    discord_http_logger.propagate = False  # Don't duplicate into the main Gargamel log
 
     # Redirect unhandled exceptions (tracebacks) to logging
     def handle_exception(exc_type, exc_value, exc_traceback):

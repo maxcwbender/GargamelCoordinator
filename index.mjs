@@ -194,7 +194,7 @@ function loadPlayerStatsFromDB() {
 
         logger.info(`Loaded ${players.length} player stats from database`);
         return {
-            players, // TODO: Re-enable minimum match filter once Season 2 has more games
+            players,
             lastFetched: oldestUpdate,
         };
     } catch (err) {
@@ -637,7 +637,6 @@ async function refreshPlayerStats() {
             svpCount: svpCounts.get(accountId) || 0,
         }));
 
-        // TODO: Re-enable minimum match filter once Season 2 has more games (e.g. p.matches >= 3)
         const qualifiedPlayers = players;
 
         playerStatsCache = {
@@ -972,7 +971,8 @@ server.get('/api/top-rankings', async (req, res) => {
 
     const players = playerStatsCache.data || [];
 
-    const minMatches = 3;
+    const totalSeasonMatches = playerStatsCache.matchesAnalyzed || 0;
+    const minMatches = Math.max(1, Math.ceil(Math.sqrt(totalSeasonMatches)));
     const qualified = players.filter(p => p.matches >= minMatches);
 
     // Top 10 by win rate
