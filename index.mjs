@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import fetch from 'node-fetch';
 import Database from 'better-sqlite3';
 import express from 'express';
@@ -15,7 +16,7 @@ let config = JSON.parse(readFileSync('./config.json'));
 
 const server = express();
 server.use(express.json());
-server.use(express.static('.'));
+server.use(express.static('public'));
 
 // ─── OpenDota API caching layer ─────────────────────────────────────────────
 const OPENDOTA_BASE = 'https://api.opendota.com/api';
@@ -26,7 +27,8 @@ const CURRENT_SEASON = 2;
 const SEASON_2_FIRST_MATCH = 8745386473;
 
 // ─── Steam API for live games ────────────────────────────────────────────────
-const STEAM_API_KEY = config.STEAM_API_KEY || '';
+const STEAM_API_KEY = process.env.STEAM_API_KEY || '';
+const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const STEAM_API_BASE = 'https://api.steampowered.com';
 const LIVE_GAME_CACHE_TTL = 3000; // 3 seconds cache for live games
 
@@ -767,23 +769,23 @@ server.use((req, res, next) => {
 server.get('/', (request, response) => {
     logger.info('GET: ' + request.url);
     logger.info('------------------------------------------');
-    return response.sendFile('index.html', { root: '.' });
+    return response.sendFile('index.html', { root: './public' });
 });
 
 server.get('/about', (req, res) => {
-    return res.sendFile('about.html', { root: '.' });
+    return res.sendFile('about.html', { root: './public' });
 });
 
 server.get('/matches', (req, res) => {
-    return res.sendFile('matches.html', { root: '.' });
+    return res.sendFile('matches.html', { root: './public' });
 });
 
 server.get('/rankings', (req, res) => {
-    return res.sendFile('rankings.html', { root: '.' });
+    return res.sendFile('rankings.html', { root: './public' });
 });
 
 server.get('/livegame', (req, res) => {
-    return res.sendFile('livegame.html', { root: '.' });
+    return res.sendFile('livegame.html', { root: './public' });
 });
 
 server.get('/api/live-game', async (req, res) => {
@@ -1047,7 +1049,7 @@ async function refreshDiscordMembers() {
         while (hasMore) {
             const memberRes = await fetch(
                 `https://discord.com/api/guilds/${config.GUILD_ID}/members?limit=1000&after=${after}`, {
-                headers: { 'Authorization': `Bot ${config.BOT_TOKEN}` },
+                headers: { 'Authorization': `Bot ${BOT_TOKEN}` },
             });
             if (!memberRes.ok) break;
 
@@ -1207,7 +1209,7 @@ server.put('/', async (req, res) => {
                 method: 'PUT',
                 body: JSON.stringify({ access_token: accessToken }),
                 headers: {
-                    'Authorization': `Bot ${config.BOT_TOKEN}`,
+                    'Authorization': `Bot ${BOT_TOKEN}`,
                     'Content-Type': 'application/json',
                 },
             });

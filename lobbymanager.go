@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -148,48 +149,29 @@ type AccountPool struct {
 	mutex    sync.RWMutex
 }
 
-// NewAccountPool creates a new account pool by loading accounts from config.json
+// NewAccountPool creates a new account pool by reading credentials from
+// STEAM_USERNAME_<i>/STEAM_PASSWORD_<i> environment variables (loaded from .env).
 func NewAccountPool() (*AccountPool, error) {
 	pool := &AccountPool{
 		accounts: make([]AccountInfo, 0),
 		inUse:    make(map[int]string),
 	}
 
-	// Read config.json
-	configData, err := os.ReadFile("config.json")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config.json: %v", err)
-	}
-
-	var configJSON map[string]interface{}
-	if err := json.Unmarshal(configData, &configJSON); err != nil {
-		return nil, fmt.Errorf("failed to parse config.json: %v", err)
-	}
-
-	// Load accounts (username_0/password_0, username_1/password_1, etc.)
 	// Support up to 10 accounts for scalability
 	for i := 0; i < 10; i++ {
-		usernameKey := fmt.Sprintf("username_%d", i)
-		passwordKey := fmt.Sprintf("password_%d", i)
-
-		usernameVal, usernameOk := configJSON[usernameKey]
-		passwordVal, passwordOk := configJSON[passwordKey]
-
-		if usernameOk && passwordOk {
-			username, ok1 := usernameVal.(string)
-			password, ok2 := passwordVal.(string)
-			if ok1 && ok2 && username != "" && password != "" {
-				pool.accounts = append(pool.accounts, AccountInfo{
-					Username: username,
-					Password: password,
-				})
-				log.Printf("Loaded account %d: %s", i, username)
-			}
+		username := os.Getenv(fmt.Sprintf("STEAM_USERNAME_%d", i))
+		password := os.Getenv(fmt.Sprintf("STEAM_PASSWORD_%d", i))
+		if username != "" && password != "" {
+			pool.accounts = append(pool.accounts, AccountInfo{
+				Username: username,
+				Password: password,
+			})
+			log.Printf("Loaded account %d: %s", i, username)
 		}
 	}
 
 	if len(pool.accounts) == 0 {
-		return nil, fmt.Errorf("no accounts found in config.json")
+		return nil, fmt.Errorf("no Steam accounts found in environment (set STEAM_USERNAME_0/STEAM_PASSWORD_0 in .env)")
 	}
 
 	log.Printf("Account pool initialized with %d account(s)", len(pool.accounts))
@@ -425,7 +407,43 @@ func (h *gcHandler) getError() string {
 // Continue with existing handler implementation...
 // [Rest of the file continues with all the existing handler methods, but updated to use h.gameConfig]
 
+// loadDotenv reads KEY=VALUE pairs from the given file and exports any keys
+// that are not already set in the process environment. Single- and double-
+// quoted values are stripped of their surrounding quotes (no escape handling).
+func loadDotenv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		// Missing .env is fine — the process environment may already be populated.
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		val := strings.TrimSpace(line[eq+1:])
+		if len(val) >= 2 {
+			first, last := val[0], val[len(val)-1]
+			if (first == '\'' && last == '\'') || (first == '"' && last == '"') {
+				val = val[1 : len(val)-1]
+			}
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, val)
+		}
+	}
+}
+
 func main() {
+	loadDotenv(".env")
 	// Redirect log output to stdout instead of stderr
 	log.SetOutput(os.Stdout)
 

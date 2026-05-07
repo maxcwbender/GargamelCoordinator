@@ -20,6 +20,9 @@ from urllib.parse import urljoin
 import DBFunctions as DB
 from logger import setup_logging
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import threading
 """
@@ -1299,7 +1302,7 @@ class Master_Bot(commands.Bot):
         Start the bot using the token loaded from config file.
         Overrides commands.Bot.run for clarity and encapsulation.
         """
-        super().run(self.config["BOT_TOKEN"])
+        super().run(os.environ["BOT_TOKEN"])
 
     async def _start_tcp_server(self):
         """
