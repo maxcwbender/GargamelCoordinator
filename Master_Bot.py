@@ -2621,6 +2621,20 @@ class Master_Bot(commands.Bot):
             await interaction.followup.send(f"Success.  Gargamel Coordinator debug mode set to {debug_mode}. Restarting Coordinator", ephemeral=True)
             os.system("supervisorctl restart gargamel")
 
+        @app_commands.command(name="announce", description="Send a message to General as the bot")
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(message="Message to send to General")
+        async def announce(
+            interaction: discord.Interaction,
+            message: str,
+        ):
+            general = self.get_channel(int(self.config["GENERAL_CHANNEL_ID"]))
+            if not general:
+                return await interaction.response.send_message("Could not find General channel.", ephemeral=True)
+            await general.send(message)
+            await interaction.response.send_message("Sent.", ephemeral=True)
+            logger.info(f"[announce] {interaction.user} sent to General: {message}")
+
         @app_commands.command(name="scan_for_unfinished_matches", description="Scan the database for unfinished matches and update accordingly")
         @app_commands.checks.has_role("Mod")
         async def scan_for_unfinished_matches(
@@ -3004,6 +3018,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(check_mmr)
         self.tree.add_command(restart_bot)
         self.tree.add_command(set_debug_mode)
+        self.tree.add_command(announce)
         self.tree.add_command(scan_for_unfinished_matches)
         self.tree.add_command(update_match_results)
         self.tree.add_command(end_match_manual)
