@@ -949,6 +949,12 @@ server.get('/api/recent-matches', async (req, res) => {
     });
 });
 
+server.post('/api/refresh-matches', async (_req, res) => {
+    logger.info('Manual match cache refresh triggered via API');
+    await refreshMatchCache();
+    return res.json({ status: 'refreshed', lastUpdated: matchCache.lastFetched });
+});
+
 server.post('/api/refresh-rankings', async (req, res) => {
     if (isRefreshingStats) {
         return res.json({ status: 'already_refreshing' });
