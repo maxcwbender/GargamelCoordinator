@@ -1108,7 +1108,9 @@ server.put('/', async (req, res) => {
     logger.info('PUT: ' + JSON.stringify(req.body));
     logger.info('------------------------------------------');
 
-    const { tokenType, accessToken, rank, referredBy } = req.body;
+    const { tokenType, accessToken, rank, referredBy: rawReferredBy } = req.body;
+    const validNames = new Set((discordMembersCache.data || []).map(m => m.name));
+    const referredBy = (rawReferredBy && validNames.has(rawReferredBy)) ? rawReferredBy : null;
 
     if (!tokenType || !accessToken) {
         logger.error("Returning 400: Either missing tokentype or accesstoken.  tokenType: ${tokenType}  accessToken: ${accessToken}")

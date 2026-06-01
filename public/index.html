@@ -367,8 +367,10 @@
 
         const referralInput = document.getElementById('referral-input');
         const referralDropdown = document.getElementById('referral-dropdown');
+        let confirmedReferral = null;
 
         referralInput.addEventListener('input', () => {
+          confirmedReferral = null;
           const query = referralInput.value.trim().toLowerCase();
           referralDropdown.innerHTML = '';
           if (query.length < 2) { referralDropdown.style.display = 'none'; return; }
@@ -400,6 +402,7 @@
             item.addEventListener('mouseleave', () => item.style.background = 'white');
             item.addEventListener('mousedown', (e) => {
               e.preventDefault();
+              confirmedReferral = m.name;
               referralInput.value = m.name;
               referralDropdown.style.display = 'none';
             });
@@ -409,7 +412,10 @@
         });
 
         referralInput.addEventListener('blur', () => {
-          setTimeout(() => { referralDropdown.style.display = 'none'; }, 150);
+          setTimeout(() => {
+            referralDropdown.style.display = 'none';
+            if (!confirmedReferral) referralInput.value = '';
+          }, 150);
         });
 
         // Add rank validation before allowing OAuth redirect
@@ -424,7 +430,7 @@
           }
           // Store rank and referral in sessionStorage so we can retrieve them after OAuth redirect
           sessionStorage.setItem('selectedRank', rankSelect.value);
-          sessionStorage.setItem('referredBy', referralInput.value.trim());
+          sessionStorage.setItem('referredBy', confirmedReferral || '');
         });
         return;
       }
