@@ -814,6 +814,10 @@ server.get('/summer-planning', (req, res) => {
 
 // ─── Summer trip planning API ────────────────────────────────────────────────
 const PLANNING_PW = (process.env.SUMMER_PLANNING_PASSWORD || '').trim();
+// Admin name (honor-system, same as all identity here): whoever plans under this
+// first name may remove any item, not just their own. Empty => no admin.
+const PLANNING_ADMIN = (process.env.SUMMER_PLANNING_ADMIN || '').trim();
+const isPlanningAdmin = (name) => !!PLANNING_ADMIN && String(name).trim().toLowerCase() === PLANNING_ADMIN.toLowerCase();
 // Deterministic token: survives restarts with no session store; rotating the
 // password invalidates all stored tokens. Null when unconfigured => fail closed.
 const planningToken = PLANNING_PW
@@ -854,7 +858,10 @@ server.post('/api/summer-planning/verify', (req, res) => {
 server.get('/api/summer-planning/data', requirePlanningAuth, (req, res) => {
     const items = db.prepare('SELECT * FROM trip_items ORDER BY created_at').all();
     const allergies = db.prepare('SELECT name_key, display_name, allergies FROM trip_allergies ORDER BY display_name').all();
-    return res.json({ items, allergies });
+    // isAdmin is derived from the caller's claimed name; we never expose the admin
+    // name itself, so non-admins just get false.
+    const isAdmin = isPlanningAdmin(req.query.name || '');
+    return res.json({ items, allergies, isAdmin });
 });
 
 server.post('/api/summer-planning/items', requirePlanningAuth, (req, res) => {
@@ -891,12 +898,14 @@ server.delete('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) 
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid item id' });
     if (!name) return res.status(400).json({ error: 'Name is required' });
 
-    const info = db.prepare('DELETE FROM trip_items WHERE id = ? AND lower(trim(created_by)) = lower(?)').run(id, name.toLowerCase());
-    if (info.changes === 0) {
-        const exists = db.prepare('SELECT 1 FROM trip_items WHERE id = ?').get(id);
-        return res.status(exists ? 403 : 404).json({ error: exists ? 'You can only remove your own items' : 'Item not found' });
+    const row = db.prepare('SELECT created_by FROM trip_items WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ error: 'Item not found' });
+    const isOwner = row.created_by.trim().toLowerCase() === name.toLowerCase();
+    if (!isOwner && !isPlanningAdmin(name)) {
+        return res.status(403).json({ error: 'You can only remove your own items' });
     }
-    logger.info(`[Planning] ${name} removed item ${id}`);
+    db.prepare('DELETE FROM trip_items WHERE id = ?').run(id);
+    logger.info(`[Planning] ${name} removed item ${id}${isOwner ? '' : ' (admin)'}`);
     return res.json({ ok: true });
 });
 

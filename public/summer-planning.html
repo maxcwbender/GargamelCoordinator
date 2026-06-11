@@ -250,6 +250,20 @@
       color: #2c3e50;
     }
 
+    .admin-badge {
+      display: inline-block;
+      margin-left: 6px;
+      background: #4e9fd1;
+      color: #fff;
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      vertical-align: middle;
+    }
+
     .layout {
       display: grid;
       grid-template-columns: 1fr 280px;
@@ -569,7 +583,7 @@
         <h1>Maine Trip Planning</h1>
         <div class="trip-sub">July 2&ndash;6, 2026 &middot; Meals, snacks &amp; groceries</div>
       </div>
-      <div class="user-chip">Planning as <strong id="userNameLabel"></strong> &middot;
+      <div class="user-chip">Planning as <strong id="userNameLabel"></strong><span id="adminBadge" class="admin-badge hidden">admin</span> &middot;
         <button class="link-btn" id="changeNameBtn">change</button>
       </div>
     </div>
@@ -634,6 +648,7 @@
     let token = localStorage.getItem('sp_token') || '';
     let myName = localStorage.getItem('sp_name') || '';
     let data = { items: [], allergies: [] };
+    let isAdmin = false;
     let expandedDate = null;
 
     const $ = id => document.getElementById(id);
@@ -681,7 +696,8 @@
     }
 
     async function loadData() {
-      data = await api('/data');
+      data = await api('/data' + (myName ? '?name=' + encodeURIComponent(myName) : ''));
+      isAdmin = !!data.isAdmin;
     }
 
     // ── Boot ──────────────────────────────────────────────────
@@ -772,14 +788,18 @@
     // ── Rendering ─────────────────────────────────────────────
     function renderAll() {
       $('userNameLabel').textContent = myName;
+      $('adminBadge').classList.toggle('hidden', !isAdmin);
       renderCalendar();
       renderLists();
       renderAllergies();
     }
 
     function itemRow(it) {
-      const remove = isMine(it.created_by)
-        ? `<button class="remove-btn" data-remove="${it.id}">remove</button>` : '';
+      // Admins may remove anyone's item; everyone else only their own.
+      const canRemove = isMine(it.created_by) || isAdmin;
+      const title = isMine(it.created_by) ? 'remove' : 'remove (admin)';
+      const remove = canRemove
+        ? `<button class="remove-btn" data-remove="${it.id}">${title}</button>` : '';
       return `<li>
         <span class="item-name">${escapeHtml(it.item_name)}</span>
         ${it.notes ? `<span class="item-notes">${escapeHtml(it.notes)}</span>` : '<span class="item-notes"></span>'}
