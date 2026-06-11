@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Summer Planning - Gargamel League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f9f9f9;
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .navbar-brand img {
+      height: 36px;
+      width: auto;
+    }
+
+    /* ── Gate / name overlays ──────────────────────────────── */
+    .overlay {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .overlay-card {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+
+    .overlay-card h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 4px;
+    }
+
+    .overlay-card .sub {
+      color: #4e9fd1;
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 24px;
+    }
+
+    .overlay-card input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      font: inherit;
+      font-size: 0.95rem;
+      margin-bottom: 12px;
+    }
+
+    .overlay-card input:focus {
+      outline: none;
+      border-color: #4e9fd1;
+      box-shadow: 0 0 0 3px rgba(78, 159, 209, 0.15);
+    }
+
+    .name-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+
+    .name-chip {
+      background: rgba(78, 159, 209, 0.1);
+      color: #2c7cb0;
+      border: 1px solid rgba(78, 159, 209, 0.4);
+      border-radius: 999px;
+      padding: 6px 16px;
+      font: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .name-chip:hover {
+      background: rgba(78, 159, 209, 0.25);
+    }
+
+    .chips-label {
+      font-size: 0.8rem;
+      color: #888;
+      margin-bottom: 10px;
+    }
+
+    .error-msg {
+      color: #c0392b;
+      font-size: 0.85rem;
+      margin-top: 10px;
+      min-height: 1.2em;
+    }
+
+    /* ── Buttons ───────────────────────────────────────────── */
+    .btn {
+      background: #4e9fd1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .btn:hover {
+      background: #3d8ec0;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .btn-block {
+      width: 100%;
+    }
+
+    .btn-sm {
+      padding: 7px 14px;
+      font-size: 0.8rem;
+      border-radius: 6px;
+    }
+
+    .remove-btn {
+      background: none;
+      border: none;
+      color: #c0392b;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .remove-btn:hover {
+      background: rgba(192, 57, 43, 0.08);
+    }
+
+    .link-btn {
+      background: none;
+      border: none;
+      color: #4e9fd1;
+      font: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+    }
+
+    /* ── Main layout ───────────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      width: 100%;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .page-header h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #2c3e50;
+    }
+
+    .page-header .trip-sub {
+      color: #4e9fd1;
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-top: 2px;
+    }
+
+    .user-chip {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-size: 0.85rem;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+    }
+
+    .user-chip strong {
+      color: #2c3e50;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 24px;
+      align-items: start;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .card h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 16px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #4e9fd1;
+      display: inline-block;
+    }
+
+    /* ── Calendar ──────────────────────────────────────────── */
+    .day-strip {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+    }
+
+    .day-card {
+      border: 1px solid #e0e0e0;
+      border-radius: 10px;
+      padding: 14px 8px;
+      text-align: center;
+      cursor: pointer;
+      background: #fbfcfd;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .day-card:hover {
+      border-color: #4e9fd1;
+    }
+
+    .day-card.selected {
+      background: #4e9fd1;
+      border-color: #4e9fd1;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(78, 159, 209, 0.4);
+    }
+
+    .day-card .dow {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+    }
+
+    .day-card.selected .dow {
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .day-card .dom {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin: 2px 0;
+    }
+
+    .day-card .meal-count {
+      font-size: 0.7rem;
+      color: #4e9fd1;
+      font-weight: 600;
+    }
+
+    .day-card.selected .meal-count {
+      color: #fff;
+    }
+
+    .day-detail {
+      margin-top: 18px;
+      border-top: 1px solid #eee;
+      padding-top: 18px;
+    }
+
+    .day-detail-title {
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 14px;
+    }
+
+    .slot {
+      margin-bottom: 20px;
+    }
+
+    .slot:last-child {
+      margin-bottom: 0;
+    }
+
+    .slot-header {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #4e9fd1;
+      margin-bottom: 8px;
+    }
+
+    /* ── Item lists ────────────────────────────────────────── */
+    .item-list {
+      list-style: none;
+      margin-bottom: 10px;
+    }
+
+    .item-list li {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+
+    .item-list li:nth-child(odd) {
+      background: #f5f8fa;
+    }
+
+    .item-list .item-name {
+      font-weight: 600;
+      color: #2c3e50;
+    }
+
+    .item-list .item-notes {
+      color: #777;
+      font-size: 0.8rem;
+      flex: 1;
+    }
+
+    .item-list .item-by {
+      color: #4e9fd1;
+      font-size: 0.78rem;
+      font-weight: 600;
+      white-space: nowrap;
+      margin-left: auto;
+    }
+
+    .empty-note {
+      color: #999;
+      font-size: 0.85rem;
+      font-style: italic;
+      padding: 4px 0 10px;
+    }
+
+    .add-form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .add-form input {
+      flex: 1;
+      min-width: 120px;
+      padding: 8px 12px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 0.85rem;
+    }
+
+    .add-form input:focus {
+      outline: none;
+      border-color: #4e9fd1;
+    }
+
+    /* ── Allergies sidebar ─────────────────────────────────── */
+    .sidebar {
+      position: sticky;
+      top: 84px;
+    }
+
+    .allergy-list {
+      list-style: none;
+      margin-bottom: 14px;
+    }
+
+    .allergy-list li {
+      padding: 8px 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.85rem;
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+    }
+
+    .allergy-list .a-name {
+      font-weight: 700;
+      color: #2c3e50;
+      white-space: nowrap;
+    }
+
+    .allergy-list .a-text {
+      color: #555;
+      flex: 1;
+    }
+
+    .allergy-form textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 0.85rem;
+      resize: vertical;
+      min-height: 56px;
+      margin-bottom: 8px;
+    }
+
+    .allergy-form textarea:focus {
+      outline: none;
+      border-color: #4e9fd1;
+    }
+
+    .allergy-form-label {
+      font-size: 0.78rem;
+      color: #888;
+      margin-bottom: 6px;
+    }
+
+    /* ── Toast ─────────────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a2e;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 200;
+    }
+
+    .toast.show {
+      opacity: 1;
+    }
+
+    .toast.error {
+      background: #c0392b;
+    }
+
+    @media (max-width: 800px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        order: -1;
+      }
+
+      .day-strip {
+        gap: 6px;
+      }
+
+      .page-content {
+        padding: 1.25rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+  </nav>
+
+  <!-- Password gate -->
+  <div id="gate" class="overlay hidden">
+    <form class="overlay-card" id="gateForm">
+      <h1>Summer Planning</h1>
+      <div class="sub">Maine Trip &middot; July 2&ndash;6, 2026</div>
+      <input type="password" id="gatePassword" placeholder="Trip password" autocomplete="current-password" required>
+      <button type="submit" class="btn btn-block" id="gateBtn">Enter</button>
+      <div class="error-msg" id="gateError"></div>
+    </form>
+  </div>
+
+  <!-- Name prompt -->
+  <div id="namePrompt" class="overlay hidden">
+    <form class="overlay-card" id="nameForm">
+      <h1>Who are you?</h1>
+      <div class="sub">Your first name is shown next to everything you sign up for</div>
+      <div id="nameChipsWrap" class="hidden">
+        <div class="chips-label">Already planning? Tap your name:</div>
+        <div class="name-chips" id="nameChips"></div>
+      </div>
+      <input type="text" id="nameInput" placeholder="First name" maxlength="40" autocomplete="given-name" required>
+      <button type="submit" class="btn btn-block">Let's plan</button>
+      <div class="error-msg" id="nameError"></div>
+    </form>
+  </div>
+
+  <!-- Main planner -->
+  <div id="main" class="page-content hidden">
+    <div class="page-header">
+      <div>
+        <h1>Maine Trip Planning</h1>
+        <div class="trip-sub">July 2&ndash;6, 2026 &middot; Meals, snacks &amp; groceries</div>
+      </div>
+      <div class="user-chip">Planning as <strong id="userNameLabel"></strong> &middot;
+        <button class="link-btn" id="changeNameBtn">change</button>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div class="main-col">
+        <div class="card">
+          <h2>&#128197; Trip Calendar</h2>
+          <div class="day-strip" id="dayStrip"></div>
+          <div class="day-detail hidden" id="dayDetail"></div>
+        </div>
+        <div class="card" data-list-card="snack">
+          <h2>&#127871; Snacks</h2>
+          <div data-list="snack"></div>
+        </div>
+        <div class="card" data-list-card="drink">
+          <h2>&#127865; Drinks &amp; Alcohol</h2>
+          <div data-list="drink"></div>
+        </div>
+        <div class="card" data-list-card="grocery">
+          <h2>&#128722; Groceries</h2>
+          <div data-list="grocery"></div>
+        </div>
+      </div>
+
+      <aside class="sidebar">
+        <div class="card">
+          <h2>&#9888;&#65039; Allergies &amp; Dietary Restrictions</h2>
+          <ul class="allergy-list" id="allergyList"></ul>
+          <form class="allergy-form" id="allergyForm">
+            <div class="allergy-form-label" id="allergyFormLabel"></div>
+            <textarea id="allergyInput" maxlength="500" placeholder="e.g. peanuts, shellfish, vegetarian, gluten-free"></textarea>
+            <button type="submit" class="btn btn-sm btn-block">Save mine</button>
+          </form>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const API = '/api/summer-planning';
+    const TRIP_DAYS = [
+      { date: '2026-07-02', dow: 'Thu', dom: 2, label: 'Thursday, July 2' },
+      { date: '2026-07-03', dow: 'Fri', dom: 3, label: 'Friday, July 3' },
+      { date: '2026-07-04', dow: 'Sat', dom: 4, label: 'Saturday, July 4' },
+      { date: '2026-07-05', dow: 'Sun', dom: 5, label: 'Sunday, July 5' },
+      { date: '2026-07-06', dow: 'Mon', dom: 6, label: 'Monday, July 6' },
+    ];
+    const SLOTS = [
+      { key: 'breakfast', label: '☕ Breakfast' },
+      { key: 'lunch', label: '🥪 Lunch' },
+      { key: 'dinner', label: '🍽️ Dinner' },
+    ];
+    const LISTS = [
+      { key: 'snack', placeholder: 'Snack (e.g. trail mix)' },
+      { key: 'drink', placeholder: 'Drink (e.g. White Claw 12-pack)' },
+      { key: 'grocery', placeholder: 'Grocery item (e.g. carton of eggs)' },
+    ];
+
+    let token = localStorage.getItem('sp_token') || '';
+    let myName = localStorage.getItem('sp_name') || '';
+    let data = { items: [], allergies: [] };
+    let expandedDate = null;
+
+    const $ = id => document.getElementById(id);
+    const norm = s => String(s || '').trim().toLowerCase();
+    const isMine = name => norm(name) === norm(myName);
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[c]);
+    }
+
+    function showToast(msg, isError) {
+      const t = $('toast');
+      t.textContent = msg;
+      t.className = 'toast show' + (isError ? ' error' : '');
+      clearTimeout(t._timer);
+      t._timer = setTimeout(() => t.classList.remove('show'), 2500);
+    }
+
+    async function api(path, opts = {}) {
+      const res = await fetch(API + path, {
+        ...opts,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token,
+          ...(opts.headers || {}),
+        },
+      });
+      if (res.status === 401) {
+        localStorage.removeItem('sp_token');
+        token = '';
+        setScreen('gate');
+        throw new Error('Password changed — please re-enter it');
+      }
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || ('Request failed (' + res.status + ')'));
+      return body;
+    }
+
+    function setScreen(screen) {
+      $('gate').classList.toggle('hidden', screen !== 'gate');
+      $('namePrompt').classList.toggle('hidden', screen !== 'name');
+      $('main').classList.toggle('hidden', screen !== 'main');
+    }
+
+    async function loadData() {
+      data = await api('/data');
+    }
+
+    // ── Boot ──────────────────────────────────────────────────
+    async function boot() {
+      if (!token) return setScreen('gate');
+      if (!myName) return showNamePrompt();
+      setScreen('main');
+      try {
+        await loadData();
+        renderAll();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    // ── Password gate ─────────────────────────────────────────
+    $('gateForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const btn = $('gateBtn');
+      btn.disabled = true;
+      $('gateError').textContent = '';
+      try {
+        const res = await fetch(API + '/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: $('gatePassword').value }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || 'Something went wrong');
+        token = body.token;
+        localStorage.setItem('sp_token', token);
+        $('gatePassword').value = '';
+        boot();
+      } catch (err) {
+        $('gateError').textContent = err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // ── Name prompt ───────────────────────────────────────────
+    async function showNamePrompt() {
+      setScreen('name');
+      try {
+        await loadData();
+        const names = new Map(); // norm -> display
+        for (const it of data.items) if (!names.has(norm(it.created_by))) names.set(norm(it.created_by), it.created_by.trim());
+        for (const a of data.allergies) if (!names.has(a.name_key)) names.set(a.name_key, a.display_name);
+        const chips = $('nameChips');
+        chips.innerHTML = '';
+        for (const display of [...names.values()].sort((a, b) => a.localeCompare(b))) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'name-chip';
+          b.textContent = display;
+          b.addEventListener('click', () => pickName(display));
+          chips.appendChild(b);
+        }
+        $('nameChipsWrap').classList.toggle('hidden', names.size === 0);
+      } catch (err) {
+        // Names list is a convenience; typing still works.
+        $('nameChipsWrap').classList.add('hidden');
+      }
+    }
+
+    function pickName(name) {
+      name = name.trim();
+      if (!name || name.length > 40) {
+        $('nameError').textContent = 'Please enter a first name (max 40 characters)';
+        return;
+      }
+      myName = name;
+      localStorage.setItem('sp_name', myName);
+      boot();
+    }
+
+    $('nameForm').addEventListener('submit', e => {
+      e.preventDefault();
+      pickName($('nameInput').value);
+    });
+
+    $('changeNameBtn').addEventListener('click', () => {
+      localStorage.removeItem('sp_name');
+      myName = '';
+      boot();
+    });
+
+    // ── Rendering ─────────────────────────────────────────────
+    function renderAll() {
+      $('userNameLabel').textContent = myName;
+      renderCalendar();
+      renderLists();
+      renderAllergies();
+    }
+
+    function itemRow(it) {
+      const remove = isMine(it.created_by)
+        ? `<button class="remove-btn" data-remove="${it.id}">remove</button>` : '';
+      return `<li>
+        <span class="item-name">${escapeHtml(it.item_name)}</span>
+        ${it.notes ? `<span class="item-notes">${escapeHtml(it.notes)}</span>` : '<span class="item-notes"></span>'}
+        <span class="item-by">— ${escapeHtml(it.created_by)}</span>
+        ${remove}
+      </li>`;
+    }
+
+    function renderCalendar() {
+      const strip = $('dayStrip');
+      strip.innerHTML = TRIP_DAYS.map(d => {
+        const count = data.items.filter(it => it.category === 'meal' && it.trip_date === d.date).length;
+        return `<div class="day-card${expandedDate === d.date ? ' selected' : ''}" data-day="${d.date}">
+          <div class="dow">${d.dow}</div>
+          <div class="dom">${d.dom}</div>
+          <div class="meal-count">${count ? count + (count === 1 ? ' meal' : ' meals') : '&nbsp;'}</div>
+        </div>`;
+      }).join('');
+
+      const detail = $('dayDetail');
+      const day = TRIP_DAYS.find(d => d.date === expandedDate);
+      detail.classList.toggle('hidden', !day);
+      if (!day) { detail.innerHTML = ''; return; }
+
+      detail.innerHTML = `<div class="day-detail-title">${day.label}</div>` + SLOTS.map(slot => {
+        const meals = data.items.filter(it => it.category === 'meal' && it.trip_date === day.date && it.meal_slot === slot.key);
+        return `<div class="slot">
+          <div class="slot-header">${slot.label}</div>
+          ${meals.length
+            ? `<ul class="item-list">${meals.map(itemRow).join('')}</ul>`
+            : '<div class="empty-note">Nothing claimed yet — be the hero.</div>'}
+          <form class="add-form" data-meal-form data-date="${day.date}" data-slot="${slot.key}">
+            <input type="text" name="itemName" placeholder="Meal you'll cook / buy for" maxlength="100" required>
+            <input type="text" name="notes" placeholder="Notes (optional)" maxlength="300">
+            <button type="submit" class="btn btn-sm">Add</button>
+          </form>
+        </div>`;
+      }).join('');
+    }
+
+    function renderLists() {
+      for (const list of LISTS) {
+        const wrap = document.querySelector(`[data-list="${list.key}"]`);
+        const items = data.items.filter(it => it.category === list.key);
+        wrap.innerHTML = `
+          ${items.length
+            ? `<ul class="item-list">${items.map(itemRow).join('')}</ul>`
+            : '<div class="empty-note">Nothing here yet.</div>'}
+          <form class="add-form" data-item-form data-category="${list.key}">
+            <input type="text" name="itemName" placeholder="${list.placeholder}" maxlength="100" required>
+            <input type="text" name="notes" placeholder="Notes (optional)" maxlength="300">
+            <button type="submit" class="btn btn-sm">Add</button>
+          </form>`;
+      }
+    }
+
+    function renderAllergies() {
+      const ul = $('allergyList');
+      if (!data.allergies.length) {
+        ul.innerHTML = '<li><span class="a-text empty-note">Nothing recorded yet.</span></li>';
+      } else {
+        ul.innerHTML = data.allergies.map(a => `<li>
+          <span class="a-name">${escapeHtml(a.display_name)}:</span>
+          <span class="a-text">${escapeHtml(a.allergies)}</span>
+          ${a.name_key === norm(myName) ? '<button class="remove-btn" data-remove-allergy>remove</button>' : ''}
+        </li>`).join('');
+      }
+      const mine = data.allergies.find(a => a.name_key === norm(myName));
+      $('allergyFormLabel').textContent = mine ? 'Update yours:' : 'Add your allergies or dietary needs so cooks can plan:';
+      if (document.activeElement !== $('allergyInput')) {
+        $('allergyInput').value = mine ? mine.allergies : '';
+      }
+    }
+
+    // ── Mutations (event delegation) ──────────────────────────
+    async function mutate(btn, fn) {
+      if (btn) btn.disabled = true;
+      try {
+        await fn();
+        await loadData();
+        renderAll();
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    $('main').addEventListener('click', e => {
+      const dayCard = e.target.closest('[data-day]');
+      if (dayCard) {
+        expandedDate = expandedDate === dayCard.dataset.day ? null : dayCard.dataset.day;
+        renderCalendar();
+        return;
+      }
+      const removeBtn = e.target.closest('[data-remove]');
+      if (removeBtn) {
+        mutate(removeBtn, () =>
+          api('/items/' + removeBtn.dataset.remove + '?name=' + encodeURIComponent(myName), { method: 'DELETE' }));
+        return;
+      }
+      const removeAllergy = e.target.closest('[data-remove-allergy]');
+      if (removeAllergy) {
+        mutate(removeAllergy, () =>
+          api('/allergies?name=' + encodeURIComponent(myName), { method: 'DELETE' }));
+      }
+    });
+
+    $('main').addEventListener('submit', e => {
+      const form = e.target;
+      if (form.matches('[data-meal-form], [data-item-form]')) {
+        e.preventDefault();
+        const payload = {
+          category: form.dataset.category || 'meal',
+          tripDate: form.dataset.date || null,
+          mealSlot: form.dataset.slot || null,
+          itemName: form.elements.itemName.value,
+          notes: form.elements.notes.value,
+          createdBy: myName,
+        };
+        mutate(form.querySelector('button'), () =>
+          api('/items', { method: 'POST', body: JSON.stringify(payload) }));
+      }
+    });
+
+    $('allergyForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const allergies = $('allergyInput').value.trim();
+      if (!allergies) return showToast('Enter your allergies or dietary restrictions first', true);
+      mutate(e.target.querySelector('button'), () =>
+        api('/allergies', { method: 'PUT', body: JSON.stringify({ name: myName, allergies }) }));
+    });
+
+    boot();
+  </script>
+</body>
+
+</html>

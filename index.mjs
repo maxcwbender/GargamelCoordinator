@@ -3,6 +3,7 @@ import fetch from 'node-fetch';
 import Database from 'better-sqlite3';
 import express from 'express';
 import net from 'net';
+import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'fs';
 import pino from 'pino'
 const logger = pino({
@@ -126,6 +127,24 @@ for (const sql of columnMigrations) {
         PRIMARY KEY (match_id, award_type)
     )`);
 }
+
+// Summer trip planning (/summer-planning): shared items + per-person allergies
+db.exec(`CREATE TABLE IF NOT EXISTS trip_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL CHECK (category IN ('meal','snack','drink','grocery')),
+    trip_date TEXT,
+    meal_slot TEXT CHECK (meal_slot IN ('breakfast','lunch','dinner') OR meal_slot IS NULL),
+    item_name TEXT NOT NULL,
+    notes TEXT,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS trip_allergies (
+    name_key TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    allergies TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+)`);
 
 async function fetchOpenDota(path) {
     const res = await fetch(`${OPENDOTA_BASE}${path}`);
@@ -289,6 +308,7 @@ async function fetchAndSaveAvatars(accountIds) {
 async function refreshMatchCache() {
     try {
         logger.info('Refreshing OpenDota match cache...');
+        if (dotaConstants.lastFetched === 0) await fetchDotaConstants();
         // Use /matchIds endpoint - /matches excludes amateur leagues like ours
         const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
 
@@ -760,7 +780,7 @@ server.use('/node_modules', express.static('node_modules'));
 // Optional: Add CORS if needed for browsers
 server.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');  // Allow all for testing
-    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
@@ -786,6 +806,119 @@ server.get('/rankings', (req, res) => {
 
 server.get('/livegame', (req, res) => {
     return res.sendFile('livegame.html', { root: './public' });
+});
+
+server.get('/summer-planning', (req, res) => {
+    return res.sendFile('summer-planning.html', { root: './public' });
+});
+
+// ─── Summer trip planning API ────────────────────────────────────────────────
+const PLANNING_PW = (process.env.SUMMER_PLANNING_PASSWORD || '').trim();
+// Deterministic token: survives restarts with no session store; rotating the
+// password invalidates all stored tokens. Null when unconfigured => fail closed.
+const planningToken = PLANNING_PW
+    ? createHmac('sha256', PLANNING_PW).update('summer-planning-token-v1').digest('hex')
+    : null;
+
+function planningSafeEqual(a, b) {
+    // Hash both sides so timingSafeEqual always gets equal-length buffers
+    return timingSafeEqual(
+        createHash('sha256').update(String(a)).digest(),
+        createHash('sha256').update(String(b)).digest()
+    );
+}
+
+function requirePlanningAuth(req, res, next) {
+    if (!planningToken) return res.status(503).json({ error: 'Planning is not configured on this server' });
+    const header = req.get('authorization') || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (!token || !planningSafeEqual(token, planningToken)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+}
+
+const TRIP_DATES = ['2026-07-02', '2026-07-03', '2026-07-04', '2026-07-05', '2026-07-06'];
+const MEAL_SLOTS = ['breakfast', 'lunch', 'dinner'];
+const ITEM_CATEGORIES = ['meal', 'snack', 'drink', 'grocery'];
+
+server.post('/api/summer-planning/verify', (req, res) => {
+    if (!planningToken) return res.status(503).json({ error: 'Planning is not configured on this server' });
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!password || !planningSafeEqual(password, PLANNING_PW)) {
+        return res.status(401).json({ error: 'Incorrect password' });
+    }
+    return res.json({ token: planningToken });
+});
+
+server.get('/api/summer-planning/data', requirePlanningAuth, (req, res) => {
+    const items = db.prepare('SELECT * FROM trip_items ORDER BY created_at').all();
+    const allergies = db.prepare('SELECT name_key, display_name, allergies FROM trip_allergies ORDER BY display_name').all();
+    return res.json({ items, allergies });
+});
+
+server.post('/api/summer-planning/items', requirePlanningAuth, (req, res) => {
+    const body = req.body || {};
+    const category = typeof body.category === 'string' ? body.category : '';
+    const itemName = typeof body.itemName === 'string' ? body.itemName.trim() : '';
+    const notes = typeof body.notes === 'string' ? body.notes.trim() : '';
+    const createdBy = typeof body.createdBy === 'string' ? body.createdBy.trim() : '';
+
+    if (!ITEM_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
+    if (!itemName || itemName.length > 100) return res.status(400).json({ error: 'Item name is required (max 100 chars)' });
+    if (notes.length > 300) return res.status(400).json({ error: 'Notes too long (max 300 chars)' });
+    if (!createdBy || createdBy.length > 40) return res.status(400).json({ error: 'Name is required (max 40 chars)' });
+
+    let tripDate = null;
+    let mealSlot = null;
+    if (category === 'meal') {
+        if (!TRIP_DATES.includes(body.tripDate)) return res.status(400).json({ error: 'Meal date must be a trip date (Jul 2-6, 2026)' });
+        if (!MEAL_SLOTS.includes(body.mealSlot)) return res.status(400).json({ error: 'Meal slot must be breakfast, lunch, or dinner' });
+        tripDate = body.tripDate;
+        mealSlot = body.mealSlot;
+    }
+
+    const info = db.prepare(`INSERT INTO trip_items (category, trip_date, meal_slot, item_name, notes, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(category, tripDate, mealSlot, itemName, notes || null, createdBy, Date.now());
+    const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(info.lastInsertRowid);
+    logger.info(`[Planning] ${createdBy} added ${category}: ${itemName}`);
+    return res.status(201).json({ item });
+});
+
+server.delete('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) => {
+    const id = Number(req.params.id);
+    const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid item id' });
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+
+    const info = db.prepare('DELETE FROM trip_items WHERE id = ? AND lower(trim(created_by)) = lower(?)').run(id, name.toLowerCase());
+    if (info.changes === 0) {
+        const exists = db.prepare('SELECT 1 FROM trip_items WHERE id = ?').get(id);
+        return res.status(exists ? 403 : 404).json({ error: exists ? 'You can only remove your own items' : 'Item not found' });
+    }
+    logger.info(`[Planning] ${name} removed item ${id}`);
+    return res.json({ ok: true });
+});
+
+server.put('/api/summer-planning/allergies', requirePlanningAuth, (req, res) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const allergies = typeof req.body?.allergies === 'string' ? req.body.allergies.trim() : '';
+    if (!name || name.length > 40) return res.status(400).json({ error: 'Name is required (max 40 chars)' });
+    if (!allergies || allergies.length > 500) return res.status(400).json({ error: 'Allergies text is required (max 500 chars)' });
+
+    db.prepare(`INSERT INTO trip_allergies (name_key, display_name, allergies, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(name_key) DO UPDATE SET display_name = excluded.display_name,
+            allergies = excluded.allergies, updated_at = excluded.updated_at`)
+        .run(name.toLowerCase(), name, allergies, Date.now());
+    return res.json({ ok: true });
+});
+
+server.delete('/api/summer-planning/allergies', requirePlanningAuth, (req, res) => {
+    const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    const info = db.prepare('DELETE FROM trip_allergies WHERE name_key = ?').run(name.toLowerCase());
+    if (info.changes === 0) return res.status(404).json({ error: 'No allergy entry found' });
+    return res.json({ ok: true });
 });
 
 server.get('/api/live-game', async (req, res) => {
