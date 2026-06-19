@@ -129,6 +129,8 @@ for (const sql of columnMigrations) {
 }
 
 // Summer trip planning (/summer-planning): shared items + per-person allergies
+// source_item_id: when a grocery row is a meal's ingredient, points at the meal's
+// id (NULL for standalone groceries). Deleting the meal cascades its ingredients.
 db.exec(`CREATE TABLE IF NOT EXISTS trip_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     category TEXT NOT NULL CHECK (category IN ('meal','snack','drink','grocery')),
@@ -137,8 +139,11 @@ db.exec(`CREATE TABLE IF NOT EXISTS trip_items (
     item_name TEXT NOT NULL,
     notes TEXT,
     created_by TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    source_item_id INTEGER
 )`);
+// Existing installs: add the column if the table predates it.
+try { db.exec('ALTER TABLE trip_items ADD COLUMN source_item_id INTEGER'); } catch (_) { /* already exists */ }
 db.exec(`CREATE TABLE IF NOT EXISTS trip_allergies (
     name_key TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
@@ -845,6 +850,27 @@ function requirePlanningAuth(req, res, next) {
 const TRIP_DATES = ['2026-07-02', '2026-07-03', '2026-07-04', '2026-07-05', '2026-07-06'];
 const MEAL_SLOTS = ['breakfast', 'lunch', 'dinner'];
 const ITEM_CATEGORIES = ['meal', 'snack', 'drink', 'grocery'];
+const MAX_INGREDIENTS = 40;
+
+// Insert a single trip item. source is the parent meal id for ingredients, else null.
+const insertTripItem = db.prepare(`INSERT INTO trip_items
+    (category, trip_date, meal_slot, item_name, notes, created_by, created_at, source_item_id)
+    VALUES (@category, @tripDate, @mealSlot, @itemName, @notes, @createdBy, @createdAt, @sourceItemId)`);
+
+// Normalize an ingredients payload to a clean string[] (drops blanks). Returns
+// null if the shape is invalid (too many, or an entry too long).
+function cleanIngredients(raw) {
+    if (raw == null) return [];
+    if (!Array.isArray(raw)) return null;
+    const out = [];
+    for (const entry of raw) {
+        const name = typeof entry === 'string' ? entry.trim() : '';
+        if (!name) continue;
+        if (name.length > 100) return null;
+        out.push(name);
+    }
+    return out.length > MAX_INGREDIENTS ? null : out;
+}
 
 server.post('/api/summer-planning/verify', (req, res) => {
     if (!planningToken) return res.status(503).json({ error: 'Planning is not configured on this server' });
@@ -878,17 +904,50 @@ server.post('/api/summer-planning/items', requirePlanningAuth, (req, res) => {
 
     let tripDate = null;
     let mealSlot = null;
+    let ingredients = [];
     if (category === 'meal') {
         if (!TRIP_DATES.includes(body.tripDate)) return res.status(400).json({ error: 'Meal date must be a trip date (Jul 2-6, 2026)' });
         if (!MEAL_SLOTS.includes(body.mealSlot)) return res.status(400).json({ error: 'Meal slot must be breakfast, lunch, or dinner' });
         tripDate = body.tripDate;
         mealSlot = body.mealSlot;
+        ingredients = cleanIngredients(body.ingredients);
+        if (ingredients === null) return res.status(400).json({ error: `Ingredients must each be ≤100 chars (max ${MAX_INGREDIENTS})` });
     }
 
-    const info = db.prepare(`INSERT INTO trip_items (category, trip_date, meal_slot, item_name, notes, created_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(category, tripDate, mealSlot, itemName, notes || null, createdBy, Date.now());
+    const createdAt = Date.now();
+    // Insert the item and any meal ingredients (as linked grocery rows) atomically.
+    const create = db.transaction(() => {
+        const info = insertTripItem.run({ category, tripDate, mealSlot, itemName, notes: notes || null, createdBy, createdAt, sourceItemId: null });
+        const mealId = info.lastInsertRowid;
+        for (const ing of ingredients) {
+            insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ing, notes: null, createdBy, createdAt, sourceItemId: mealId });
+        }
+        return mealId;
+    });
+    const newId = create();
+    const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(newId);
+    logger.info(`[Planning] ${createdBy} added ${category}: ${itemName}${ingredients.length ? ` (+${ingredients.length} ingredients)` : ''}`);
+    return res.status(201).json({ item });
+});
+
+// Add one ingredient to an existing meal (creates a linked grocery row). Only the
+// meal's owner or the admin may add ingredients; the grocery is attributed to the
+// meal's owner so it lands on their grocery commitment.
+server.post('/api/summer-planning/items/:id/ingredients', requirePlanningAuth, (req, res) => {
+    const mealId = Number(req.params.id);
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const ingredientName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim() : '';
+    if (!Number.isInteger(mealId)) return res.status(400).json({ error: 'Invalid meal id' });
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (!ingredientName || ingredientName.length > 100) return res.status(400).json({ error: 'Ingredient is required (max 100 chars)' });
+
+    const meal = db.prepare('SELECT created_by, category FROM trip_items WHERE id = ?').get(mealId);
+    if (!meal || meal.category !== 'meal') return res.status(404).json({ error: 'Meal not found' });
+    const isOwner = meal.created_by.trim().toLowerCase() === name.toLowerCase();
+    if (!isOwner && !isPlanningAdmin(name)) return res.status(403).json({ error: 'You can only edit your own meals' });
+
+    const info = insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ingredientName, notes: null, createdBy: meal.created_by, createdAt: Date.now(), sourceItemId: mealId });
     const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(info.lastInsertRowid);
-    logger.info(`[Planning] ${createdBy} added ${category}: ${itemName}`);
     return res.status(201).json({ item });
 });
 
@@ -904,7 +963,8 @@ server.delete('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) 
     if (!isOwner && !isPlanningAdmin(name)) {
         return res.status(403).json({ error: 'You can only remove your own items' });
     }
-    db.prepare('DELETE FROM trip_items WHERE id = ?').run(id);
+    // Deleting a meal also removes the ingredient groceries linked to it.
+    db.prepare('DELETE FROM trip_items WHERE id = ? OR source_item_id = ?').run(id, id);
     logger.info(`[Planning] ${name} removed item ${id}${isOwner ? '' : ' (admin)'}`);
     return res.json({ ok: true });
 });
