@@ -785,7 +785,7 @@ server.use('/node_modules', express.static('node_modules'));
 // Optional: Add CORS if needed for browsers
 server.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');  // Allow all for testing
-    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, PATCH, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
@@ -967,6 +967,31 @@ server.delete('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) 
     db.prepare('DELETE FROM trip_items WHERE id = ? OR source_item_id = ?').run(id, id);
     logger.info(`[Planning] ${name} removed item ${id}${isOwner ? '' : ' (admin)'}`);
     return res.json({ ok: true });
+});
+
+// Edit an item's name/notes (snacks, drinks, groceries, and meal ingredients).
+// An ingredient is a single grocery row shown both on its meal and in the grocery
+// list, so editing it here updates both places. Owner or admin only.
+server.patch('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) => {
+    const id = Number(req.params.id);
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim() : '';
+    const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim() : '';
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid item id' });
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (!itemName || itemName.length > 100) return res.status(400).json({ error: 'Item name is required (max 100 chars)' });
+    if (notes.length > 300) return res.status(400).json({ error: 'Notes too long (max 300 chars)' });
+
+    const row = db.prepare('SELECT created_by, category FROM trip_items WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ error: 'Item not found' });
+    if (row.category === 'meal') return res.status(400).json({ error: 'Meals are not editable here' });
+    const isOwner = row.created_by.trim().toLowerCase() === name.toLowerCase();
+    if (!isOwner && !isPlanningAdmin(name)) return res.status(403).json({ error: 'You can only edit your own items' });
+
+    db.prepare('UPDATE trip_items SET item_name = ?, notes = ? WHERE id = ?').run(itemName, notes || null, id);
+    const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(id);
+    logger.info(`[Planning] ${name} edited item ${id}${isOwner ? '' : ' (admin)'}`);
+    return res.json({ item });
 });
 
 server.put('/api/summer-planning/allergies', requirePlanningAuth, (req, res) => {

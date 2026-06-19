@@ -610,6 +610,79 @@
       white-space: nowrap;
     }
 
+    /* ── Inline editing ────────────────────────────────────── */
+    .edit-btn {
+      background: none;
+      border: none;
+      color: #4e9fd1;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .edit-btn:hover {
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    .item-list li.edit-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      background: rgba(78, 159, 209, 0.07) !important;
+    }
+
+    .edit-row .edit-field {
+      flex: 1;
+      min-width: 120px;
+      padding: 7px 11px;
+      border: 1px solid #4e9fd1;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 0.85rem;
+    }
+
+    .edit-row .edit-field:focus {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(78, 159, 209, 0.15);
+    }
+
+    .ing-edit {
+      border: none;
+      background: none;
+      color: inherit;
+      cursor: pointer;
+      font-size: 0.75rem;
+      line-height: 1;
+      padding: 0 2px;
+      opacity: 0.65;
+    }
+
+    .ing-edit:hover {
+      opacity: 1;
+    }
+
+    .ing-chip.editing {
+      padding: 2px 4px;
+      gap: 3px;
+    }
+
+    .ing-edit-input {
+      border: 1px solid #4e9fd1;
+      border-radius: 999px;
+      padding: 2px 10px;
+      font: inherit;
+      font-size: 0.8rem;
+      width: 120px;
+    }
+
+    .ing-edit-input:focus {
+      outline: none;
+    }
+
     /* ── Allergies sidebar ─────────────────────────────────── */
     .sidebar {
       position: sticky;
@@ -821,6 +894,8 @@
     let expandedDate = null;
     // Ingredients staged client-side while composing a new meal, keyed by `${date}|${slot}`.
     const pendingI = {};
+    // Id of the item currently being edited inline (snack/drink/grocery/ingredient).
+    let editingId = null;
 
     const $ = id => document.getElementById(id);
     const norm = s => String(s || '').trim().toLowerCase();
@@ -965,19 +1040,36 @@
       renderAllergies();
     }
 
+    const canModify = it => isMine(it.created_by) || isAdmin;
+
     function removeBtnHtml(it) {
       // Admins may remove anyone's item; everyone else only their own.
-      if (!(isMine(it.created_by) || isAdmin)) return '';
+      if (!canModify(it)) return '';
       const title = isMine(it.created_by) ? 'remove' : 'remove (admin)';
       return `<button class="remove-btn" data-remove="${it.id}">${title}</button>`;
     }
 
+    function editBtnHtml(it) {
+      return canModify(it) ? `<button class="edit-btn" data-edit="${it.id}">edit</button>` : '';
+    }
+
+    // Inline edit form for a list item (snack/drink/grocery). One row at a time.
+    function editRow(it) {
+      return `<li class="edit-row" data-edit-container>
+        <input class="edit-field" data-edit-field="name" value="${escapeHtml(it.item_name)}" maxlength="100" placeholder="Name" aria-label="Item name">
+        <input class="edit-field" data-edit-field="notes" value="${escapeHtml(it.notes || '')}" maxlength="300" placeholder="Notes (optional)" aria-label="Notes">
+        <button class="btn btn-sm" data-edit-save="${it.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-edit-cancel>Cancel</button>
+      </li>`;
+    }
+
     function itemRow(it) {
+      if (editingId === it.id) return editRow(it);
       return `<li>
         <span class="item-name">${escapeHtml(it.item_name)}</span>
         ${it.notes ? `<span class="item-notes">${escapeHtml(it.notes)}</span>` : '<span class="item-notes"></span>'}
         <span class="item-by">— ${escapeHtml(it.created_by)}</span>
-        ${removeBtnHtml(it)}
+        ${editBtnHtml(it)}${removeBtnHtml(it)}
       </li>`;
     }
 
@@ -986,10 +1078,17 @@
     function mealRow(meal) {
       const canEdit = isMine(meal.created_by) || isAdmin;
       const ings = data.items.filter(g => g.source_item_id === meal.id);
-      const chips = ings.map(g =>
-        `<span class="ing-chip saved">${escapeHtml(g.item_name)}${canEdit
-          ? `<button class="ing-x" data-remove="${g.id}" aria-label="remove ${escapeHtml(g.item_name)}">×</button>` : ''}</span>`
-      ).join('');
+      const chips = ings.map(g => {
+        if (editingId === g.id) {
+          return `<span class="ing-chip editing" data-edit-container>
+            <input class="ing-edit-input" data-edit-field="name" value="${escapeHtml(g.item_name)}" maxlength="100" aria-label="Edit ingredient">
+            <button class="ing-x" data-edit-save="${g.id}" aria-label="save">✓</button>
+            <button type="button" class="ing-x" data-edit-cancel aria-label="cancel">✕</button>
+          </span>`;
+        }
+        return `<span class="ing-chip saved">${escapeHtml(g.item_name)}${canEdit
+          ? `<button class="ing-edit" data-edit="${g.id}" aria-label="edit ${escapeHtml(g.item_name)}">✎</button><button class="ing-x" data-remove="${g.id}" aria-label="remove ${escapeHtml(g.item_name)}">×</button>` : ''}</span>`;
+      }).join('');
       const adder = canEdit
         ? `<span class="ing-add-inline">
              <input type="text" class="ing-input-sm" data-meal-ing-input="${meal.id}" placeholder="+ ingredient" maxlength="100">
@@ -1010,6 +1109,7 @@
 
     // Grocery row, annotating ingredients with the meal they came from.
     function groceryRow(it) {
+      if (editingId === it.id) return editRow(it);
       let source = '';
       if (it.source_item_id) {
         const meal = data.items.find(m => m.id === it.source_item_id);
@@ -1026,7 +1126,7 @@
         ${source}
         ${it.notes ? `<span class="item-notes">${escapeHtml(it.notes)}</span>` : '<span class="item-notes"></span>'}
         <span class="item-by">— ${escapeHtml(it.created_by)}</span>
-        ${removeBtnHtml(it)}
+        ${editBtnHtml(it)}${removeBtnHtml(it)}
       </li>`;
     }
 
@@ -1156,6 +1256,34 @@
       }));
     }
 
+    function startEdit(id) {
+      editingId = id;
+      renderAll();
+      const f = document.querySelector('[data-edit-field="name"]');
+      if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+    }
+
+    function cancelEdit() {
+      editingId = null;
+      renderAll();
+    }
+
+    // Persist an inline edit. An ingredient is one grocery row, so this updates it
+    // on the meal and in the grocery list at once.
+    function saveEdit(id, container) {
+      if (!container) return;
+      const itemName = (container.querySelector('[data-edit-field="name"]')?.value || '').trim();
+      const notesEl = container.querySelector('[data-edit-field="notes"]');
+      if (!itemName) return showToast('Name cannot be empty', true);
+      mutate(container.querySelector('[data-edit-save]'), async () => {
+        await api('/items/' + id, {
+          method: 'PATCH',
+          body: JSON.stringify({ name: myName, itemName, notes: notesEl ? notesEl.value : '' }),
+        });
+        editingId = null;
+      });
+    }
+
     $('main').addEventListener('click', e => {
       const dayCard = e.target.closest('[data-day]');
       if (dayCard) {
@@ -1176,6 +1304,13 @@
       const mealIngAdd = e.target.closest('[data-meal-ing-add]');
       if (mealIngAdd) { addSavedIngredient(mealIngAdd.dataset.mealIngAdd); return; }
 
+      const editStart = e.target.closest('[data-edit]');
+      if (editStart) { startEdit(Number(editStart.dataset.edit)); return; }
+      const editCancel = e.target.closest('[data-edit-cancel]');
+      if (editCancel) { cancelEdit(); return; }
+      const editSave = e.target.closest('[data-edit-save]');
+      if (editSave) { saveEdit(Number(editSave.dataset.editSave), editSave.closest('[data-edit-container]')); return; }
+
       const removeBtn = e.target.closest('[data-remove]');
       if (removeBtn) {
         mutate(removeBtn, () =>
@@ -1189,8 +1324,21 @@
       }
     });
 
-    // Enter inside an ingredient input adds the ingredient instead of submitting the meal.
+    // Keyboard shortcuts inside the various inline inputs.
     $('main').addEventListener('keydown', e => {
+      // Edit fields: Enter saves, Escape cancels.
+      const editField = e.target.closest('[data-edit-field]');
+      if (editField) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const c = editField.closest('[data-edit-container]');
+          saveEdit(Number(c.querySelector('[data-edit-save]').dataset.editSave), c);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelEdit();
+        }
+        return;
+      }
       if (e.key !== 'Enter') return;
       const pend = e.target.closest('[data-ing-input]');
       if (pend) { e.preventDefault(); addPendingIngredient(pend.dataset.ingInput); return; }
