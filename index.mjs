@@ -704,7 +704,10 @@ if (dbStats.players.length > 0) {
     playerStatsCache = {
         data: dbStats.players,
         lastFetched: dbStats.lastFetched,
-        matchesAnalyzed: dbStats.players.length > 0 ? dbStats.players[0].matches : 0,
+        // Total season games ≈ the most games any single player has played, NOT the
+        // first player's count (rows have no ORDER BY, so players[0] was arbitrary —
+        // that bug let the qualification bar collapse to 1 game after a restart).
+        matchesAnalyzed: dbStats.players.reduce((max, p) => Math.max(max, p.matches), 0),
     };
     logger.info(`Loaded ${dbStats.players.length} Season 2 player stats from database, last updated ${new Date(dbStats.lastFetched).toISOString()}`);
 }
@@ -1249,8 +1252,15 @@ server.get('/api/top-rankings', async (req, res) => {
 
     const players = playerStatsCache.data || [];
 
-    const totalSeasonMatches = playerStatsCache.matchesAnalyzed || 0;
-    const minMatches = Math.max(1, Math.ceil(Math.sqrt(totalSeasonMatches)));
+    // Rolling qualification bar: scales with the length of the season so a player
+    // with only a handful of games can't top the board on a tiny sample.
+    // "Season games" = the most games any single player has played. This equals the
+    // distinct Season 2 match count when the most-active player attends every game,
+    // and is a safe lower bound otherwise. Taking the max with the cached
+    // matchesAnalyzed keeps the bar from collapsing if that value is ever stale/empty.
+    const mostGamesPlayed = players.reduce((max, p) => Math.max(max, p.matches), 0);
+    const totalSeasonMatches = Math.max(playerStatsCache.matchesAnalyzed || 0, mostGamesPlayed);
+    const minMatches = Math.max(2, Math.ceil(Math.sqrt(totalSeasonMatches)));
     const qualified = players.filter(p => p.matches >= minMatches);
 
     // Top 10 by win rate
@@ -1306,7 +1316,7 @@ server.get('/api/top-rankings', async (req, res) => {
         playerOfTheMonth,
         minMatchesRequired: minMatches,
         lastUpdated: playerStatsCache.lastFetched,
-        matchesAnalyzed: playerStatsCache.matchesAnalyzed || 0,
+        matchesAnalyzed: totalSeasonMatches,
         cacheMaxAge: PLAYER_STATS_TTL_MS,
     });
 });
