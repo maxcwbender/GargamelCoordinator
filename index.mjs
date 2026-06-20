@@ -527,21 +527,22 @@ async function refreshPlayerStats() {
                     }
                 }
 
-                // Determine match MVP (winning team) and SVP (losing team)
+                // Determine match MVP (winning team) and SVP (losing team).
+                // NOTE: OpenDota does not score fantasy points for our inhouse lobby
+                // matches — the `fantasy_points` field is absent from every player even
+                // on fully parsed matches, so there's no API score to fall back on or
+                // cross-check against. MVP/SVP are decided solely by our manual
+                // DPC-style fantasy formula below.
                 const winningRadiant = detail.radiant_win;
                 let mvpId = null, mvpBest = -Infinity;
                 let svpId = null, svpBest = -Infinity;
-
-                // Track API fantasy points for comparison
-                let mvpIdAPI = null, mvpBestAPI = -Infinity;
-                let svpIdAPI = null, svpBestAPI = -Infinity;
                 const debugPlayers = [];
 
                 for (const p of detail.players || []) {
                     if (!p.account_id) continue;
                     const pRadiant = p.player_slot < 128;
 
-                    // Our manual calculation
+                    // DPC-style fantasy score (our manual calculation)
                     const score =
                         (p.kills || 0) * 0.5 +
                         (3 - (p.deaths || 0) * 0.3) +
@@ -554,55 +555,30 @@ async function refreshPlayerStats() {
                         (p.obs_placed || 0) * 0.5 +
                         (p.observer_kills || 0) * 0.5;
 
-                    // Check if API provides fantasy_points
-                    const apiScore = p.fantasy_points || null;
-
                     debugPlayers.push({
                         name: p.personaname || 'Anonymous',
                         isRadiant: pRadiant,
                         manualScore: score.toFixed(2),
-                        apiScore: apiScore != null ? apiScore.toFixed(2) : 'N/A',
                     });
 
-                    // Manual MVP/SVP selection
                     if (pRadiant === winningRadiant) {
                         if (score > mvpBest) { mvpBest = score; mvpId = p.account_id; }
                     } else {
                         if (score > svpBest) { svpBest = score; svpId = p.account_id; }
                     }
-
-                    // API-based MVP/SVP selection (if available)
-                    if (apiScore != null) {
-                        if (pRadiant === winningRadiant) {
-                            if (apiScore > mvpBestAPI) { mvpBestAPI = apiScore; mvpIdAPI = p.account_id; }
-                        } else {
-                            if (apiScore > svpBestAPI) { svpBestAPI = apiScore; svpIdAPI = p.account_id; }
-                        }
-                    }
                 }
 
                 // Debug logging for first match only to avoid spam
                 if (i === 0) {
-                    logger.info(`=== MVP/SVP Comparison for Match ${matchId} ===`);
-                    logger.info(`Player Scores:`);
+                    logger.info(`=== MVP/SVP Scores for Match ${matchId} ===`);
                     debugPlayers.forEach(p => {
-                        logger.info(`  ${p.name} (${p.isRadiant ? 'Radiant' : 'Dire'}): Manual=${p.manualScore}, API=${p.apiScore}`);
+                        logger.info(`  ${p.name} (${p.isRadiant ? 'Radiant' : 'Dire'}): ${p.manualScore}`);
                     });
                     const mvpPlayer = detail.players.find(p => p.account_id === mvpId);
                     const svpPlayer = detail.players.find(p => p.account_id === svpId);
-                    logger.info(`Manual MVP: ${mvpPlayer?.personaname || 'Unknown'} (${mvpBest.toFixed(2)})`);
-                    logger.info(`Manual SVP: ${svpPlayer?.personaname || 'Unknown'} (${svpBest.toFixed(2)})`);
-                    if (mvpIdAPI) {
-                        const mvpPlayerAPI = detail.players.find(p => p.account_id === mvpIdAPI);
-                        const svpPlayerAPI = detail.players.find(p => p.account_id === svpIdAPI);
-                        logger.info(`API MVP: ${mvpPlayerAPI?.personaname || 'Unknown'} (${mvpBestAPI.toFixed(2)})`);
-                        logger.info(`API SVP: ${svpPlayerAPI?.personaname || 'Unknown'} (${svpBestAPI.toFixed(2)})`);
-                        logger.info(`MVP Match: ${mvpId === mvpIdAPI ? 'YES' : 'NO'}`);
-                        logger.info(`SVP Match: ${svpId === svpIdAPI ? 'YES' : 'NO'}`);
-                    } else {
-                        logger.info(`API fantasy_points not available in match data`);
-                    }
-                    logger.info(`=== End Comparison ===`);
+                    logger.info(`MVP: ${mvpPlayer?.personaname || 'Unknown'} (${mvpBest.toFixed(2)})`);
+                    logger.info(`SVP: ${svpPlayer?.personaname || 'Unknown'} (${svpBest.toFixed(2)})`);
+                    logger.info(`=== End Scores ===`);
                 }
                 const insertAward = db.prepare(
                     'INSERT OR IGNORE INTO match_mvps (match_id, account_id, award_type, mvp_score, created_at) VALUES (?, ?, ?, ?, ?)'
