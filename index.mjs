@@ -131,6 +131,8 @@ for (const sql of columnMigrations) {
 // Summer trip planning (/summer-planning): shared items + per-person allergies
 // source_item_id: when a grocery row is a meal's ingredient, points at the meal's
 // id (NULL for standalone groceries). Deleting the meal cascades its ingredients.
+// quantity: number of items for the shopping list (groceries). purchased_by: who
+// marked it bought (shared flag, NULL = not purchased).
 db.exec(`CREATE TABLE IF NOT EXISTS trip_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     category TEXT NOT NULL CHECK (category IN ('meal','snack','drink','grocery')),
@@ -140,10 +142,18 @@ db.exec(`CREATE TABLE IF NOT EXISTS trip_items (
     notes TEXT,
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    source_item_id INTEGER
+    source_item_id INTEGER,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    purchased_by TEXT
 )`);
-// Existing installs: add the column if the table predates it.
-try { db.exec('ALTER TABLE trip_items ADD COLUMN source_item_id INTEGER'); } catch (_) { /* already exists */ }
+// Existing installs: add columns if the table predates them (idempotent).
+for (const sql of [
+    'ALTER TABLE trip_items ADD COLUMN source_item_id INTEGER',
+    'ALTER TABLE trip_items ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1',
+    'ALTER TABLE trip_items ADD COLUMN purchased_by TEXT',
+]) {
+    try { db.exec(sql); } catch (_) { /* already exists */ }
+}
 db.exec(`CREATE TABLE IF NOT EXISTS trip_allergies (
     name_key TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
@@ -854,20 +864,32 @@ const MAX_INGREDIENTS = 40;
 
 // Insert a single trip item. source is the parent meal id for ingredients, else null.
 const insertTripItem = db.prepare(`INSERT INTO trip_items
-    (category, trip_date, meal_slot, item_name, notes, created_by, created_at, source_item_id)
-    VALUES (@category, @tripDate, @mealSlot, @itemName, @notes, @createdBy, @createdAt, @sourceItemId)`);
+    (category, trip_date, meal_slot, item_name, notes, created_by, created_at, source_item_id, quantity)
+    VALUES (@category, @tripDate, @mealSlot, @itemName, @notes, @createdBy, @createdAt, @sourceItemId, @quantity)`);
 
-// Normalize an ingredients payload to a clean string[] (drops blanks). Returns
-// null if the shape is invalid (too many, or an entry too long).
+// Clamp a quantity to a positive integer 1..9999, or return fallback if unusable.
+function parseQuantity(raw, fallback = 1) {
+    const n = Math.floor(Number(raw));
+    if (!Number.isFinite(n) || n < 1) return fallback;
+    return Math.min(n, 9999);
+}
+
+// Normalize an ingredients payload to a clean [{name, quantity}] (drops blanks).
+// Accepts strings (qty 1) or {name, quantity}. Returns null if the shape is invalid.
 function cleanIngredients(raw) {
     if (raw == null) return [];
     if (!Array.isArray(raw)) return null;
     const out = [];
     for (const entry of raw) {
-        const name = typeof entry === 'string' ? entry.trim() : '';
+        let name, quantity;
+        if (typeof entry === 'string') { name = entry.trim(); quantity = 1; }
+        else if (entry && typeof entry === 'object') {
+            name = typeof entry.name === 'string' ? entry.name.trim() : '';
+            quantity = parseQuantity(entry.quantity, 1);
+        } else continue;
         if (!name) continue;
         if (name.length > 100) return null;
-        out.push(name);
+        out.push({ name, quantity });
     }
     return out.length > MAX_INGREDIENTS ? null : out;
 }
@@ -915,12 +937,13 @@ server.post('/api/summer-planning/items', requirePlanningAuth, (req, res) => {
     }
 
     const createdAt = Date.now();
+    const quantity = category === 'grocery' ? parseQuantity(body.quantity, 1) : 1;
     // Insert the item and any meal ingredients (as linked grocery rows) atomically.
     const create = db.transaction(() => {
-        const info = insertTripItem.run({ category, tripDate, mealSlot, itemName, notes: notes || null, createdBy, createdAt, sourceItemId: null });
+        const info = insertTripItem.run({ category, tripDate, mealSlot, itemName, notes: notes || null, createdBy, createdAt, sourceItemId: null, quantity });
         const mealId = info.lastInsertRowid;
         for (const ing of ingredients) {
-            insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ing, notes: null, createdBy, createdAt, sourceItemId: mealId });
+            insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ing.name, notes: null, createdBy, createdAt, sourceItemId: mealId, quantity: ing.quantity });
         }
         return mealId;
     });
@@ -946,7 +969,8 @@ server.post('/api/summer-planning/items/:id/ingredients', requirePlanningAuth, (
     const isOwner = meal.created_by.trim().toLowerCase() === name.toLowerCase();
     if (!isOwner && !isPlanningAdmin(name)) return res.status(403).json({ error: 'You can only edit your own meals' });
 
-    const info = insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ingredientName, notes: null, createdBy: meal.created_by, createdAt: Date.now(), sourceItemId: mealId });
+    const quantity = parseQuantity(req.body?.quantity, 1);
+    const info = insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ingredientName, notes: null, createdBy: meal.created_by, createdAt: Date.now(), sourceItemId: mealId, quantity });
     const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(info.lastInsertRowid);
     return res.status(201).json({ item });
 });
@@ -982,16 +1006,35 @@ server.patch('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) =
     if (!itemName || itemName.length > 100) return res.status(400).json({ error: 'Item name is required (max 100 chars)' });
     if (notes.length > 300) return res.status(400).json({ error: 'Notes too long (max 300 chars)' });
 
-    const row = db.prepare('SELECT created_by, category FROM trip_items WHERE id = ?').get(id);
+    const row = db.prepare('SELECT created_by, category, quantity FROM trip_items WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: 'Item not found' });
     if (row.category === 'meal') return res.status(400).json({ error: 'Meals are not editable here' });
     const isOwner = row.created_by.trim().toLowerCase() === name.toLowerCase();
     if (!isOwner && !isPlanningAdmin(name)) return res.status(403).json({ error: 'You can only edit your own items' });
 
-    db.prepare('UPDATE trip_items SET item_name = ?, notes = ? WHERE id = ?').run(itemName, notes || null, id);
+    // Quantity only applies to groceries; keep the existing value if none was sent.
+    const quantity = row.category === 'grocery' ? parseQuantity(req.body?.quantity, row.quantity || 1) : (row.quantity || 1);
+    db.prepare('UPDATE trip_items SET item_name = ?, notes = ?, quantity = ? WHERE id = ?').run(itemName, notes || null, quantity, id);
     const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(id);
     logger.info(`[Planning] ${name} edited item ${id}${isOwner ? '' : ' (admin)'}`);
     return res.json({ item });
+});
+
+// Toggle the shared "purchased" flag for every grocery row sharing a name (the
+// grocery list groups by name). Anybody can mark a shopping item bought.
+server.put('/api/summer-planning/groceries/purchased', requirePlanningAuth, (req, res) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim() : '';
+    const purchased = req.body?.purchased === true || req.body?.purchased === 'true';
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (!itemName) return res.status(400).json({ error: 'Item name is required' });
+
+    const info = db.prepare(
+        `UPDATE trip_items SET purchased_by = ? WHERE category = 'grocery' AND lower(trim(item_name)) = lower(trim(?))`
+    ).run(purchased ? name : null, itemName);
+    if (info.changes === 0) return res.status(404).json({ error: 'No matching groceries' });
+    logger.info(`[Planning] ${name} marked "${itemName}" ${purchased ? 'purchased' : 'unpurchased'} (${info.changes})`);
+    return res.json({ ok: true, updated: info.changes });
 });
 
 server.put('/api/summer-planning/allergies', requirePlanningAuth, (req, res) => {

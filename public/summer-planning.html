@@ -610,6 +610,114 @@
       white-space: nowrap;
     }
 
+    /* ── Quantity inputs ───────────────────────────────────── */
+    .qty-input {
+      width: 64px;
+      flex: 0 0 auto !important;
+      min-width: 0 !important;
+      text-align: center;
+    }
+
+    .qty-input-sm {
+      width: 52px;
+      padding: 3px 6px;
+      border: 1px solid #d0d7de;
+      border-radius: 999px;
+      font: inherit;
+      font-size: 0.78rem;
+      text-align: center;
+    }
+
+    .qty-input-sm:focus {
+      outline: none;
+      border-color: #4e9fd1;
+    }
+
+    /* ── Grocery shopping list ─────────────────────────────── */
+    .grocery-list {
+      list-style: none;
+      margin-bottom: 12px;
+    }
+
+    .grocery-group {
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .grocery-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 6px;
+      font-size: 0.9rem;
+    }
+
+    .purchase-box {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      cursor: pointer;
+      accent-color: #1f8a52;
+    }
+
+    .grocery-qty {
+      font-weight: 700;
+      color: #4e9fd1;
+      min-width: 28px;
+      flex-shrink: 0;
+    }
+
+    .grocery-group.purchased .grocery-main .item-name {
+      text-decoration: line-through;
+      color: #9aa3ad;
+    }
+
+    .grocery-group.purchased .grocery-qty {
+      color: #9aa3ad;
+    }
+
+    .purchased-tag {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: #1f8a52;
+      background: rgba(46, 160, 102, 0.12);
+      border-radius: 999px;
+      padding: 2px 8px;
+      white-space: nowrap;
+    }
+
+    .manage-btn {
+      margin-left: auto;
+      background: none;
+      border: none;
+      color: #4e9fd1;
+      font: inherit;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+
+    .manage-btn:hover {
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    .grocery-members {
+      list-style: none;
+      margin: 0 0 6px 26px;
+      border-left: 2px solid #eef1f4;
+      padding-left: 10px;
+    }
+
+    .grocery-member {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 5px 6px;
+      font-size: 0.85rem;
+    }
+
     /* ── Inline editing ────────────────────────────────────── */
     .edit-btn {
       background: none;
@@ -896,6 +1004,9 @@
     const pendingI = {};
     // Id of the item currently being edited inline (snack/drink/grocery/ingredient).
     let editingId = null;
+    // Grocery groups (keyed by normalized name) expanded to manage their members.
+    const expandedGroceries = new Set();
+    const clampQty = v => { const n = Math.floor(Number(v)); return Number.isFinite(n) && n >= 1 ? Math.min(n, 9999) : 1; };
 
     const $ = id => document.getElementById(id);
     const norm = s => String(s || '').trim().toLowerCase();
@@ -1054,9 +1165,13 @@
     }
 
     // Inline edit form for a list item (snack/drink/grocery). One row at a time.
+    // Groceries also get a quantity field.
     function editRow(it) {
+      const qtyField = it.category === 'grocery'
+        ? `<input class="edit-field qty-input" data-edit-field="quantity" type="number" min="1" max="9999" value="${it.quantity || 1}" aria-label="Quantity" title="Number of items">` : '';
       return `<li class="edit-row" data-edit-container>
         <input class="edit-field" data-edit-field="name" value="${escapeHtml(it.item_name)}" maxlength="100" placeholder="Name" aria-label="Item name">
+        ${qtyField}
         <input class="edit-field" data-edit-field="notes" value="${escapeHtml(it.notes || '')}" maxlength="300" placeholder="Notes (optional)" aria-label="Notes">
         <button class="btn btn-sm" data-edit-save="${it.id}">Save</button>
         <button type="button" class="btn btn-sm btn-ghost" data-edit-cancel>Cancel</button>
@@ -1086,12 +1201,14 @@
             <button type="button" class="ing-x" data-edit-cancel aria-label="cancel">✕</button>
           </span>`;
         }
-        return `<span class="ing-chip saved">${escapeHtml(g.item_name)}${canEdit
+        const qty = (g.quantity || 1) > 1 ? ` ×${g.quantity}` : '';
+        return `<span class="ing-chip saved">${escapeHtml(g.item_name)}${qty}${canEdit
           ? `<button class="ing-edit" data-edit="${g.id}" aria-label="edit ${escapeHtml(g.item_name)}">✎</button><button class="ing-x" data-remove="${g.id}" aria-label="remove ${escapeHtml(g.item_name)}">×</button>` : ''}</span>`;
       }).join('');
       const adder = canEdit
         ? `<span class="ing-add-inline">
              <input type="text" class="ing-input-sm" data-meal-ing-input="${meal.id}" placeholder="+ ingredient" maxlength="100">
+             <input type="number" class="qty-input-sm" data-meal-ing-qty="${meal.id}" min="1" max="9999" value="1" aria-label="Quantity" title="Number of items">
              <button type="button" class="ing-add-btn" data-meal-ing-add="${meal.id}">add</button>
            </span>` : '';
       const ingredientArea = (chips || adder)
@@ -1107,33 +1224,109 @@
       </li>`;
     }
 
-    // Grocery row, annotating ingredients with the meal they came from.
-    function groceryRow(it) {
-      if (editingId === it.id) return editRow(it);
-      let source = '';
-      if (it.source_item_id) {
-        const meal = data.items.find(m => m.id === it.source_item_id);
-        if (meal) {
-          const day = TRIP_DAYS.find(d => d.date === meal.trip_date);
-          const slot = SLOTS.find(s => s.key === meal.meal_slot);
-          const slotName = slot ? slot.label.replace(/^\S+\s/, '') : '';
-          const ctx = day ? ` · ${day.dow} ${slotName}` : '';
-          source = `<span class="grocery-src" title="ingredient for a meal">🍳 ${escapeHtml(meal.item_name)}${ctx}</span>`;
-        }
+    // ── Grocery list (grouped shopping list) ───────────────────
+    // Groceries combine by name: same item from several recipes/people becomes one
+    // line with a summed quantity, every contributing recipe tagged, and a shared
+    // "purchased" checkbox anyone can toggle.
+    const isGroupPurchased = g => g.members.length > 0 && g.members.every(m => m.purchased_by);
+
+    function mealTagHtml(meal) {
+      const day = TRIP_DAYS.find(d => d.date === meal.trip_date);
+      const slot = SLOTS.find(s => s.key === meal.meal_slot);
+      const slotName = slot ? slot.label.replace(/^\S+\s/, '') : '';
+      const ctx = day ? ` · ${day.dow} ${slotName}` : '';
+      return `<span class="grocery-src" title="ingredient for a meal">🍳 ${escapeHtml(meal.item_name)}${ctx}</span>`;
+    }
+
+    function sourceTagHtml(item) {
+      if (!item.source_item_id) return '';
+      const meal = data.items.find(m => m.id === item.source_item_id);
+      return meal ? mealTagHtml(meal) : '';
+    }
+
+    function groupGroceries() {
+      const groups = new Map();
+      for (const g of data.items.filter(it => it.category === 'grocery')) {
+        const k = norm(g.item_name);
+        if (!groups.has(k)) groups.set(k, { key: k, name: g.item_name, members: [] });
+        groups.get(k).members.push(g);
       }
-      return `<li>
-        <span class="item-name">${escapeHtml(it.item_name)}</span>
-        ${source}
-        ${it.notes ? `<span class="item-notes">${escapeHtml(it.notes)}</span>` : '<span class="item-notes"></span>'}
-        <span class="item-by">— ${escapeHtml(it.created_by)}</span>
-        ${editBtnHtml(it)}${removeBtnHtml(it)}
+      return [...groups.values()].sort((a, b) => {
+        const ap = isGroupPurchased(a) ? 1 : 0, bp = isGroupPurchased(b) ? 1 : 0;
+        return ap - bp || a.name.localeCompare(b.name);
+      });
+    }
+
+    // One expanded member line (used when a group has several contributions).
+    function groceryMemberRow(m) {
+      if (editingId === m.id) return editRow(m);
+      return `<li class="grocery-member">
+        <span class="grocery-qty">${m.quantity || 1}×</span>
+        <span class="item-name">${escapeHtml(m.item_name)}</span>
+        ${sourceTagHtml(m)}
+        ${m.notes ? `<span class="item-notes">${escapeHtml(m.notes)}</span>` : ''}
+        <span class="item-by">— ${escapeHtml(m.created_by)}</span>
+        ${editBtnHtml(m)}${removeBtnHtml(m)}
       </li>`;
     }
 
+    function groceryGroupRow(group) {
+      const single = group.members.length === 1;
+      // A single-member group being edited shows the edit form in place.
+      if (single && editingId === group.members[0].id) {
+        return `<li class="grocery-group"><ul class="grocery-members">${editRow(group.members[0])}</ul></li>`;
+      }
+      const anyEditing = group.members.some(m => m.id === editingId);
+      const expanded = expandedGroceries.has(group.key) || anyEditing;
+      const purchased = isGroupPurchased(group);
+      const totalQty = group.members.reduce((s, m) => s + (m.quantity || 1), 0);
+      const mealIds = [...new Set(group.members.filter(m => m.source_item_id).map(m => m.source_item_id))];
+      const tags = mealIds.map(id => { const meal = data.items.find(m => m.id === id); return meal ? mealTagHtml(meal) : ''; }).join('');
+      const contributors = [...new Set(group.members.map(m => m.created_by))];
+      const purchasedBy = purchased ? group.members.find(m => m.purchased_by)?.purchased_by : null;
+
+      let manage = '';
+      if (single && canModify(group.members[0])) {
+        manage = `${editBtnHtml(group.members[0])}${removeBtnHtml(group.members[0])}`;
+      } else if (!single) {
+        manage = `<button class="manage-btn" data-grocery-expand="${escapeHtml(group.key)}">${expanded ? '▴' : '▾'} ${group.members.length} entries</button>`;
+      }
+      const membersHtml = expanded && !single
+        ? `<ul class="grocery-members">${group.members.map(groceryMemberRow).join('')}</ul>` : '';
+
+      return `<li class="grocery-group${purchased ? ' purchased' : ''}">
+        <div class="grocery-main">
+          <input type="checkbox" class="purchase-box" data-purchase="${escapeHtml(group.name)}" ${purchased ? 'checked' : ''} aria-label="Mark ${escapeHtml(group.name)} purchased">
+          <span class="grocery-qty">${totalQty}×</span>
+          <span class="item-name">${escapeHtml(group.name)}</span>
+          ${tags}
+          <span class="item-by">— ${escapeHtml(contributors.join(', '))}</span>
+          ${purchasedBy ? `<span class="purchased-tag">bought · ${escapeHtml(purchasedBy)}</span>` : ''}
+          ${manage}
+        </div>
+        ${membersHtml}
+      </li>`;
+    }
+
+    function renderGroceries(wrap) {
+      const groups = groupGroceries();
+      wrap.innerHTML = `
+        ${groups.length
+          ? `<ul class="grocery-list">${groups.map(groceryGroupRow).join('')}</ul>`
+          : '<div class="empty-note">Nothing here yet.</div>'}
+        <form class="add-form grocery-add" data-item-form data-category="grocery">
+          <input type="text" name="itemName" placeholder="Grocery item (e.g. carton of eggs)" maxlength="100" required>
+          <input type="number" name="quantity" class="qty-input" min="1" max="9999" value="1" aria-label="Quantity" title="Number of items">
+          <input type="text" name="notes" placeholder="Notes (optional)" maxlength="300">
+          <button type="submit" class="btn btn-sm">Add</button>
+        </form>`;
+    }
+
     function pendingChipsHtml(key) {
-      return (pendingI[key] || []).map((ing, i) =>
-        `<span class="ing-chip">${escapeHtml(ing)}<button type="button" class="ing-x" data-ing-remove="${key}" data-ing-idx="${i}" aria-label="remove ${escapeHtml(ing)}">×</button></span>`
-      ).join('');
+      return (pendingI[key] || []).map((ing, i) => {
+        const qty = ing.quantity > 1 ? ` ×${ing.quantity}` : '';
+        return `<span class="ing-chip">${escapeHtml(ing.name)}${qty}<button type="button" class="ing-x" data-ing-remove="${key}" data-ing-idx="${i}" aria-label="remove ${escapeHtml(ing.name)}">×</button></span>`;
+      }).join('');
     }
 
     function renderPendingChips(key) {
@@ -1175,6 +1368,7 @@
               <div class="ing-chip-row" data-ing-chips="${key}">${pendingChipsHtml(key)}</div>
               <div class="ing-add-row">
                 <input type="text" class="ing-input" data-ing-input="${key}" placeholder="Add an ingredient…" maxlength="100">
+                <input type="number" class="qty-input" data-ing-qty="${key}" min="1" max="9999" value="1" aria-label="Quantity" title="Number of items">
                 <button type="button" class="btn btn-sm btn-ghost" data-ing-add="${key}">+ Add</button>
               </div>
             </div>
@@ -1187,11 +1381,11 @@
     function renderLists() {
       for (const list of LISTS) {
         const wrap = document.querySelector(`[data-list="${list.key}"]`);
+        if (list.key === 'grocery') { renderGroceries(wrap); continue; }
         const items = data.items.filter(it => it.category === list.key);
-        const rowFn = list.key === 'grocery' ? groceryRow : itemRow;
         wrap.innerHTML = `
           ${items.length
-            ? `<ul class="item-list">${items.map(rowFn).join('')}</ul>`
+            ? `<ul class="item-list">${items.map(itemRow).join('')}</ul>`
             : '<div class="empty-note">Nothing here yet.</div>'}
           <form class="add-form" data-item-form data-category="${list.key}">
             <input type="text" name="itemName" placeholder="${list.placeholder}" maxlength="100" required>
@@ -1233,26 +1427,29 @@
       }
     }
 
-    // Stage a not-yet-saved ingredient onto a meal being composed.
+    // Stage a not-yet-saved ingredient (with quantity) onto a meal being composed.
     function addPendingIngredient(key) {
       const input = document.querySelector(`[data-ing-input="${key}"]`);
+      const qtyEl = document.querySelector(`[data-ing-qty="${key}"]`);
       const val = (input?.value || '').trim();
       if (!val) return;
       if (val.length > 100) return showToast('Ingredient too long (max 100 chars)', true);
       const list = pendingI[key] || (pendingI[key] = []);
       if (list.length >= 40) return showToast('That’s plenty of ingredients (max 40)', true);
-      list.push(val);
+      list.push({ name: val, quantity: clampQty(qtyEl?.value) });
       if (input) { input.value = ''; input.focus(); }
+      if (qtyEl) qtyEl.value = '1';
       renderPendingChips(key);
     }
 
     // Add an ingredient to an already-saved meal (persists to Groceries).
     function addSavedIngredient(mealId) {
       const input = document.querySelector(`[data-meal-ing-input="${mealId}"]`);
+      const qtyEl = document.querySelector(`[data-meal-ing-qty="${mealId}"]`);
       const val = (input?.value || '').trim();
       if (!val) return;
       mutate(null, () => api('/items/' + mealId + '/ingredients', {
-        method: 'POST', body: JSON.stringify({ name: myName, itemName: val }),
+        method: 'POST', body: JSON.stringify({ name: myName, itemName: val, quantity: clampQty(qtyEl?.value) }),
       }));
     }
 
@@ -1274,12 +1471,12 @@
       if (!container) return;
       const itemName = (container.querySelector('[data-edit-field="name"]')?.value || '').trim();
       const notesEl = container.querySelector('[data-edit-field="notes"]');
+      const qtyEl = container.querySelector('[data-edit-field="quantity"]');
       if (!itemName) return showToast('Name cannot be empty', true);
+      const payload = { name: myName, itemName, notes: notesEl ? notesEl.value : '' };
+      if (qtyEl) payload.quantity = clampQty(qtyEl.value);
       mutate(container.querySelector('[data-edit-save]'), async () => {
-        await api('/items/' + id, {
-          method: 'PATCH',
-          body: JSON.stringify({ name: myName, itemName, notes: notesEl ? notesEl.value : '' }),
-        });
+        await api('/items/' + id, { method: 'PATCH', body: JSON.stringify(payload) });
         editingId = null;
       });
     }
@@ -1303,6 +1500,23 @@
       }
       const mealIngAdd = e.target.closest('[data-meal-ing-add]');
       if (mealIngAdd) { addSavedIngredient(mealIngAdd.dataset.mealIngAdd); return; }
+
+      const purchaseBox = e.target.closest('[data-purchase]');
+      if (purchaseBox) {
+        const itemName = purchaseBox.dataset.purchase;
+        const purchased = purchaseBox.checked;
+        mutate(null, () => api('/groceries/purchased', {
+          method: 'PUT', body: JSON.stringify({ name: myName, itemName, purchased }),
+        }));
+        return;
+      }
+      const expandBtn = e.target.closest('[data-grocery-expand]');
+      if (expandBtn) {
+        const k = expandBtn.dataset.groceryExpand;
+        if (expandedGroceries.has(k)) expandedGroceries.delete(k); else expandedGroceries.add(k);
+        renderLists();
+        return;
+      }
 
       const editStart = e.target.closest('[data-edit]');
       if (editStart) { startEdit(Number(editStart.dataset.edit)); return; }
@@ -1340,10 +1554,12 @@
         return;
       }
       if (e.key !== 'Enter') return;
-      const pend = e.target.closest('[data-ing-input]');
-      if (pend) { e.preventDefault(); addPendingIngredient(pend.dataset.ingInput); return; }
-      const saved = e.target.closest('[data-meal-ing-input]');
-      if (saved) { e.preventDefault(); addSavedIngredient(saved.dataset.mealIngInput); }
+      // Enter in either the ingredient name or its quantity adds the ingredient
+      // (and crucially prevents the surrounding meal form from submitting).
+      const pend = e.target.closest('[data-ing-input], [data-ing-qty]');
+      if (pend) { e.preventDefault(); addPendingIngredient(pend.dataset.ingInput || pend.dataset.ingQty); return; }
+      const saved = e.target.closest('[data-meal-ing-input], [data-meal-ing-qty]');
+      if (saved) { e.preventDefault(); addSavedIngredient(saved.dataset.mealIngInput || saved.dataset.mealIngQty); }
     });
 
     $('main').addEventListener('submit', e => {
@@ -1360,6 +1576,7 @@
         notes: form.elements.notes.value,
         createdBy: myName,
       };
+      if (form.elements.quantity) payload.quantity = clampQty(form.elements.quantity.value);
       if (isMeal) payload.ingredients = pendingI[key] || [];
       mutate(form.querySelector('button[type=submit]'), async () => {
         await api('/items', { method: 'POST', body: JSON.stringify(payload) });
