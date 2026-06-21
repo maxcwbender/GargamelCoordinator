@@ -1,0 +1,1599 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Summer Planning - Gargamel League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f9f9f9;
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .navbar-brand img {
+      height: 36px;
+      width: auto;
+    }
+
+    /* ── Gate / name overlays ──────────────────────────────── */
+    .overlay {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .overlay-card {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+
+    .overlay-card h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 4px;
+    }
+
+    .overlay-card .sub {
+      color: #4e9fd1;
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 24px;
+    }
+
+    .overlay-card input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      font: inherit;
+      font-size: 0.95rem;
+      margin-bottom: 12px;
+    }
+
+    .overlay-card input:focus {
+      outline: none;
+      border-color: #4e9fd1;
+      box-shadow: 0 0 0 3px rgba(78, 159, 209, 0.15);
+    }
+
+    .name-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+
+    .name-chip {
+      background: rgba(78, 159, 209, 0.1);
+      color: #2c7cb0;
+      border: 1px solid rgba(78, 159, 209, 0.4);
+      border-radius: 999px;
+      padding: 6px 16px;
+      font: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .name-chip:hover {
+      background: rgba(78, 159, 209, 0.25);
+    }
+
+    .chips-label {
+      font-size: 0.8rem;
+      color: #888;
+      margin-bottom: 10px;
+    }
+
+    .error-msg {
+      color: #c0392b;
+      font-size: 0.85rem;
+      margin-top: 10px;
+      min-height: 1.2em;
+    }
+
+    /* ── Buttons ───────────────────────────────────────────── */
+    .btn {
+      background: #4e9fd1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .btn:hover {
+      background: #3d8ec0;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .btn-block {
+      width: 100%;
+    }
+
+    .btn-sm {
+      padding: 7px 14px;
+      font-size: 0.8rem;
+      border-radius: 6px;
+    }
+
+    .remove-btn {
+      background: none;
+      border: none;
+      color: #c0392b;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .remove-btn:hover {
+      background: rgba(192, 57, 43, 0.08);
+    }
+
+    .link-btn {
+      background: none;
+      border: none;
+      color: #4e9fd1;
+      font: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+    }
+
+    /* ── Main layout ───────────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      width: 100%;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .page-header h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #2c3e50;
+    }
+
+    .page-header .trip-sub {
+      color: #4e9fd1;
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-top: 2px;
+    }
+
+    .user-chip {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-size: 0.85rem;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+    }
+
+    .user-chip strong {
+      color: #2c3e50;
+    }
+
+    .admin-badge {
+      display: inline-block;
+      margin-left: 6px;
+      background: #4e9fd1;
+      color: #fff;
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      vertical-align: middle;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 24px;
+      align-items: start;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .card h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 16px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #4e9fd1;
+      display: inline-block;
+    }
+
+    /* ── Calendar ──────────────────────────────────────────── */
+    .day-strip {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+    }
+
+    .day-card {
+      border: 1px solid #e0e0e0;
+      border-radius: 10px;
+      padding: 14px 8px;
+      text-align: center;
+      cursor: pointer;
+      background: #fbfcfd;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .day-card:hover {
+      border-color: #4e9fd1;
+    }
+
+    .day-card.selected {
+      background: #4e9fd1;
+      border-color: #4e9fd1;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(78, 159, 209, 0.4);
+    }
+
+    .day-card .dow {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+    }
+
+    .day-card.selected .dow {
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .day-card .dom {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin: 2px 0;
+    }
+
+    .day-card .meal-count {
+      font-size: 0.7rem;
+      color: #4e9fd1;
+      font-weight: 600;
+    }
+
+    .day-card.selected .meal-count {
+      color: #fff;
+    }
+
+    .day-detail {
+      margin-top: 18px;
+      border-top: 1px solid #eee;
+      padding-top: 18px;
+    }
+
+    .day-detail-title {
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 14px;
+    }
+
+    .slot {
+      margin-bottom: 20px;
+    }
+
+    .slot:last-child {
+      margin-bottom: 0;
+    }
+
+    .slot-header {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #4e9fd1;
+      margin-bottom: 8px;
+    }
+
+    /* ── Item lists ────────────────────────────────────────── */
+    .item-list {
+      list-style: none;
+      margin-bottom: 10px;
+    }
+
+    .item-list li {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+
+    .item-list li:nth-child(odd) {
+      background: #f5f8fa;
+    }
+
+    .item-list .item-name {
+      font-weight: 600;
+      color: #2c3e50;
+    }
+
+    .item-list .item-notes {
+      color: #777;
+      font-size: 0.8rem;
+      flex: 1;
+    }
+
+    .item-list .item-by {
+      color: #4e9fd1;
+      font-size: 0.78rem;
+      font-weight: 600;
+      white-space: nowrap;
+      margin-left: auto;
+    }
+
+    .empty-note {
+      color: #999;
+      font-size: 0.85rem;
+      font-style: italic;
+      padding: 4px 0 10px;
+    }
+
+    .add-form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .add-form input {
+      flex: 1;
+      min-width: 120px;
+      padding: 8px 12px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 0.85rem;
+    }
+
+    .add-form input:focus {
+      outline: none;
+      border-color: #4e9fd1;
+    }
+
+    /* ── Meal entry + ingredients ──────────────────────────── */
+    .meal-form {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      background: #fbfcfd;
+      border: 1px solid #eef1f4;
+      border-radius: 10px;
+      padding: 12px;
+    }
+
+    .meal-form-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .meal-form .meal-submit {
+      align-self: flex-start;
+    }
+
+    .ingredient-builder {
+      border-top: 1px dashed #e2e8ee;
+      padding-top: 10px;
+    }
+
+    .ing-builder-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #8a93a0;
+      margin-bottom: 8px;
+    }
+
+    .ing-add-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .ing-add-row input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ing-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .ing-chip-row:empty {
+      display: none;
+    }
+
+    .ing-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(78, 159, 209, 0.12);
+      color: #2c7cb0;
+      border: 1px solid rgba(78, 159, 209, 0.35);
+      border-radius: 999px;
+      padding: 3px 6px 3px 12px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      animation: chipIn 0.15s ease;
+    }
+
+    .ing-chip.saved {
+      background: rgba(46, 160, 102, 0.1);
+      color: #1f8a52;
+      border-color: rgba(46, 160, 102, 0.3);
+    }
+
+    @keyframes chipIn {
+      from { opacity: 0; transform: scale(0.85); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .ing-x {
+      border: none;
+      background: none;
+      color: inherit;
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 0 2px;
+      border-radius: 50%;
+      opacity: 0.7;
+    }
+
+    .ing-x:hover {
+      opacity: 1;
+    }
+
+    .btn-ghost {
+      background: #fff;
+      color: #4e9fd1;
+      border: 1px solid #4e9fd1;
+    }
+
+    .btn-ghost:hover {
+      background: rgba(78, 159, 209, 0.08);
+    }
+
+    /* committed meal rows */
+    .meal-item {
+      flex-direction: column;
+      align-items: stretch !important;
+      gap: 6px !important;
+    }
+
+    .meal-line {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      width: 100%;
+    }
+
+    .meal-ings {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      padding-left: 4px;
+    }
+
+    .ing-add-inline {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+    }
+
+    .ing-input-sm {
+      padding: 3px 8px;
+      border: 1px solid #d0d7de;
+      border-radius: 999px;
+      font: inherit;
+      font-size: 0.78rem;
+      width: 120px;
+    }
+
+    .ing-input-sm:focus {
+      outline: none;
+      border-color: #4e9fd1;
+    }
+
+    .ing-add-btn {
+      border: none;
+      background: none;
+      color: #4e9fd1;
+      font: inherit;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 2px 4px;
+    }
+
+    .grocery-src {
+      font-size: 0.72rem;
+      color: #1f8a52;
+      background: rgba(46, 160, 102, 0.1);
+      border-radius: 6px;
+      padding: 2px 8px;
+      white-space: nowrap;
+    }
+
+    /* ── Quantity inputs ───────────────────────────────────── */
+    .qty-input {
+      width: 64px;
+      flex: 0 0 auto !important;
+      min-width: 0 !important;
+      text-align: center;
+    }
+
+    .qty-input-sm {
+      width: 52px;
+      padding: 3px 6px;
+      border: 1px solid #d0d7de;
+      border-radius: 999px;
+      font: inherit;
+      font-size: 0.78rem;
+      text-align: center;
+    }
+
+    .qty-input-sm:focus {
+      outline: none;
+      border-color: #4e9fd1;
+    }
+
+    /* ── Grocery shopping list ─────────────────────────────── */
+    .grocery-list {
+      list-style: none;
+      margin-bottom: 12px;
+    }
+
+    .grocery-group {
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .grocery-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 6px;
+      font-size: 0.9rem;
+    }
+
+    .purchase-box {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      cursor: pointer;
+      accent-color: #1f8a52;
+    }
+
+    .grocery-qty {
+      font-weight: 700;
+      color: #4e9fd1;
+      min-width: 28px;
+      flex-shrink: 0;
+    }
+
+    .grocery-group.purchased .grocery-main .item-name {
+      text-decoration: line-through;
+      color: #9aa3ad;
+    }
+
+    .grocery-group.purchased .grocery-qty {
+      color: #9aa3ad;
+    }
+
+    .purchased-tag {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: #1f8a52;
+      background: rgba(46, 160, 102, 0.12);
+      border-radius: 999px;
+      padding: 2px 8px;
+      white-space: nowrap;
+    }
+
+    .manage-btn {
+      margin-left: auto;
+      background: none;
+      border: none;
+      color: #4e9fd1;
+      font: inherit;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+
+    .manage-btn:hover {
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    .grocery-members {
+      list-style: none;
+      margin: 0 0 6px 26px;
+      border-left: 2px solid #eef1f4;
+      padding-left: 10px;
+    }
+
+    .grocery-member {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 5px 6px;
+      font-size: 0.85rem;
+    }
+
+    /* ── Inline editing ────────────────────────────────────── */
+    .edit-btn {
+      background: none;
+      border: none;
+      color: #4e9fd1;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .edit-btn:hover {
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    .item-list li.edit-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      background: rgba(78, 159, 209, 0.07) !important;
+    }
+
+    .edit-row .edit-field {
+      flex: 1;
+      min-width: 120px;
+      padding: 7px 11px;
+      border: 1px solid #4e9fd1;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 0.85rem;
+    }
+
+    .edit-row .edit-field:focus {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(78, 159, 209, 0.15);
+    }
+
+    .ing-edit {
+      border: none;
+      background: none;
+      color: inherit;
+      cursor: pointer;
+      font-size: 0.75rem;
+      line-height: 1;
+      padding: 0 2px;
+      opacity: 0.65;
+    }
+
+    .ing-edit:hover {
+      opacity: 1;
+    }
+
+    .ing-chip.editing {
+      padding: 2px 4px;
+      gap: 3px;
+    }
+
+    .ing-edit-input {
+      border: 1px solid #4e9fd1;
+      border-radius: 999px;
+      padding: 2px 10px;
+      font: inherit;
+      font-size: 0.8rem;
+      width: 120px;
+    }
+
+    .ing-edit-input:focus {
+      outline: none;
+    }
+
+    /* ── Allergies sidebar ─────────────────────────────────── */
+    .sidebar {
+      position: sticky;
+      top: 84px;
+    }
+
+    .allergy-list {
+      list-style: none;
+      margin-bottom: 14px;
+    }
+
+    .allergy-list li {
+      padding: 8px 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.85rem;
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+    }
+
+    .allergy-list .a-name {
+      font-weight: 700;
+      color: #2c3e50;
+      white-space: nowrap;
+    }
+
+    .allergy-list .a-text {
+      color: #555;
+      flex: 1;
+    }
+
+    .allergy-form textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 0.85rem;
+      resize: vertical;
+      min-height: 56px;
+      margin-bottom: 8px;
+    }
+
+    .allergy-form textarea:focus {
+      outline: none;
+      border-color: #4e9fd1;
+    }
+
+    .allergy-form-label {
+      font-size: 0.78rem;
+      color: #888;
+      margin-bottom: 6px;
+    }
+
+    /* ── Toast ─────────────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a2e;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 200;
+    }
+
+    .toast.show {
+      opacity: 1;
+    }
+
+    .toast.error {
+      background: #c0392b;
+    }
+
+    @media (max-width: 800px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        order: -1;
+      }
+
+      .day-strip {
+        gap: 6px;
+      }
+
+      .page-content {
+        padding: 1.25rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+  </nav>
+
+  <!-- Password gate -->
+  <div id="gate" class="overlay hidden">
+    <form class="overlay-card" id="gateForm">
+      <h1>Summer Planning</h1>
+      <div class="sub">Maine Trip &middot; July 2&ndash;6, 2026</div>
+      <input type="password" id="gatePassword" placeholder="Trip password" autocomplete="current-password" required>
+      <button type="submit" class="btn btn-block" id="gateBtn">Enter</button>
+      <div class="error-msg" id="gateError"></div>
+    </form>
+  </div>
+
+  <!-- Name prompt -->
+  <div id="namePrompt" class="overlay hidden">
+    <form class="overlay-card" id="nameForm">
+      <h1>Who are you?</h1>
+      <div class="sub">Your first name is shown next to everything you sign up for</div>
+      <div id="nameChipsWrap" class="hidden">
+        <div class="chips-label">Already planning? Tap your name:</div>
+        <div class="name-chips" id="nameChips"></div>
+      </div>
+      <input type="text" id="nameInput" placeholder="First name" maxlength="40" autocomplete="given-name" required>
+      <button type="submit" class="btn btn-block">Let's plan</button>
+      <div class="error-msg" id="nameError"></div>
+    </form>
+  </div>
+
+  <!-- Main planner -->
+  <div id="main" class="page-content hidden">
+    <div class="page-header">
+      <div>
+        <h1>Maine Trip Planning</h1>
+        <div class="trip-sub">July 2&ndash;6, 2026 &middot; Meals, snacks &amp; groceries</div>
+      </div>
+      <div class="user-chip">Planning as <strong id="userNameLabel"></strong><span id="adminBadge" class="admin-badge hidden">admin</span> &middot;
+        <button class="link-btn" id="changeNameBtn">change</button>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div class="main-col">
+        <div class="card">
+          <h2>&#128197; Trip Calendar</h2>
+          <div class="day-strip" id="dayStrip"></div>
+          <div class="day-detail hidden" id="dayDetail"></div>
+        </div>
+        <div class="card" data-list-card="snack">
+          <h2>&#127871; Snacks</h2>
+          <div data-list="snack"></div>
+        </div>
+        <div class="card" data-list-card="drink">
+          <h2>&#127865; Drinks &amp; Alcohol</h2>
+          <div data-list="drink"></div>
+        </div>
+        <div class="card" data-list-card="grocery">
+          <h2>&#128722; Groceries</h2>
+          <div data-list="grocery"></div>
+        </div>
+      </div>
+
+      <aside class="sidebar">
+        <div class="card">
+          <h2>&#9888;&#65039; Allergies &amp; Dietary Restrictions</h2>
+          <ul class="allergy-list" id="allergyList"></ul>
+          <form class="allergy-form" id="allergyForm">
+            <div class="allergy-form-label" id="allergyFormLabel"></div>
+            <textarea id="allergyInput" maxlength="500" placeholder="e.g. peanuts, shellfish, vegetarian, gluten-free"></textarea>
+            <button type="submit" class="btn btn-sm btn-block">Save mine</button>
+          </form>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const API = '/api/summer-planning';
+    const TRIP_DAYS = [
+      { date: '2026-07-02', dow: 'Thu', dom: 2, label: 'Thursday, July 2' },
+      { date: '2026-07-03', dow: 'Fri', dom: 3, label: 'Friday, July 3' },
+      { date: '2026-07-04', dow: 'Sat', dom: 4, label: 'Saturday, July 4' },
+      { date: '2026-07-05', dow: 'Sun', dom: 5, label: 'Sunday, July 5' },
+      { date: '2026-07-06', dow: 'Mon', dom: 6, label: 'Monday, July 6' },
+    ];
+    const SLOTS = [
+      { key: 'breakfast', label: '☕ Breakfast' },
+      { key: 'lunch', label: '🥪 Lunch' },
+      { key: 'dinner', label: '🍽️ Dinner' },
+    ];
+    const LISTS = [
+      { key: 'snack', placeholder: 'Snack (e.g. trail mix)' },
+      { key: 'drink', placeholder: 'Drink (e.g. White Claw 12-pack)' },
+      { key: 'grocery', placeholder: 'Grocery item (e.g. carton of eggs)' },
+    ];
+
+    let token = localStorage.getItem('sp_token') || '';
+    let myName = localStorage.getItem('sp_name') || '';
+    let data = { items: [], allergies: [] };
+    let isAdmin = false;
+    let expandedDate = null;
+    // Ingredients staged client-side while composing a new meal, keyed by `${date}|${slot}`.
+    const pendingI = {};
+    // Id of the item currently being edited inline (snack/drink/grocery/ingredient).
+    let editingId = null;
+    // Grocery groups (keyed by normalized name) expanded to manage their members.
+    const expandedGroceries = new Set();
+    const clampQty = v => { const n = Math.floor(Number(v)); return Number.isFinite(n) && n >= 1 ? Math.min(n, 9999) : 1; };
+
+    const $ = id => document.getElementById(id);
+    const norm = s => String(s || '').trim().toLowerCase();
+    const isMine = name => norm(name) === norm(myName);
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[c]);
+    }
+
+    function showToast(msg, isError) {
+      const t = $('toast');
+      t.textContent = msg;
+      t.className = 'toast show' + (isError ? ' error' : '');
+      clearTimeout(t._timer);
+      t._timer = setTimeout(() => t.classList.remove('show'), 2500);
+    }
+
+    async function api(path, opts = {}) {
+      const res = await fetch(API + path, {
+        ...opts,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token,
+          ...(opts.headers || {}),
+        },
+      });
+      if (res.status === 401) {
+        localStorage.removeItem('sp_token');
+        token = '';
+        setScreen('gate');
+        throw new Error('Password changed — please re-enter it');
+      }
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || ('Request failed (' + res.status + ')'));
+      return body;
+    }
+
+    function setScreen(screen) {
+      $('gate').classList.toggle('hidden', screen !== 'gate');
+      $('namePrompt').classList.toggle('hidden', screen !== 'name');
+      $('main').classList.toggle('hidden', screen !== 'main');
+    }
+
+    async function loadData() {
+      data = await api('/data' + (myName ? '?name=' + encodeURIComponent(myName) : ''));
+      isAdmin = !!data.isAdmin;
+    }
+
+    // ── Boot ──────────────────────────────────────────────────
+    async function boot() {
+      if (!token) return setScreen('gate');
+      if (!myName) return showNamePrompt();
+      setScreen('main');
+      try {
+        await loadData();
+        renderAll();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    // ── Password gate ─────────────────────────────────────────
+    $('gateForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const btn = $('gateBtn');
+      btn.disabled = true;
+      $('gateError').textContent = '';
+      try {
+        const res = await fetch(API + '/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: $('gatePassword').value }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || 'Something went wrong');
+        token = body.token;
+        localStorage.setItem('sp_token', token);
+        $('gatePassword').value = '';
+        boot();
+      } catch (err) {
+        $('gateError').textContent = err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // ── Name prompt ───────────────────────────────────────────
+    async function showNamePrompt() {
+      setScreen('name');
+      try {
+        await loadData();
+        const names = new Map(); // norm -> display
+        for (const it of data.items) if (!names.has(norm(it.created_by))) names.set(norm(it.created_by), it.created_by.trim());
+        for (const a of data.allergies) if (!names.has(a.name_key)) names.set(a.name_key, a.display_name);
+        const chips = $('nameChips');
+        chips.innerHTML = '';
+        for (const display of [...names.values()].sort((a, b) => a.localeCompare(b))) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'name-chip';
+          b.textContent = display;
+          b.addEventListener('click', () => pickName(display));
+          chips.appendChild(b);
+        }
+        $('nameChipsWrap').classList.toggle('hidden', names.size === 0);
+      } catch (err) {
+        // Names list is a convenience; typing still works.
+        $('nameChipsWrap').classList.add('hidden');
+      }
+    }
+
+    function pickName(name) {
+      name = name.trim();
+      if (!name || name.length > 40) {
+        $('nameError').textContent = 'Please enter a first name (max 40 characters)';
+        return;
+      }
+      myName = name;
+      localStorage.setItem('sp_name', myName);
+      boot();
+    }
+
+    $('nameForm').addEventListener('submit', e => {
+      e.preventDefault();
+      pickName($('nameInput').value);
+    });
+
+    $('changeNameBtn').addEventListener('click', () => {
+      localStorage.removeItem('sp_name');
+      myName = '';
+      boot();
+    });
+
+    // ── Rendering ─────────────────────────────────────────────
+    function renderAll() {
+      $('userNameLabel').textContent = myName;
+      $('adminBadge').classList.toggle('hidden', !isAdmin);
+      renderCalendar();
+      renderLists();
+      renderAllergies();
+    }
+
+    const canModify = it => isMine(it.created_by) || isAdmin;
+
+    function removeBtnHtml(it) {
+      // Admins may remove anyone's item; everyone else only their own.
+      if (!canModify(it)) return '';
+      const title = isMine(it.created_by) ? 'remove' : 'remove (admin)';
+      return `<button class="remove-btn" data-remove="${it.id}">${title}</button>`;
+    }
+
+    function editBtnHtml(it) {
+      return canModify(it) ? `<button class="edit-btn" data-edit="${it.id}">edit</button>` : '';
+    }
+
+    // Inline edit form for a list item (snack/drink/grocery). One row at a time.
+    // Groceries also get a quantity field.
+    function editRow(it) {
+      const qtyField = it.category === 'grocery'
+        ? `<input class="edit-field qty-input" data-edit-field="quantity" type="number" min="1" max="9999" value="${it.quantity || 1}" aria-label="Quantity" title="Number of items">` : '';
+      return `<li class="edit-row" data-edit-container>
+        <input class="edit-field" data-edit-field="name" value="${escapeHtml(it.item_name)}" maxlength="100" placeholder="Name" aria-label="Item name">
+        ${qtyField}
+        <input class="edit-field" data-edit-field="notes" value="${escapeHtml(it.notes || '')}" maxlength="300" placeholder="Notes (optional)" aria-label="Notes">
+        <button class="btn btn-sm" data-edit-save="${it.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-edit-cancel>Cancel</button>
+      </li>`;
+    }
+
+    function itemRow(it) {
+      if (editingId === it.id) return editRow(it);
+      return `<li>
+        <span class="item-name">${escapeHtml(it.item_name)}</span>
+        ${it.notes ? `<span class="item-notes">${escapeHtml(it.notes)}</span>` : '<span class="item-notes"></span>'}
+        <span class="item-by">— ${escapeHtml(it.created_by)}</span>
+        ${editBtnHtml(it)}${removeBtnHtml(it)}
+      </li>`;
+    }
+
+    // Committed meal: name/notes/attribution plus its ingredient chips and an
+    // inline "add ingredient" control for the owner/admin.
+    function mealRow(meal) {
+      const canEdit = isMine(meal.created_by) || isAdmin;
+      const ings = data.items.filter(g => g.source_item_id === meal.id);
+      const chips = ings.map(g => {
+        if (editingId === g.id) {
+          return `<span class="ing-chip editing" data-edit-container>
+            <input class="ing-edit-input" data-edit-field="name" value="${escapeHtml(g.item_name)}" maxlength="100" aria-label="Edit ingredient">
+            <button class="ing-x" data-edit-save="${g.id}" aria-label="save">✓</button>
+            <button type="button" class="ing-x" data-edit-cancel aria-label="cancel">✕</button>
+          </span>`;
+        }
+        const qty = (g.quantity || 1) > 1 ? ` ×${g.quantity}` : '';
+        return `<span class="ing-chip saved">${escapeHtml(g.item_name)}${qty}${canEdit
+          ? `<button class="ing-edit" data-edit="${g.id}" aria-label="edit ${escapeHtml(g.item_name)}">✎</button><button class="ing-x" data-remove="${g.id}" aria-label="remove ${escapeHtml(g.item_name)}">×</button>` : ''}</span>`;
+      }).join('');
+      const adder = canEdit
+        ? `<span class="ing-add-inline">
+             <input type="text" class="ing-input-sm" data-meal-ing-input="${meal.id}" placeholder="+ ingredient" maxlength="100">
+             <input type="number" class="qty-input-sm" data-meal-ing-qty="${meal.id}" min="1" max="9999" value="1" aria-label="Quantity" title="Number of items">
+             <button type="button" class="ing-add-btn" data-meal-ing-add="${meal.id}">add</button>
+           </span>` : '';
+      const ingredientArea = (chips || adder)
+        ? `<div class="meal-ings">${chips}${adder}</div>` : '';
+      return `<li class="meal-item">
+        <div class="meal-line">
+          <span class="item-name">${escapeHtml(meal.item_name)}</span>
+          ${meal.notes ? `<span class="item-notes">${escapeHtml(meal.notes)}</span>` : '<span class="item-notes"></span>'}
+          <span class="item-by">— ${escapeHtml(meal.created_by)}</span>
+          ${removeBtnHtml(meal)}
+        </div>
+        ${ingredientArea}
+      </li>`;
+    }
+
+    // ── Grocery list (grouped shopping list) ───────────────────
+    // Groceries combine by name: same item from several recipes/people becomes one
+    // line with a summed quantity, every contributing recipe tagged, and a shared
+    // "purchased" checkbox anyone can toggle.
+    const isGroupPurchased = g => g.members.length > 0 && g.members.every(m => m.purchased_by);
+
+    function mealTagHtml(meal) {
+      const day = TRIP_DAYS.find(d => d.date === meal.trip_date);
+      const slot = SLOTS.find(s => s.key === meal.meal_slot);
+      const slotName = slot ? slot.label.replace(/^\S+\s/, '') : '';
+      const ctx = day ? ` · ${day.dow} ${slotName}` : '';
+      return `<span class="grocery-src" title="ingredient for a meal">🍳 ${escapeHtml(meal.item_name)}${ctx}</span>`;
+    }
+
+    function sourceTagHtml(item) {
+      if (!item.source_item_id) return '';
+      const meal = data.items.find(m => m.id === item.source_item_id);
+      return meal ? mealTagHtml(meal) : '';
+    }
+
+    function groupGroceries() {
+      const groups = new Map();
+      for (const g of data.items.filter(it => it.category === 'grocery')) {
+        const k = norm(g.item_name);
+        if (!groups.has(k)) groups.set(k, { key: k, name: g.item_name, members: [] });
+        groups.get(k).members.push(g);
+      }
+      return [...groups.values()].sort((a, b) => {
+        const ap = isGroupPurchased(a) ? 1 : 0, bp = isGroupPurchased(b) ? 1 : 0;
+        return ap - bp || a.name.localeCompare(b.name);
+      });
+    }
+
+    // One expanded member line (used when a group has several contributions).
+    function groceryMemberRow(m) {
+      if (editingId === m.id) return editRow(m);
+      return `<li class="grocery-member">
+        <span class="grocery-qty">${m.quantity || 1}×</span>
+        <span class="item-name">${escapeHtml(m.item_name)}</span>
+        ${sourceTagHtml(m)}
+        ${m.notes ? `<span class="item-notes">${escapeHtml(m.notes)}</span>` : ''}
+        <span class="item-by">— ${escapeHtml(m.created_by)}</span>
+        ${editBtnHtml(m)}${removeBtnHtml(m)}
+      </li>`;
+    }
+
+    function groceryGroupRow(group) {
+      const single = group.members.length === 1;
+      // A single-member group being edited shows the edit form in place.
+      if (single && editingId === group.members[0].id) {
+        return `<li class="grocery-group"><ul class="grocery-members">${editRow(group.members[0])}</ul></li>`;
+      }
+      const anyEditing = group.members.some(m => m.id === editingId);
+      const expanded = expandedGroceries.has(group.key) || anyEditing;
+      const purchased = isGroupPurchased(group);
+      const totalQty = group.members.reduce((s, m) => s + (m.quantity || 1), 0);
+      const mealIds = [...new Set(group.members.filter(m => m.source_item_id).map(m => m.source_item_id))];
+      const tags = mealIds.map(id => { const meal = data.items.find(m => m.id === id); return meal ? mealTagHtml(meal) : ''; }).join('');
+      const contributors = [...new Set(group.members.map(m => m.created_by))];
+      const purchasedBy = purchased ? group.members.find(m => m.purchased_by)?.purchased_by : null;
+
+      let manage = '';
+      if (single && canModify(group.members[0])) {
+        manage = `${editBtnHtml(group.members[0])}${removeBtnHtml(group.members[0])}`;
+      } else if (!single) {
+        manage = `<button class="manage-btn" data-grocery-expand="${escapeHtml(group.key)}">${expanded ? '▴' : '▾'} ${group.members.length} entries</button>`;
+      }
+      const membersHtml = expanded && !single
+        ? `<ul class="grocery-members">${group.members.map(groceryMemberRow).join('')}</ul>` : '';
+
+      return `<li class="grocery-group${purchased ? ' purchased' : ''}">
+        <div class="grocery-main">
+          <input type="checkbox" class="purchase-box" data-purchase="${escapeHtml(group.name)}" ${purchased ? 'checked' : ''} aria-label="Mark ${escapeHtml(group.name)} purchased">
+          <span class="grocery-qty">${totalQty}×</span>
+          <span class="item-name">${escapeHtml(group.name)}</span>
+          ${tags}
+          <span class="item-by">— ${escapeHtml(contributors.join(', '))}</span>
+          ${purchasedBy ? `<span class="purchased-tag">bought · ${escapeHtml(purchasedBy)}</span>` : ''}
+          ${manage}
+        </div>
+        ${membersHtml}
+      </li>`;
+    }
+
+    function renderGroceries(wrap) {
+      const groups = groupGroceries();
+      wrap.innerHTML = `
+        ${groups.length
+          ? `<ul class="grocery-list">${groups.map(groceryGroupRow).join('')}</ul>`
+          : '<div class="empty-note">Nothing here yet.</div>'}
+        <form class="add-form grocery-add" data-item-form data-category="grocery">
+          <input type="text" name="itemName" placeholder="Grocery item (e.g. carton of eggs)" maxlength="100" required>
+          <input type="number" name="quantity" class="qty-input" min="1" max="9999" value="1" aria-label="Quantity" title="Number of items">
+          <input type="text" name="notes" placeholder="Notes (optional)" maxlength="300">
+          <button type="submit" class="btn btn-sm">Add</button>
+        </form>`;
+    }
+
+    function pendingChipsHtml(key) {
+      return (pendingI[key] || []).map((ing, i) => {
+        const qty = ing.quantity > 1 ? ` ×${ing.quantity}` : '';
+        return `<span class="ing-chip">${escapeHtml(ing.name)}${qty}<button type="button" class="ing-x" data-ing-remove="${key}" data-ing-idx="${i}" aria-label="remove ${escapeHtml(ing.name)}">×</button></span>`;
+      }).join('');
+    }
+
+    function renderPendingChips(key) {
+      const box = document.querySelector(`[data-ing-chips="${key}"]`);
+      if (box) box.innerHTML = pendingChipsHtml(key);
+    }
+
+    function renderCalendar() {
+      const strip = $('dayStrip');
+      strip.innerHTML = TRIP_DAYS.map(d => {
+        const count = data.items.filter(it => it.category === 'meal' && it.trip_date === d.date).length;
+        return `<div class="day-card${expandedDate === d.date ? ' selected' : ''}" data-day="${d.date}">
+          <div class="dow">${d.dow}</div>
+          <div class="dom">${d.dom}</div>
+          <div class="meal-count">${count ? count + (count === 1 ? ' meal' : ' meals') : '&nbsp;'}</div>
+        </div>`;
+      }).join('');
+
+      const detail = $('dayDetail');
+      const day = TRIP_DAYS.find(d => d.date === expandedDate);
+      detail.classList.toggle('hidden', !day);
+      if (!day) { detail.innerHTML = ''; return; }
+
+      detail.innerHTML = `<div class="day-detail-title">${day.label}</div>` + SLOTS.map(slot => {
+        const meals = data.items.filter(it => it.category === 'meal' && it.trip_date === day.date && it.meal_slot === slot.key);
+        const key = day.date + '|' + slot.key;
+        return `<div class="slot">
+          <div class="slot-header">${slot.label}</div>
+          ${meals.length
+            ? `<ul class="item-list">${meals.map(mealRow).join('')}</ul>`
+            : '<div class="empty-note">Nothing claimed yet — be the hero.</div>'}
+          <form class="add-form meal-form" data-meal-form data-date="${day.date}" data-slot="${slot.key}" data-key="${key}">
+            <div class="meal-form-row">
+              <input type="text" name="itemName" placeholder="Meal you'll cook / buy for" maxlength="100" required>
+              <input type="text" name="notes" placeholder="Notes (optional)" maxlength="300">
+            </div>
+            <div class="ingredient-builder">
+              <div class="ing-builder-label">Ingredients you'll buy — added to Groceries</div>
+              <div class="ing-chip-row" data-ing-chips="${key}">${pendingChipsHtml(key)}</div>
+              <div class="ing-add-row">
+                <input type="text" class="ing-input" data-ing-input="${key}" placeholder="Add an ingredient…" maxlength="100">
+                <input type="number" class="qty-input" data-ing-qty="${key}" min="1" max="9999" value="1" aria-label="Quantity" title="Number of items">
+                <button type="button" class="btn btn-sm btn-ghost" data-ing-add="${key}">+ Add</button>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-sm meal-submit">Add meal</button>
+          </form>
+        </div>`;
+      }).join('');
+    }
+
+    function renderLists() {
+      for (const list of LISTS) {
+        const wrap = document.querySelector(`[data-list="${list.key}"]`);
+        if (list.key === 'grocery') { renderGroceries(wrap); continue; }
+        const items = data.items.filter(it => it.category === list.key);
+        wrap.innerHTML = `
+          ${items.length
+            ? `<ul class="item-list">${items.map(itemRow).join('')}</ul>`
+            : '<div class="empty-note">Nothing here yet.</div>'}
+          <form class="add-form" data-item-form data-category="${list.key}">
+            <input type="text" name="itemName" placeholder="${list.placeholder}" maxlength="100" required>
+            <input type="text" name="notes" placeholder="Notes (optional)" maxlength="300">
+            <button type="submit" class="btn btn-sm">Add</button>
+          </form>`;
+      }
+    }
+
+    function renderAllergies() {
+      const ul = $('allergyList');
+      if (!data.allergies.length) {
+        ul.innerHTML = '<li><span class="a-text empty-note">Nothing recorded yet.</span></li>';
+      } else {
+        ul.innerHTML = data.allergies.map(a => `<li>
+          <span class="a-name">${escapeHtml(a.display_name)}:</span>
+          <span class="a-text">${escapeHtml(a.allergies)}</span>
+          ${a.name_key === norm(myName) ? '<button class="remove-btn" data-remove-allergy>remove</button>' : ''}
+        </li>`).join('');
+      }
+      const mine = data.allergies.find(a => a.name_key === norm(myName));
+      $('allergyFormLabel').textContent = mine ? 'Update yours:' : 'Add your allergies or dietary needs so cooks can plan:';
+      if (document.activeElement !== $('allergyInput')) {
+        $('allergyInput').value = mine ? mine.allergies : '';
+      }
+    }
+
+    // ── Mutations (event delegation) ──────────────────────────
+    async function mutate(btn, fn) {
+      if (btn) btn.disabled = true;
+      try {
+        await fn();
+        await loadData();
+        renderAll();
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    // Stage a not-yet-saved ingredient (with quantity) onto a meal being composed.
+    function addPendingIngredient(key) {
+      const input = document.querySelector(`[data-ing-input="${key}"]`);
+      const qtyEl = document.querySelector(`[data-ing-qty="${key}"]`);
+      const val = (input?.value || '').trim();
+      if (!val) return;
+      if (val.length > 100) return showToast('Ingredient too long (max 100 chars)', true);
+      const list = pendingI[key] || (pendingI[key] = []);
+      if (list.length >= 40) return showToast('That’s plenty of ingredients (max 40)', true);
+      list.push({ name: val, quantity: clampQty(qtyEl?.value) });
+      if (input) { input.value = ''; input.focus(); }
+      if (qtyEl) qtyEl.value = '1';
+      renderPendingChips(key);
+    }
+
+    // Add an ingredient to an already-saved meal (persists to Groceries).
+    function addSavedIngredient(mealId) {
+      const input = document.querySelector(`[data-meal-ing-input="${mealId}"]`);
+      const qtyEl = document.querySelector(`[data-meal-ing-qty="${mealId}"]`);
+      const val = (input?.value || '').trim();
+      if (!val) return;
+      mutate(null, () => api('/items/' + mealId + '/ingredients', {
+        method: 'POST', body: JSON.stringify({ name: myName, itemName: val, quantity: clampQty(qtyEl?.value) }),
+      }));
+    }
+
+    function startEdit(id) {
+      editingId = id;
+      renderAll();
+      const f = document.querySelector('[data-edit-field="name"]');
+      if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+    }
+
+    function cancelEdit() {
+      editingId = null;
+      renderAll();
+    }
+
+    // Persist an inline edit. An ingredient is one grocery row, so this updates it
+    // on the meal and in the grocery list at once.
+    function saveEdit(id, container) {
+      if (!container) return;
+      const itemName = (container.querySelector('[data-edit-field="name"]')?.value || '').trim();
+      const notesEl = container.querySelector('[data-edit-field="notes"]');
+      const qtyEl = container.querySelector('[data-edit-field="quantity"]');
+      if (!itemName) return showToast('Name cannot be empty', true);
+      const payload = { name: myName, itemName, notes: notesEl ? notesEl.value : '' };
+      if (qtyEl) payload.quantity = clampQty(qtyEl.value);
+      mutate(container.querySelector('[data-edit-save]'), async () => {
+        await api('/items/' + id, { method: 'PATCH', body: JSON.stringify(payload) });
+        editingId = null;
+      });
+    }
+
+    $('main').addEventListener('click', e => {
+      const dayCard = e.target.closest('[data-day]');
+      if (dayCard) {
+        expandedDate = expandedDate === dayCard.dataset.day ? null : dayCard.dataset.day;
+        renderCalendar();
+        return;
+      }
+      const ingAdd = e.target.closest('[data-ing-add]');
+      if (ingAdd) { addPendingIngredient(ingAdd.dataset.ingAdd); return; }
+
+      const ingRemove = e.target.closest('[data-ing-remove]');
+      if (ingRemove) {
+        const key = ingRemove.dataset.ingRemove;
+        (pendingI[key] || []).splice(Number(ingRemove.dataset.ingIdx), 1);
+        renderPendingChips(key);
+        return;
+      }
+      const mealIngAdd = e.target.closest('[data-meal-ing-add]');
+      if (mealIngAdd) { addSavedIngredient(mealIngAdd.dataset.mealIngAdd); return; }
+
+      const purchaseBox = e.target.closest('[data-purchase]');
+      if (purchaseBox) {
+        const itemName = purchaseBox.dataset.purchase;
+        const purchased = purchaseBox.checked;
+        mutate(null, () => api('/groceries/purchased', {
+          method: 'PUT', body: JSON.stringify({ name: myName, itemName, purchased }),
+        }));
+        return;
+      }
+      const expandBtn = e.target.closest('[data-grocery-expand]');
+      if (expandBtn) {
+        const k = expandBtn.dataset.groceryExpand;
+        if (expandedGroceries.has(k)) expandedGroceries.delete(k); else expandedGroceries.add(k);
+        renderLists();
+        return;
+      }
+
+      const editStart = e.target.closest('[data-edit]');
+      if (editStart) { startEdit(Number(editStart.dataset.edit)); return; }
+      const editCancel = e.target.closest('[data-edit-cancel]');
+      if (editCancel) { cancelEdit(); return; }
+      const editSave = e.target.closest('[data-edit-save]');
+      if (editSave) { saveEdit(Number(editSave.dataset.editSave), editSave.closest('[data-edit-container]')); return; }
+
+      const removeBtn = e.target.closest('[data-remove]');
+      if (removeBtn) {
+        mutate(removeBtn, () =>
+          api('/items/' + removeBtn.dataset.remove + '?name=' + encodeURIComponent(myName), { method: 'DELETE' }));
+        return;
+      }
+      const removeAllergy = e.target.closest('[data-remove-allergy]');
+      if (removeAllergy) {
+        mutate(removeAllergy, () =>
+          api('/allergies?name=' + encodeURIComponent(myName), { method: 'DELETE' }));
+      }
+    });
+
+    // Keyboard shortcuts inside the various inline inputs.
+    $('main').addEventListener('keydown', e => {
+      // Edit fields: Enter saves, Escape cancels.
+      const editField = e.target.closest('[data-edit-field]');
+      if (editField) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const c = editField.closest('[data-edit-container]');
+          saveEdit(Number(c.querySelector('[data-edit-save]').dataset.editSave), c);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelEdit();
+        }
+        return;
+      }
+      if (e.key !== 'Enter') return;
+      // Enter in either the ingredient name or its quantity adds the ingredient
+      // (and crucially prevents the surrounding meal form from submitting).
+      const pend = e.target.closest('[data-ing-input], [data-ing-qty]');
+      if (pend) { e.preventDefault(); addPendingIngredient(pend.dataset.ingInput || pend.dataset.ingQty); return; }
+      const saved = e.target.closest('[data-meal-ing-input], [data-meal-ing-qty]');
+      if (saved) { e.preventDefault(); addSavedIngredient(saved.dataset.mealIngInput || saved.dataset.mealIngQty); }
+    });
+
+    $('main').addEventListener('submit', e => {
+      const form = e.target;
+      if (!form.matches('[data-meal-form], [data-item-form]')) return;
+      e.preventDefault();
+      const isMeal = form.matches('[data-meal-form]');
+      const key = form.dataset.key;
+      const payload = {
+        category: form.dataset.category || 'meal',
+        tripDate: form.dataset.date || null,
+        mealSlot: form.dataset.slot || null,
+        itemName: form.elements.itemName.value,
+        notes: form.elements.notes.value,
+        createdBy: myName,
+      };
+      if (form.elements.quantity) payload.quantity = clampQty(form.elements.quantity.value);
+      if (isMeal) payload.ingredients = pendingI[key] || [];
+      mutate(form.querySelector('button[type=submit]'), async () => {
+        await api('/items', { method: 'POST', body: JSON.stringify(payload) });
+        if (isMeal && key) delete pendingI[key];
+      });
+    });
+
+    $('allergyForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const allergies = $('allergyInput').value.trim();
+      if (!allergies) return showToast('Enter your allergies or dietary restrictions first', true);
+      mutate(e.target.querySelector('button'), () =>
+        api('/allergies', { method: 'PUT', body: JSON.stringify({ name: myName, allergies }) }));
+    });
+
+    boot();
+  </script>
+</body>
+
+</html>

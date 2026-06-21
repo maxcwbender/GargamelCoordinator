@@ -20,6 +20,9 @@ from urllib.parse import urljoin
 import DBFunctions as DB
 from logger import setup_logging
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import threading
 """
@@ -1299,7 +1302,7 @@ class Master_Bot(commands.Bot):
         Start the bot using the token loaded from config file.
         Overrides commands.Bot.run for clarity and encapsulation.
         """
-        super().run(self.config["BOT_TOKEN"])
+        super().run(os.environ["BOT_TOKEN"])
 
     async def _start_tcp_server(self):
         """
@@ -2030,7 +2033,7 @@ class Master_Bot(commands.Bot):
 
             pending_registrants = DB.fetch_all(
                 """
-                SELECT discord_id, rating, dateCreated, modsRemaining
+                SELECT discord_id, rating, dateCreated, modsRemaining, referred_by
                 FROM users
                 WHERE modsRemaining > 0
                 ORDER BY dateCreated ASC
@@ -2062,22 +2065,23 @@ class Master_Bot(commands.Bot):
             )
 
             for registrant in pending_registrants[:25]:  # Discord embed field limit
-                discord_id, rating, date_created, mods_remaining = registrant
+                discord_id, rating, date_created, mods_remaining, referred_by = registrant
                 rating_display = rating if rating else "Not set"
-                
+
                 # Try to get user's display name
                 try:
                     member = await self.the_guild.fetch_member(discord_id)
                     user_name = member.display_name if member else f"User {discord_id}"
                 except:
                     user_name = f"User {discord_id}"
-                
+
                 # Mark if already reviewed by this mod
                 status_marker = "✅ (you reviewed)" if discord_id in already_reviewed else "⏳ Available"
-                
+                referral_line = f"\n**Referred By:** {referred_by}" if referred_by else ""
+
                 embed.add_field(
                     name=f"{user_name} (<@{discord_id}>)",
-                    value=f"**Status:** {status_marker}\n**Rating:** {rating_display}\n**Registered:** {date_created}\n**Mods Remaining:** {mods_remaining}",
+                    value=f"**Status:** {status_marker}\n**Rating:** {rating_display}\n**Registered:** {date_created}\n**Mods Remaining:** {mods_remaining}{referral_line}",
                     inline=False
                 )
 
@@ -2617,6 +2621,20 @@ class Master_Bot(commands.Bot):
             await interaction.followup.send(f"Success.  Gargamel Coordinator debug mode set to {debug_mode}. Restarting Coordinator", ephemeral=True)
             os.system("supervisorctl restart gargamel")
 
+        @app_commands.command(name="announce", description="Send a message to General as the bot")
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(message="Message to send to General")
+        async def announce(
+            interaction: discord.Interaction,
+            message: str,
+        ):
+            general = self.get_channel(int(self.config["GENERAL_CHANNEL_ID"]))
+            if not general:
+                return await interaction.response.send_message("Could not find General channel.", ephemeral=True)
+            await general.send(message)
+            await interaction.response.send_message("Sent.", ephemeral=True)
+            logger.info(f"[announce] {interaction.user} sent to General: {message}")
+
         @app_commands.command(name="scan_for_unfinished_matches", description="Scan the database for unfinished matches and update accordingly")
         @app_commands.checks.has_role("Mod")
         async def scan_for_unfinished_matches(
@@ -3000,6 +3018,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(check_mmr)
         self.tree.add_command(restart_bot)
         self.tree.add_command(set_debug_mode)
+        self.tree.add_command(announce)
         self.tree.add_command(scan_for_unfinished_matches)
         self.tree.add_command(update_match_results)
         self.tree.add_command(end_match_manual)
@@ -3176,9 +3195,12 @@ class Master_Bot(commands.Bot):
 
     async def _move_members_with_rate_limit(self, members: list, target_channel: discord.VoiceChannel, game_id: int):
         """
-        Move members to target channel with rate limiting.
-        Discord rate limits voice channel moves to 10 per 10 seconds.
-        
+        Move members to target channel.
+        discord.py handles rate limiting internally via X-RateLimit headers and
+        automatic 429 retry, so we fire all moves concurrently and let the HTTP
+        client pace them. A small per-member stagger avoids a thundering-herd
+        burst against the per-route bucket.
+
         Args:
             members: List of discord.Member objects to move
             target_channel: Target voice channel
@@ -3186,7 +3208,7 @@ class Master_Bot(commands.Bot):
         """
         if not members:
             return
-        
+
         # Filter out members that don't need to be moved
         members_to_move = []
         for member in members:
@@ -3195,48 +3217,33 @@ class Master_Bot(commands.Bot):
             if member.voice.channel.id == target_channel.id:
                 continue
             members_to_move.append(member)
-        
+
         if not members_to_move:
             logger.info(f"[Game {game_id}] No members need to be moved")
             return
-        
-        logger.info(f"[Game {game_id}] Moving {len(members_to_move)} members to General channel (rate-limited)")
-        
-        # Discord rate limit: 10 moves per 10 seconds
-        # Using batches of 5 for smoother experience and safety margin
-        BATCH_SIZE = 5
-        RATE_LIMIT_DELAY = 6.0  # seconds between batches (safe with batches of 5)
-        
-        # Process in batches
-        for i in range(0, len(members_to_move), BATCH_SIZE):
-            batch = members_to_move[i:i + BATCH_SIZE]
-            batch_num = (i // BATCH_SIZE) + 1
-            total_batches = (len(members_to_move) + BATCH_SIZE - 1) // BATCH_SIZE
-            
-            logger.info(f"[Game {game_id}] Moving batch {batch_num}/{total_batches} ({len(batch)} members)")
-            
-            # Create move tasks for this batch
-            move_tasks = []
-            for member in batch:
-                try:
-                    move_tasks.append(member.move_to(target_channel))
-                except Exception as e:
-                    logger.warning(f"[Game {game_id}] Failed to queue move for {member.display_name}: {e}")
-            
-            # Execute batch
-            if move_tasks:
-                results = await asyncio.gather(*move_tasks, return_exceptions=True)
-                # Log any failures
-                for member, result in zip(batch, results):
-                    if isinstance(result, Exception):
-                        logger.warning(f"[Game {game_id}] Failed to move {member.display_name} to General: {result}")
-            
-            # Wait before next batch (except for the last batch)
-            if i + BATCH_SIZE < len(members_to_move):
-                logger.debug(f"[Game {game_id}] Waiting {RATE_LIMIT_DELAY}s before next batch (rate limit)")
-                await asyncio.sleep(RATE_LIMIT_DELAY)
-        
-        logger.info(f"[Game {game_id}] Completed moving all members to General channel")
+
+        logger.info(f"[Game {game_id}] Moving {len(members_to_move)} members to {target_channel.name}")
+
+        async def _move_one(member: discord.Member, index: int):
+            """Move a single member with a small stagger to spread requests."""
+            if index > 0:
+                await asyncio.sleep(0.15 * index)
+            try:
+                await member.move_to(target_channel)
+                logger.info(f"[Game {game_id}] Moved {member.display_name} to {target_channel.name}")
+            except discord.HTTPException as e:
+                logger.warning(
+                    f"[Game {game_id}] Failed to move {member.display_name}: "
+                    f"{e.status} {e.text}"
+                )
+            except Exception as e:
+                logger.warning(f"[Game {game_id}] Failed to move {member.display_name}: {e}")
+
+        await asyncio.gather(*[
+            _move_one(member, i) for i, member in enumerate(members_to_move)
+        ])
+
+        logger.info(f"[Game {game_id}] Completed moving all members to {target_channel.name}")
 
     async def clear_game(self, game_id: int):
         """
@@ -3246,18 +3253,11 @@ class Master_Bot(commands.Bot):
             game_id (int): The ID of the game to cancel.
         """
         try:
-            radiant, dire = self.game_map_inverse[game_id]
-            del self.game_map_inverse[game_id]
+            radiant, dire = self.game_map_inverse.pop(game_id)
 
             for player in radiant:
-                del self.game_map[player]
+                self.game_map.pop(player, None)
             for player in dire:
-                del self.game_map[player]
-
-            players = self.game_map_inverse.get(game_id, set())
-            self.game_map_inverse.pop(game_id, None)
-
-            for player in players:
                 self.game_map.pop(player, None)
 
             radiant_channel, dire_channel = self.game_channels.pop(game_id)
@@ -3267,16 +3267,25 @@ class Master_Bot(commands.Bot):
                 logger.error(f"[Game {game_id}] General voice channel not found!")
                 return
             
-            # Get all members from both channels (including spectators)
-            all_members = list(radiant_channel.members) + list(dire_channel.members)
-            
+            # Get all members from both channels, players first then spectators
+            player_ids = radiant | dire
+            all_in_voice = list(radiant_channel.members) + list(dire_channel.members)
+            players = [m for m in all_in_voice if m.id in player_ids]
+            spectators = [m for m in all_in_voice if m.id not in player_ids]
+
             # Log members being moved
-            for member in all_members:
+            for member in players:
                 logger.info(
-                    f"[Game {game_id}] {member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
-            
-            # Move all members with rate limiting
-            await self._move_members_with_rate_limit(all_members, target_channel, game_id)
+                    f"[Game {game_id}] Player {member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
+            for member in spectators:
+                logger.info(
+                    f"[Game {game_id}] Spectator {member.display_name} | ID: {member.id} | Voice: {member.voice.channel.name if member.voice else 'Not in Voice'}")
+
+            # Move players first, then spectators after
+            await self._move_members_with_rate_limit(players, target_channel, game_id)
+            if spectators:
+                logger.info(f"[Game {game_id}] Now moving {len(spectators)} spectators")
+                await self._move_members_with_rate_limit(spectators, target_channel, game_id)
             
             # Delete channels after all members are moved
             await asyncio.gather(
@@ -3324,10 +3333,12 @@ class Master_Bot(commands.Bot):
             if modsRemaining > 0:
                 mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
                 if mod_chan:
-                    # Get rating information to include in notification
+                    # Get rating and referral information to include in notification
                     rating = DB.fetch_one(f"SELECT rating FROM users WHERE discord_id = {discord_id}")
+                    referred_by = DB.fetch_one(f"SELECT referred_by FROM users WHERE discord_id = {discord_id}")
                     rating_text = f" (Rating: **{rating}**)" if rating else ""
-                    await mod_chan.send(f"<@{discord_id}> joined registration queue!{rating_text}")
+                    referral_text = f" | Referred by: **{referred_by}**" if referred_by else ""
+                    await mod_chan.send(f"<@{discord_id}> joined registration queue!{rating_text}{referral_text}")
                     logger.info(f"[on_steam_id_found] Sent notification to mod channel for {discord_id}")
                 else:
                     logger.error(f"[on_steam_id_found] Could not find mod channel: {self.config.get('MOD_CHANNEL_ID')}")
@@ -3549,8 +3560,6 @@ class Master_Bot(commands.Bot):
                             logger.exception(f"Tried to send a message to {member.name} but failed with exception: {e}")
 
                     send_tasks.append(send_message())
-                    self.game_map[member_id] = game_id
-                    self.game_map_inverse[game_id][1].add(member_id)
 
             await asyncio.gather(*send_tasks)
 
@@ -3558,7 +3567,7 @@ class Master_Bot(commands.Bot):
 
             embed = self.build_game_embed(game_id, radiant, dire, password)
 
-            channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+            channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"])) or await self.fetch_channel(int(self.config["MATCH_CHANNEL_ID"]))
 
             view = self.GameModePoll(
                 parent=self,
@@ -3570,16 +3579,26 @@ class Master_Bot(commands.Bot):
             message = await channel.send(embed=embed, view=view)
 
             try:
-                tasks = [
-                    self.the_guild.get_member(member).move_to(radiant_channel)
-                    for member in radiant
-                    if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
-                ] + [
-                    self.the_guild.get_member(member).move_to(dire_channel)
-                    for member in dire
-                    if self.the_guild.get_member(member) and self.the_guild.get_member(member).voice
-                ]
-                await asyncio.gather(*tasks)
+                # Collect all members that need moving into game channels
+                all_game_members = []
+                for member_id in radiant:
+                    m = self.the_guild.get_member(member_id)
+                    if m and m.voice:
+                        all_game_members.append((m, radiant_channel))
+                for member_id in dire:
+                    m = self.the_guild.get_member(member_id)
+                    if m and m.voice:
+                        all_game_members.append((m, dire_channel))
+
+                # Use _move_members_with_rate_limit style stagger
+                async def _move(member, channel, idx):
+                    if idx > 0:
+                        await asyncio.sleep(0.15 * idx)
+                    await member.move_to(channel)
+
+                await asyncio.gather(*[
+                    _move(m, ch, i) for i, (m, ch) in enumerate(all_game_members)
+                ], return_exceptions=True)
             except Exception as e:
                 logger.exception(f"Unexpected Exception: {e}")
 

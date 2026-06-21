@@ -1,5 +1,6 @@
 numpy
 dota2
 steam
+python-dotenv
 pytest
 pytest-asyncio

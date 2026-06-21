@@ -1,7 +1,9 @@
+import 'dotenv/config';
 import fetch from 'node-fetch';
 import Database from 'better-sqlite3';
 import express from 'express';
 import net from 'net';
+import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'fs';
 import pino from 'pino'
 const logger = pino({
@@ -15,16 +17,19 @@ let config = JSON.parse(readFileSync('./config.json'));
 
 const server = express();
 server.use(express.json());
-server.use(express.static('.'));
+server.use(express.static('public'));
 
 // ─── OpenDota API caching layer ─────────────────────────────────────────────
 const OPENDOTA_BASE = 'https://api.opendota.com/api';
 const LEAGUE_ID = 18388;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes - keeps us well under 3000 calls/day
 const PLAYER_STATS_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours for player stats
+const CURRENT_SEASON = 2;
+const SEASON_2_FIRST_MATCH = 8745386473;
 
 // ─── Steam API for live games ────────────────────────────────────────────────
-const STEAM_API_KEY = config.STEAM_API_KEY || '';
+const STEAM_API_KEY = process.env.STEAM_API_KEY || '';
+const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const STEAM_API_BASE = 'https://api.steampowered.com';
 const LIVE_GAME_CACHE_TTL = 3000; // 3 seconds cache for live games
 
@@ -97,6 +102,8 @@ const columnMigrations = [
     'ALTER TABLE player_stats ADD COLUMN observer_kills INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_time_total INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN obs_ward_count INTEGER DEFAULT 0',
+    'ALTER TABLE player_stats ADD COLUMN season INTEGER DEFAULT 1',
+    'ALTER TABLE users ADD COLUMN referred_by TEXT',
 ];
 for (const sql of columnMigrations) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }
@@ -120,6 +127,39 @@ for (const sql of columnMigrations) {
         PRIMARY KEY (match_id, award_type)
     )`);
 }
+
+// Summer trip planning (/summer-planning): shared items + per-person allergies
+// source_item_id: when a grocery row is a meal's ingredient, points at the meal's
+// id (NULL for standalone groceries). Deleting the meal cascades its ingredients.
+// quantity: number of items for the shopping list (groceries). purchased_by: who
+// marked it bought (shared flag, NULL = not purchased).
+db.exec(`CREATE TABLE IF NOT EXISTS trip_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL CHECK (category IN ('meal','snack','drink','grocery')),
+    trip_date TEXT,
+    meal_slot TEXT CHECK (meal_slot IN ('breakfast','lunch','dinner') OR meal_slot IS NULL),
+    item_name TEXT NOT NULL,
+    notes TEXT,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    source_item_id INTEGER,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    purchased_by TEXT
+)`);
+// Existing installs: add columns if the table predates them (idempotent).
+for (const sql of [
+    'ALTER TABLE trip_items ADD COLUMN source_item_id INTEGER',
+    'ALTER TABLE trip_items ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1',
+    'ALTER TABLE trip_items ADD COLUMN purchased_by TEXT',
+]) {
+    try { db.exec(sql); } catch (_) { /* already exists */ }
+}
+db.exec(`CREATE TABLE IF NOT EXISTS trip_allergies (
+    name_key TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    allergies TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+)`);
 
 async function fetchOpenDota(path) {
     const res = await fetch(`${OPENDOTA_BASE}${path}`);
@@ -146,14 +186,15 @@ function loadPlayerStatsFromDB() {
                    COALESCE(sv.svp_count, 0) AS svp_count
             FROM player_stats ps
             LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
-            LEFT JOIN (SELECT account_id, COUNT(*) AS mvp_count FROM match_mvps WHERE award_type = 'mvp' GROUP BY account_id) mv
+            LEFT JOIN (SELECT account_id, COUNT(*) AS mvp_count FROM match_mvps WHERE award_type = 'mvp' AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY account_id) mv
                 ON ps.account_id = mv.account_id
-            LEFT JOIN (SELECT account_id, COUNT(*) AS svp_count FROM match_mvps WHERE award_type = 'svp' GROUP BY account_id) sv
+            LEFT JOIN (SELECT account_id, COUNT(*) AS svp_count FROM match_mvps WHERE award_type = 'svp' AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY account_id) sv
                 ON ps.account_id = sv.account_id
+            WHERE ps.season = ?
         `;
 
-        // better-sqlite3 has synchronous methods
-        const rows = db.prepare(query).all();
+        // better-sqlite3 has synchronous methods — only load current season data
+        const rows = db.prepare(query).all(CURRENT_SEASON);
 
         const players = rows.map(row => ({
             accountId: row.account_id,
@@ -189,7 +230,7 @@ function loadPlayerStatsFromDB() {
 
         logger.info(`Loaded ${players.length} player stats from database`);
         return {
-            players: players.filter(p => p.matches >= 3),
+            players,
             lastFetched: oldestUpdate,
         };
     } catch (err) {
@@ -203,8 +244,8 @@ function savePlayerStatsToDB(playerMap) {
         const now = Date.now();
         const insertStats = db.prepare(`
             INSERT OR REPLACE INTO player_stats
-            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, wards_placed, observer_kills, obs_ward_time_total, obs_ward_count, matches, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, wards_placed, observer_kills, obs_ward_time_total, obs_ward_count, matches, last_updated, season)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         for (const [accountId, stats] of playerMap.entries()) {
@@ -223,7 +264,8 @@ function savePlayerStatsToDB(playerMap) {
                 stats.obs_ward_time_total || 0,
                 stats.obs_ward_count || 0,
                 stats.matches,
-                now
+                now,
+                CURRENT_SEASON
             );
         }
 
@@ -281,6 +323,7 @@ async function fetchAndSaveAvatars(accountIds) {
 async function refreshMatchCache() {
     try {
         logger.info('Refreshing OpenDota match cache...');
+        if (dotaConstants.lastFetched === 0) await fetchDotaConstants();
         // Use /matchIds endpoint - /matches excludes amateur leagues like ours
         const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
 
@@ -317,6 +360,9 @@ async function refreshMatchCache() {
                         (p.obs_placed || 0) * 0.5 +
                         (p.observer_kills || 0) * 0.5;
 
+                    // Resolve hero portrait from cached constants
+                    const hero = dotaConstants.heroes[p.hero_id];
+
                     return {
                         account_id: p.account_id,
                         personaname: p.personaname || 'Anonymous',
@@ -326,6 +372,9 @@ async function refreshMatchCache() {
                         deaths: p.deaths,
                         assists: p.assists,
                         avatar: avatar,
+                        hero_id: p.hero_id || null,
+                        heroName: hero?.name || null,
+                        heroImg: hero?.img || null,
                         mvpScore,
                     };
                 });
@@ -382,10 +431,29 @@ async function refreshPlayerStats() {
     try {
         logger.info('Refreshing player statistics...');
         const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
+        logger.info(`OpenDota returned ${matchIds.length} total match IDs for league ${LEAGUE_ID}`);
+        logger.info(`First 10 match IDs (newest): ${matchIds.slice(0, 10).join(', ')}`);
+        logger.info(`Last 10 match IDs (oldest): ${matchIds.slice(-10).join(', ')}`);
 
-        // Take up to 100 most recent matches for comprehensive stats
-        const matchesToFetch = matchIds.slice(0, 100);
-        logger.info(`Fetching ${matchesToFetch.length} matches for player statistics...`);
+        // Season 2 starts from this match onward (list is newest-first from OpenDota)
+        const season2StartIdx = matchIds.indexOf(SEASON_2_FIRST_MATCH);
+        logger.info(`Season 2 first match ${SEASON_2_FIRST_MATCH} found at index ${season2StartIdx} (${season2StartIdx === -1 ? 'NOT FOUND' : 'found'})`);
+
+        // Also check if it exists as a string (in case OpenDota returns strings)
+        const season2StartIdxStr = matchIds.indexOf(String(SEASON_2_FIRST_MATCH));
+        if (season2StartIdxStr >= 0 && season2StartIdx === -1) {
+            logger.warn(`Match ID found as STRING at index ${season2StartIdxStr} — OpenDota is returning strings, not numbers!`);
+        }
+
+        // Log types for debugging
+        if (matchIds.length > 0) {
+            logger.info(`Match ID type check: typeof matchIds[0] = ${typeof matchIds[0]}, value = ${matchIds[0]}`);
+        }
+
+        const matchesToFetch = season2StartIdx >= 0
+            ? matchIds.slice(0, season2StartIdx + 1)
+            : matchIds.filter(id => Number(id) >= SEASON_2_FIRST_MATCH); // fallback: coerce to number
+        logger.info(`Fetching ${matchesToFetch.length} Season 2 matches: [${matchesToFetch.join(', ')}]`);
 
         const playerMap = new Map(); // accountId -> { name, wins, losses, kills, deaths, assists, matches }
 
@@ -459,21 +527,22 @@ async function refreshPlayerStats() {
                     }
                 }
 
-                // Determine match MVP (winning team) and SVP (losing team)
+                // Determine match MVP (winning team) and SVP (losing team).
+                // NOTE: OpenDota does not score fantasy points for our inhouse lobby
+                // matches — the `fantasy_points` field is absent from every player even
+                // on fully parsed matches, so there's no API score to fall back on or
+                // cross-check against. MVP/SVP are decided solely by our manual
+                // DPC-style fantasy formula below.
                 const winningRadiant = detail.radiant_win;
                 let mvpId = null, mvpBest = -Infinity;
                 let svpId = null, svpBest = -Infinity;
-
-                // Track API fantasy points for comparison
-                let mvpIdAPI = null, mvpBestAPI = -Infinity;
-                let svpIdAPI = null, svpBestAPI = -Infinity;
                 const debugPlayers = [];
 
                 for (const p of detail.players || []) {
                     if (!p.account_id) continue;
                     const pRadiant = p.player_slot < 128;
 
-                    // Our manual calculation
+                    // DPC-style fantasy score (our manual calculation)
                     const score =
                         (p.kills || 0) * 0.5 +
                         (3 - (p.deaths || 0) * 0.3) +
@@ -486,55 +555,30 @@ async function refreshPlayerStats() {
                         (p.obs_placed || 0) * 0.5 +
                         (p.observer_kills || 0) * 0.5;
 
-                    // Check if API provides fantasy_points
-                    const apiScore = p.fantasy_points || null;
-
                     debugPlayers.push({
                         name: p.personaname || 'Anonymous',
                         isRadiant: pRadiant,
                         manualScore: score.toFixed(2),
-                        apiScore: apiScore != null ? apiScore.toFixed(2) : 'N/A',
                     });
 
-                    // Manual MVP/SVP selection
                     if (pRadiant === winningRadiant) {
                         if (score > mvpBest) { mvpBest = score; mvpId = p.account_id; }
                     } else {
                         if (score > svpBest) { svpBest = score; svpId = p.account_id; }
                     }
-
-                    // API-based MVP/SVP selection (if available)
-                    if (apiScore != null) {
-                        if (pRadiant === winningRadiant) {
-                            if (apiScore > mvpBestAPI) { mvpBestAPI = apiScore; mvpIdAPI = p.account_id; }
-                        } else {
-                            if (apiScore > svpBestAPI) { svpBestAPI = apiScore; svpIdAPI = p.account_id; }
-                        }
-                    }
                 }
 
                 // Debug logging for first match only to avoid spam
                 if (i === 0) {
-                    logger.info(`=== MVP/SVP Comparison for Match ${matchId} ===`);
-                    logger.info(`Player Scores:`);
+                    logger.info(`=== MVP/SVP Scores for Match ${matchId} ===`);
                     debugPlayers.forEach(p => {
-                        logger.info(`  ${p.name} (${p.isRadiant ? 'Radiant' : 'Dire'}): Manual=${p.manualScore}, API=${p.apiScore}`);
+                        logger.info(`  ${p.name} (${p.isRadiant ? 'Radiant' : 'Dire'}): ${p.manualScore}`);
                     });
                     const mvpPlayer = detail.players.find(p => p.account_id === mvpId);
                     const svpPlayer = detail.players.find(p => p.account_id === svpId);
-                    logger.info(`Manual MVP: ${mvpPlayer?.personaname || 'Unknown'} (${mvpBest.toFixed(2)})`);
-                    logger.info(`Manual SVP: ${svpPlayer?.personaname || 'Unknown'} (${svpBest.toFixed(2)})`);
-                    if (mvpIdAPI) {
-                        const mvpPlayerAPI = detail.players.find(p => p.account_id === mvpIdAPI);
-                        const svpPlayerAPI = detail.players.find(p => p.account_id === svpIdAPI);
-                        logger.info(`API MVP: ${mvpPlayerAPI?.personaname || 'Unknown'} (${mvpBestAPI.toFixed(2)})`);
-                        logger.info(`API SVP: ${svpPlayerAPI?.personaname || 'Unknown'} (${svpBestAPI.toFixed(2)})`);
-                        logger.info(`MVP Match: ${mvpId === mvpIdAPI ? 'YES' : 'NO'}`);
-                        logger.info(`SVP Match: ${svpId === svpIdAPI ? 'YES' : 'NO'}`);
-                    } else {
-                        logger.info(`API fantasy_points not available in match data`);
-                    }
-                    logger.info(`=== End Comparison ===`);
+                    logger.info(`MVP: ${mvpPlayer?.personaname || 'Unknown'} (${mvpBest.toFixed(2)})`);
+                    logger.info(`SVP: ${svpPlayer?.personaname || 'Unknown'} (${svpBest.toFixed(2)})`);
+                    logger.info(`=== End Scores ===`);
                 }
                 const insertAward = db.prepare(
                     'INSERT OR IGNORE INTO match_mvps (match_id, account_id, award_type, mvp_score, created_at) VALUES (?, ?, ?, ?, ?)'
@@ -566,13 +610,14 @@ async function refreshPlayerStats() {
         const accountIds = Array.from(playerMap.keys());
         await fetchAndSaveAvatars(accountIds);
 
-        // Load avatars and MVP counts from DB and merge with player stats
+        // Load avatars and MVP counts from DB — filter MVPs to only Season 2 matches
         const avatarQuery = db.prepare('SELECT account_id, avatar_url FROM player_avatars');
         const avatars = new Map(avatarQuery.all().map(row => [row.account_id, row.avatar_url]));
-        const mvpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'mvp' GROUP BY account_id");
-        const mvpCounts = new Map(mvpQuery.all().map(row => [row.account_id, row.cnt]));
-        const svpQuery = db.prepare("SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'svp' GROUP BY account_id");
-        const svpCounts = new Map(svpQuery.all().map(row => [row.account_id, row.cnt]));
+        const matchIdPlaceholders = matchesToFetch.map(() => '?').join(',');
+        const mvpQuery = db.prepare(`SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'mvp' AND match_id IN (${matchIdPlaceholders}) GROUP BY account_id`);
+        const mvpCounts = new Map(mvpQuery.all(...matchesToFetch).map(row => [row.account_id, row.cnt]));
+        const svpQuery = db.prepare(`SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'svp' AND match_id IN (${matchIdPlaceholders}) GROUP BY account_id`);
+        const svpCounts = new Map(svpQuery.all(...matchesToFetch).map(row => [row.account_id, row.cnt]));
 
         // Convert to array and calculate derived stats
         const players = Array.from(playerMap.entries()).map(([accountId, stats]) => ({
@@ -605,8 +650,7 @@ async function refreshPlayerStats() {
             svpCount: svpCounts.get(accountId) || 0,
         }));
 
-        // Filter out players with very few matches
-        const qualifiedPlayers = players.filter(p => p.matches >= 3);
+        const qualifiedPlayers = players;
 
         playerStatsCache = {
             data: qualifiedPlayers,
@@ -630,15 +674,18 @@ setInterval(() => {
     refreshMatchCache();
 }, CACHE_TTL_MS);
 
-// Load player stats from database on startup
+// Load Season 2 player stats from database on startup (filtered by SEASON_2_START_MS)
 const dbStats = loadPlayerStatsFromDB();
 if (dbStats.players.length > 0) {
     playerStatsCache = {
         data: dbStats.players,
         lastFetched: dbStats.lastFetched,
-        matchesAnalyzed: 100, // Approximate
+        // Total season games ≈ the most games any single player has played, NOT the
+        // first player's count (rows have no ORDER BY, so players[0] was arbitrary —
+        // that bug let the qualification bar collapse to 1 game after a restart).
+        matchesAnalyzed: dbStats.players.reduce((max, p) => Math.max(max, p.matches), 0),
     };
-    logger.info(`Loaded player stats from database, last updated ${new Date(dbStats.lastFetched).toISOString()}`);
+    logger.info(`Loaded ${dbStats.players.length} Season 2 player stats from database, last updated ${new Date(dbStats.lastFetched).toISOString()}`);
 }
 
 // Refresh player stats if cache is stale (older than 12 hours) or empty
@@ -660,7 +707,6 @@ if (Date.now() - dbStats.lastFetched > PLAYER_STATS_TTL_MS || dbStats.players.le
                 playerStatsCache.data = updatedStats.players;
                 logger.info('Player stats cache updated with new avatars');
             }
-            // Refresh match cache to include new avatars
             return refreshMatchCache();
         }).then(() => {
             logger.info('Match cache refreshed with new avatars');
@@ -728,7 +774,7 @@ server.use('/node_modules', express.static('node_modules'));
 // Optional: Add CORS if needed for browsers
 server.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');  // Allow all for testing
-    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, PATCH, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
@@ -737,23 +783,258 @@ server.use((req, res, next) => {
 server.get('/', (request, response) => {
     logger.info('GET: ' + request.url);
     logger.info('------------------------------------------');
-    return response.sendFile('index.html', { root: '.' });
+    return response.sendFile('index.html', { root: './public' });
 });
 
 server.get('/about', (req, res) => {
-    return res.sendFile('about.html', { root: '.' });
+    return res.sendFile('about.html', { root: './public' });
 });
 
 server.get('/matches', (req, res) => {
-    return res.sendFile('matches.html', { root: '.' });
+    return res.sendFile('matches.html', { root: './public' });
 });
 
 server.get('/rankings', (req, res) => {
-    return res.sendFile('rankings.html', { root: '.' });
+    return res.sendFile('rankings.html', { root: './public' });
 });
 
 server.get('/livegame', (req, res) => {
-    return res.sendFile('livegame.html', { root: '.' });
+    return res.sendFile('livegame.html', { root: './public' });
+});
+
+server.get('/summer-planning', (req, res) => {
+    return res.sendFile('summer-planning.html', { root: './public' });
+});
+
+// ─── Summer trip planning API ────────────────────────────────────────────────
+const PLANNING_PW = (process.env.SUMMER_PLANNING_PASSWORD || '').trim();
+// Admin name (honor-system, same as all identity here): whoever plans under this
+// first name may remove any item, not just their own. Empty => no admin.
+const PLANNING_ADMIN = (process.env.SUMMER_PLANNING_ADMIN || '').trim();
+const isPlanningAdmin = (name) => !!PLANNING_ADMIN && String(name).trim().toLowerCase() === PLANNING_ADMIN.toLowerCase();
+// Deterministic token: survives restarts with no session store; rotating the
+// password invalidates all stored tokens. Null when unconfigured => fail closed.
+const planningToken = PLANNING_PW
+    ? createHmac('sha256', PLANNING_PW).update('summer-planning-token-v1').digest('hex')
+    : null;
+
+function planningSafeEqual(a, b) {
+    // Hash both sides so timingSafeEqual always gets equal-length buffers
+    return timingSafeEqual(
+        createHash('sha256').update(String(a)).digest(),
+        createHash('sha256').update(String(b)).digest()
+    );
+}
+
+function requirePlanningAuth(req, res, next) {
+    if (!planningToken) return res.status(503).json({ error: 'Planning is not configured on this server' });
+    const header = req.get('authorization') || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (!token || !planningSafeEqual(token, planningToken)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+}
+
+const TRIP_DATES = ['2026-07-02', '2026-07-03', '2026-07-04', '2026-07-05', '2026-07-06'];
+const MEAL_SLOTS = ['breakfast', 'lunch', 'dinner'];
+const ITEM_CATEGORIES = ['meal', 'snack', 'drink', 'grocery'];
+const MAX_INGREDIENTS = 40;
+
+// Insert a single trip item. source is the parent meal id for ingredients, else null.
+const insertTripItem = db.prepare(`INSERT INTO trip_items
+    (category, trip_date, meal_slot, item_name, notes, created_by, created_at, source_item_id, quantity)
+    VALUES (@category, @tripDate, @mealSlot, @itemName, @notes, @createdBy, @createdAt, @sourceItemId, @quantity)`);
+
+// Clamp a quantity to a positive integer 1..9999, or return fallback if unusable.
+function parseQuantity(raw, fallback = 1) {
+    const n = Math.floor(Number(raw));
+    if (!Number.isFinite(n) || n < 1) return fallback;
+    return Math.min(n, 9999);
+}
+
+// Normalize an ingredients payload to a clean [{name, quantity}] (drops blanks).
+// Accepts strings (qty 1) or {name, quantity}. Returns null if the shape is invalid.
+function cleanIngredients(raw) {
+    if (raw == null) return [];
+    if (!Array.isArray(raw)) return null;
+    const out = [];
+    for (const entry of raw) {
+        let name, quantity;
+        if (typeof entry === 'string') { name = entry.trim(); quantity = 1; }
+        else if (entry && typeof entry === 'object') {
+            name = typeof entry.name === 'string' ? entry.name.trim() : '';
+            quantity = parseQuantity(entry.quantity, 1);
+        } else continue;
+        if (!name) continue;
+        if (name.length > 100) return null;
+        out.push({ name, quantity });
+    }
+    return out.length > MAX_INGREDIENTS ? null : out;
+}
+
+server.post('/api/summer-planning/verify', (req, res) => {
+    if (!planningToken) return res.status(503).json({ error: 'Planning is not configured on this server' });
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!password || !planningSafeEqual(password, PLANNING_PW)) {
+        return res.status(401).json({ error: 'Incorrect password' });
+    }
+    return res.json({ token: planningToken });
+});
+
+server.get('/api/summer-planning/data', requirePlanningAuth, (req, res) => {
+    const items = db.prepare('SELECT * FROM trip_items ORDER BY created_at').all();
+    const allergies = db.prepare('SELECT name_key, display_name, allergies FROM trip_allergies ORDER BY display_name').all();
+    // isAdmin is derived from the caller's claimed name; we never expose the admin
+    // name itself, so non-admins just get false.
+    const isAdmin = isPlanningAdmin(req.query.name || '');
+    return res.json({ items, allergies, isAdmin });
+});
+
+server.post('/api/summer-planning/items', requirePlanningAuth, (req, res) => {
+    const body = req.body || {};
+    const category = typeof body.category === 'string' ? body.category : '';
+    const itemName = typeof body.itemName === 'string' ? body.itemName.trim() : '';
+    const notes = typeof body.notes === 'string' ? body.notes.trim() : '';
+    const createdBy = typeof body.createdBy === 'string' ? body.createdBy.trim() : '';
+
+    if (!ITEM_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
+    if (!itemName || itemName.length > 100) return res.status(400).json({ error: 'Item name is required (max 100 chars)' });
+    if (notes.length > 300) return res.status(400).json({ error: 'Notes too long (max 300 chars)' });
+    if (!createdBy || createdBy.length > 40) return res.status(400).json({ error: 'Name is required (max 40 chars)' });
+
+    let tripDate = null;
+    let mealSlot = null;
+    let ingredients = [];
+    if (category === 'meal') {
+        if (!TRIP_DATES.includes(body.tripDate)) return res.status(400).json({ error: 'Meal date must be a trip date (Jul 2-6, 2026)' });
+        if (!MEAL_SLOTS.includes(body.mealSlot)) return res.status(400).json({ error: 'Meal slot must be breakfast, lunch, or dinner' });
+        tripDate = body.tripDate;
+        mealSlot = body.mealSlot;
+        ingredients = cleanIngredients(body.ingredients);
+        if (ingredients === null) return res.status(400).json({ error: `Ingredients must each be ≤100 chars (max ${MAX_INGREDIENTS})` });
+    }
+
+    const createdAt = Date.now();
+    const quantity = category === 'grocery' ? parseQuantity(body.quantity, 1) : 1;
+    // Insert the item and any meal ingredients (as linked grocery rows) atomically.
+    const create = db.transaction(() => {
+        const info = insertTripItem.run({ category, tripDate, mealSlot, itemName, notes: notes || null, createdBy, createdAt, sourceItemId: null, quantity });
+        const mealId = info.lastInsertRowid;
+        for (const ing of ingredients) {
+            insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ing.name, notes: null, createdBy, createdAt, sourceItemId: mealId, quantity: ing.quantity });
+        }
+        return mealId;
+    });
+    const newId = create();
+    const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(newId);
+    logger.info(`[Planning] ${createdBy} added ${category}: ${itemName}${ingredients.length ? ` (+${ingredients.length} ingredients)` : ''}`);
+    return res.status(201).json({ item });
+});
+
+// Add one ingredient to an existing meal (creates a linked grocery row). Only the
+// meal's owner or the admin may add ingredients; the grocery is attributed to the
+// meal's owner so it lands on their grocery commitment.
+server.post('/api/summer-planning/items/:id/ingredients', requirePlanningAuth, (req, res) => {
+    const mealId = Number(req.params.id);
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const ingredientName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim() : '';
+    if (!Number.isInteger(mealId)) return res.status(400).json({ error: 'Invalid meal id' });
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (!ingredientName || ingredientName.length > 100) return res.status(400).json({ error: 'Ingredient is required (max 100 chars)' });
+
+    const meal = db.prepare('SELECT created_by, category FROM trip_items WHERE id = ?').get(mealId);
+    if (!meal || meal.category !== 'meal') return res.status(404).json({ error: 'Meal not found' });
+    const isOwner = meal.created_by.trim().toLowerCase() === name.toLowerCase();
+    if (!isOwner && !isPlanningAdmin(name)) return res.status(403).json({ error: 'You can only edit your own meals' });
+
+    const quantity = parseQuantity(req.body?.quantity, 1);
+    const info = insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ingredientName, notes: null, createdBy: meal.created_by, createdAt: Date.now(), sourceItemId: mealId, quantity });
+    const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(info.lastInsertRowid);
+    return res.status(201).json({ item });
+});
+
+server.delete('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) => {
+    const id = Number(req.params.id);
+    const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid item id' });
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+
+    const row = db.prepare('SELECT created_by FROM trip_items WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ error: 'Item not found' });
+    const isOwner = row.created_by.trim().toLowerCase() === name.toLowerCase();
+    if (!isOwner && !isPlanningAdmin(name)) {
+        return res.status(403).json({ error: 'You can only remove your own items' });
+    }
+    // Deleting a meal also removes the ingredient groceries linked to it.
+    db.prepare('DELETE FROM trip_items WHERE id = ? OR source_item_id = ?').run(id, id);
+    logger.info(`[Planning] ${name} removed item ${id}${isOwner ? '' : ' (admin)'}`);
+    return res.json({ ok: true });
+});
+
+// Edit an item's name/notes (snacks, drinks, groceries, and meal ingredients).
+// An ingredient is a single grocery row shown both on its meal and in the grocery
+// list, so editing it here updates both places. Owner or admin only.
+server.patch('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) => {
+    const id = Number(req.params.id);
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim() : '';
+    const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim() : '';
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid item id' });
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (!itemName || itemName.length > 100) return res.status(400).json({ error: 'Item name is required (max 100 chars)' });
+    if (notes.length > 300) return res.status(400).json({ error: 'Notes too long (max 300 chars)' });
+
+    const row = db.prepare('SELECT created_by, category, quantity FROM trip_items WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ error: 'Item not found' });
+    if (row.category === 'meal') return res.status(400).json({ error: 'Meals are not editable here' });
+    const isOwner = row.created_by.trim().toLowerCase() === name.toLowerCase();
+    if (!isOwner && !isPlanningAdmin(name)) return res.status(403).json({ error: 'You can only edit your own items' });
+
+    // Quantity only applies to groceries; keep the existing value if none was sent.
+    const quantity = row.category === 'grocery' ? parseQuantity(req.body?.quantity, row.quantity || 1) : (row.quantity || 1);
+    db.prepare('UPDATE trip_items SET item_name = ?, notes = ?, quantity = ? WHERE id = ?').run(itemName, notes || null, quantity, id);
+    const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(id);
+    logger.info(`[Planning] ${name} edited item ${id}${isOwner ? '' : ' (admin)'}`);
+    return res.json({ item });
+});
+
+// Toggle the shared "purchased" flag for every grocery row sharing a name (the
+// grocery list groups by name). Anybody can mark a shopping item bought.
+server.put('/api/summer-planning/groceries/purchased', requirePlanningAuth, (req, res) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const itemName = typeof req.body?.itemName === 'string' ? req.body.itemName.trim() : '';
+    const purchased = req.body?.purchased === true || req.body?.purchased === 'true';
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (!itemName) return res.status(400).json({ error: 'Item name is required' });
+
+    const info = db.prepare(
+        `UPDATE trip_items SET purchased_by = ? WHERE category = 'grocery' AND lower(trim(item_name)) = lower(trim(?))`
+    ).run(purchased ? name : null, itemName);
+    if (info.changes === 0) return res.status(404).json({ error: 'No matching groceries' });
+    logger.info(`[Planning] ${name} marked "${itemName}" ${purchased ? 'purchased' : 'unpurchased'} (${info.changes})`);
+    return res.json({ ok: true, updated: info.changes });
+});
+
+server.put('/api/summer-planning/allergies', requirePlanningAuth, (req, res) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const allergies = typeof req.body?.allergies === 'string' ? req.body.allergies.trim() : '';
+    if (!name || name.length > 40) return res.status(400).json({ error: 'Name is required (max 40 chars)' });
+    if (!allergies || allergies.length > 500) return res.status(400).json({ error: 'Allergies text is required (max 500 chars)' });
+
+    db.prepare(`INSERT INTO trip_allergies (name_key, display_name, allergies, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(name_key) DO UPDATE SET display_name = excluded.display_name,
+            allergies = excluded.allergies, updated_at = excluded.updated_at`)
+        .run(name.toLowerCase(), name, allergies, Date.now());
+    return res.json({ ok: true });
+});
+
+server.delete('/api/summer-planning/allergies', requirePlanningAuth, (req, res) => {
+    const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    const info = db.prepare('DELETE FROM trip_allergies WHERE name_key = ?').run(name.toLowerCase());
+    if (info.changes === 0) return res.status(404).json({ error: 'No allergy entry found' });
+    return res.json({ ok: true });
 });
 
 server.get('/api/live-game', async (req, res) => {
@@ -917,6 +1198,27 @@ server.get('/api/recent-matches', async (req, res) => {
     });
 });
 
+server.post('/api/refresh-matches', async (_req, res) => {
+    logger.info('Manual match cache refresh triggered via API');
+    await refreshMatchCache();
+    return res.json({ status: 'refreshed', lastUpdated: matchCache.lastFetched });
+});
+
+server.post('/api/refresh-rankings', async (req, res) => {
+    if (isRefreshingStats) {
+        return res.json({ status: 'already_refreshing' });
+    }
+    logger.info('Manual rankings refresh triggered via API');
+    refreshPlayerStats();
+    return res.json({ status: 'refresh_started' });
+});
+
+server.post('/api/refresh-discord-members', async (req, res) => {
+    logger.info('Manual Discord members refresh triggered via API');
+    await refreshDiscordMembers();
+    return res.json({ status: 'refreshed', count: discordMembersCache.data.length });
+});
+
 server.get('/api/top-rankings', async (req, res) => {
     // Don't refresh if already refreshing
     if (!isRefreshingStats && Date.now() - playerStatsCache.lastFetched > PLAYER_STATS_TTL_MS) {
@@ -926,14 +1228,15 @@ server.get('/api/top-rankings', async (req, res) => {
 
     const players = playerStatsCache.data || [];
 
-    // Dynamic minimum match threshold to filter statistical outliers.
-    // Uses 25% of the median match count (minimum 10) so the bar rises
-    // as the league plays more games.
-    const matchCounts = players.map(p => p.matches).sort((a, b) => a - b);
-    const median = matchCounts.length > 0
-        ? matchCounts[Math.floor(matchCounts.length / 2)]
-        : 0;
-    const minMatches = Math.max(10, Math.floor(median * 0.25));
+    // Rolling qualification bar: scales with the length of the season so a player
+    // with only a handful of games can't top the board on a tiny sample.
+    // "Season games" = the most games any single player has played. This equals the
+    // distinct Season 2 match count when the most-active player attends every game,
+    // and is a safe lower bound otherwise. Taking the max with the cached
+    // matchesAnalyzed keeps the bar from collapsing if that value is ever stale/empty.
+    const mostGamesPlayed = players.reduce((max, p) => Math.max(max, p.matches), 0);
+    const totalSeasonMatches = Math.max(playerStatsCache.matchesAnalyzed || 0, mostGamesPlayed);
+    const minMatches = Math.max(2, Math.ceil(Math.sqrt(totalSeasonMatches)));
     const qualified = players.filter(p => p.matches >= minMatches);
 
     // Top 10 by win rate
@@ -989,16 +1292,81 @@ server.get('/api/top-rankings', async (req, res) => {
         playerOfTheMonth,
         minMatchesRequired: minMatches,
         lastUpdated: playerStatsCache.lastFetched,
-        matchesAnalyzed: playerStatsCache.matchesAnalyzed || 0,
+        matchesAnalyzed: totalSeasonMatches,
         cacheMaxAge: PLAYER_STATS_TTL_MS,
     });
+});
+
+// ─── Discord member names + avatars for referral autocomplete ───────────────
+let discordMembersCache = { data: [], lastFetched: 0 };
+const DISCORD_MEMBERS_TTL = 12 * 60 * 60 * 1000; // 12 hours
+
+async function refreshDiscordMembers() {
+    try {
+        const members = [];
+        let after = '0';
+        let hasMore = true;
+
+        // Fetch all guild members in batches of 1000 (Discord API max per request)
+        while (hasMore) {
+            const memberRes = await fetch(
+                `https://discord.com/api/guilds/${config.GUILD_ID}/members?limit=1000&after=${after}`, {
+                headers: { 'Authorization': `Bot ${BOT_TOKEN}` },
+            });
+            if (!memberRes.ok) break;
+
+            const batch = await memberRes.json();
+            if (batch.length === 0) { hasMore = false; break; }
+
+            for (const m of batch) {
+                const displayName = m.nick || m.user?.global_name || m.user?.username;
+                if (displayName && !m.user?.bot) {
+                    // Build Discord CDN avatar URL (64px for small circular display)
+                    let avatar = null;
+                    if (m.user?.avatar) {
+                        const ext = m.user.avatar.startsWith('a_') ? 'gif' : 'png';
+                        avatar = `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.${ext}?size=64`;
+                    } else if (m.user?.id) {
+                        // Default Discord avatar based on user ID
+                        const index = (BigInt(m.user.id) >> 22n) % 6n;
+                        avatar = `https://cdn.discordapp.com/embed/avatars/${index}.png`;
+                    }
+                    members.push({ name: displayName, avatar });
+                }
+            }
+
+            after = batch[batch.length - 1].user.id;
+            if (batch.length < 1000) hasMore = false;
+        }
+
+        if (members.length > 0) {
+            discordMembersCache = { data: members, lastFetched: Date.now() };
+            logger.info(`Refreshed Discord members cache: ${members.length} members with avatars`);
+        }
+    } catch (err) {
+        logger.error('Error refreshing Discord members cache:', err);
+    }
+}
+
+// Initial fetch + periodic refresh every 12 hours
+refreshDiscordMembers();
+setInterval(refreshDiscordMembers, DISCORD_MEMBERS_TTL);
+
+server.get('/api/discord-members', async (req, res) => {
+    // If cache is empty (first request before initial fetch completes), trigger a fetch
+    if (discordMembersCache.data.length === 0) {
+        await refreshDiscordMembers();
+    }
+    return res.json(discordMembersCache.data);
 });
 
 server.put('/', async (req, res) => {
     logger.info('PUT: ' + JSON.stringify(req.body));
     logger.info('------------------------------------------');
 
-    const { tokenType, accessToken, rank } = req.body;
+    const { tokenType, accessToken, rank, referredBy: rawReferredBy } = req.body;
+    const validNames = new Set((discordMembersCache.data || []).map(m => m.name));
+    const referredBy = (rawReferredBy && validNames.has(rawReferredBy)) ? rawReferredBy : null;
 
     if (!tokenType || !accessToken) {
         logger.error("Returning 400: Either missing tokentype or accesstoken.  tokenType: ${tokenType}  accessToken: ${accessToken}")
@@ -1065,13 +1433,14 @@ server.put('/', async (req, res) => {
         // Insert user into database with rating
         try {
             const stmt = db.prepare(`
-                INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched, rating)
-                VALUES (?, ?, datetime('now'), ?, 0, ?)
+                INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched, rating, referred_by)
+                VALUES (?, ?, datetime('now'), ?, 0, ?, ?)
                 ON CONFLICT(discord_id) DO UPDATE SET
                     steam_id = excluded.steam_id,
-                    rating = excluded.rating
+                    rating = excluded.rating,
+                    referred_by = excluded.referred_by
             `);
-            stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, rating);
+            stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, rating, referredBy || null);
         } catch (err) {
             logger.error('DB upsert error:', err.message);
         }
@@ -1104,7 +1473,7 @@ server.put('/', async (req, res) => {
                 method: 'PUT',
                 body: JSON.stringify({ access_token: accessToken }),
                 headers: {
-                    'Authorization': `Bot ${config.BOT_TOKEN}`,
+                    'Authorization': `Bot ${BOT_TOKEN}`,
                     'Content-Type': 'application/json',
                 },
             });

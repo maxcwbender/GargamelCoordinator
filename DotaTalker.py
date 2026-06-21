@@ -7,11 +7,16 @@ gevent.monkey.patch_all()
 import asyncio
 import json
 import logging
+import os
 import random
 import threading
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Dict, Optional
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from google.protobuf.json_format import MessageToDict
 from steam.client import SteamClient
@@ -470,8 +475,8 @@ class ClientWrapper:
         Runs in a dedicated OS thread. Owns SteamClient + Dota2Client and all gevent work.
         """
         try:
-            uname = self.config.get(f"username_{self.account_index}")
-            pwd = self.config.get(f"password_{self.account_index}")
+            uname = os.environ.get(f"STEAM_USERNAME_{self.account_index}")
+            pwd = os.environ.get(f"STEAM_PASSWORD_{self.account_index}")
             if not uname or not pwd:
                 self.logger.error(f"[Game {self.game_id}] Missing credentials for account index {self.account_index}")
                 self._ready_evt.set()  # unblock caller so we error fast
@@ -789,7 +794,7 @@ class DotaTalker:
         with open("config.json") as f:
             self.config: dict = json.load(f)
 
-        # account allocator (based on config["numClients"] + username_i/password_i)
+        # account allocator (based on config["numClients"] + STEAM_USERNAME_i/STEAM_PASSWORD_i env vars)
         self.accounts = ClientAccounts(
             total=int(self.config.get("numClients", 1)),
             in_use=set()
