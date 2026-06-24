@@ -18,6 +18,7 @@ import aiohttp
 from urllib.parse import urljoin
 
 import DBFunctions as DB
+from mover_client import MoverClient
 from logger import setup_logging
 import logging
 from dotenv import load_dotenv
@@ -357,6 +358,10 @@ class Master_Bot(commands.Bot):
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
         self.rest_api = RESTAPIClient(base_url=self.config.get("REST_API_URL", "http://localhost:8080"))
+        # All player voice-moves are delegated to the standalone mover microservice so they
+        # run on a dedicated token pool, off the main bot's rate-limit bucket. Falls back to
+        # moving players directly if the service is unreachable (see _dispatch_moves).
+        self.mover = MoverClient(base_url=self.config.get("MOVER_API_URL", "http://127.0.0.1:9997"))
         self.coordinator = TC.TheCoordinator(self, None)  # Coordinator doesn't need dota_talker anymore
         self.pending_matches = set()
         self.ready_check_lock = asyncio.Lock()
@@ -2456,22 +2461,18 @@ class Master_Bot(commands.Bot):
                 # Update voice channel assignments based on rebalanced teams
                 radiant_channel, dire_channel = self.game_channels.get(game_id, (None, None))
                 if radiant_channel and dire_channel:
-                    # Move players to correct voice channels based on rebalanced teams
+                    # Move players to their rebalanced team channels via the mover service.
+                    rebalance_pairs = []
                     for discord_id in radiant_discord_ids:
                         member = self.the_guild.get_member(discord_id)
                         if member and member.voice:
-                            try:
-                                await member.move_to(radiant_channel)
-                            except (discord.HTTPException, discord.ClientException):
-                                logger.debug(f"[Game {game_id}] Couldn't move {discord_id} to Radiant channel")
+                            rebalance_pairs.append((member, radiant_channel))
                     
                     for discord_id in dire_discord_ids:
                         member = self.the_guild.get_member(discord_id)
                         if member and member.voice:
-                            try:
-                                await member.move_to(dire_channel)
-                            except (discord.HTTPException, discord.ClientException):
-                                logger.debug(f"[Game {game_id}] Couldn't move {discord_id} to Dire channel")
+                            rebalance_pairs.append((member, dire_channel))
+                    await self._dispatch_moves(rebalance_pairs, game_id)
                 
                 # Use the teams from REST API for the embed
                 radiant = radiant_discord_ids
@@ -3195,55 +3196,69 @@ class Master_Bot(commands.Bot):
 
     async def _move_members_with_rate_limit(self, members: list, target_channel: discord.VoiceChannel, game_id: int):
         """
-        Move members to target channel.
-        discord.py handles rate limiting internally via X-RateLimit headers and
-        automatic 429 retry, so we fire all moves concurrently and let the HTTP
-        client pace them. A small per-member stagger avoids a thundering-herd
-        burst against the per-route bucket.
-
-        Args:
-            members: List of discord.Member objects to move
-            target_channel: Target voice channel
-            game_id: Game ID for logging
+        Move members to target_channel via the mover microservice (off the main bot's
+        rate-limit bucket), skipping anyone not in voice or already in the target.
+        Falls back to direct moves if the mover is unreachable (see _dispatch_moves).
         """
-        if not members:
+        pairs = self._filter_moves(members, target_channel)
+        if not pairs:
+            logger.info(f"[Game {game_id}] No members need to be moved")
             return
+        logger.info(f"[Game {game_id}] Moving {len(pairs)} members to {target_channel.name}")
+        await self._dispatch_moves(pairs, game_id)
+        logger.info(f"[Game {game_id}] Completed moving members to {target_channel.name}")
 
-        # Filter out members that don't need to be moved
-        members_to_move = []
+    def _filter_moves(self, members: list, target_channel: discord.VoiceChannel):
+        """Build (member, channel) pairs for members that actually need moving:
+        connected to voice and not already in the target channel."""
+        pairs = []
         for member in members:
             if not member.voice or not member.voice.channel:
                 continue
             if member.voice.channel.id == target_channel.id:
                 continue
-            members_to_move.append(member)
+            pairs.append((member, target_channel))
+        return pairs
 
-        if not members_to_move:
-            logger.info(f"[Game {game_id}] No members need to be moved")
+    async def _dispatch_moves(self, pairs: list, game_id: int):
+        """Delegate a batch of moves to the mover service. `pairs` is a list of
+        (discord.Member, discord.VoiceChannel). Awaits fully so callers that delete the
+        game channels afterward stay correctly ordered. Falls back to direct discord.py
+        moves for the whole batch if the service is unreachable, or for any moves it
+        reports as failed."""
+        if not pairs:
             return
+        moves = [(member.id, channel.id) for member, channel in pairs]
+        result = await self.mover.move_batch(self.the_guild.id, moves)
+        if result is None:
+            logger.warning(f"[Game {game_id}] Mover service unreachable — falling back to direct moves")
+            await self._fallback_move(pairs, game_id)
+            return
+        failed_keys = {
+            (r["user_id"], r["channel_id"])
+            for r in result.get("results", []) if not r.get("ok")
+        }
+        if failed_keys:
+            failed_pairs = [(m, ch) for m, ch in pairs if (m.id, ch.id) in failed_keys]
+            logger.warning(f"[Game {game_id}] Mover reported {len(failed_pairs)} failed move(s) — retrying directly")
+            await self._fallback_move(failed_pairs, game_id)
 
-        logger.info(f"[Game {game_id}] Moving {len(members_to_move)} members to {target_channel.name}")
-
-        async def _move_one(member: discord.Member, index: int):
-            """Move a single member with a small stagger to spread requests."""
+    async def _fallback_move(self, pairs: list, game_id: int):
+        """Direct discord.py moves (the pre-mover behavior); the only place move_to remains.
+        A small per-member stagger avoids a thundering-herd burst against the per-route bucket."""
+        async def _move_one(member, channel, index):
             if index > 0:
                 await asyncio.sleep(0.15 * index)
             try:
-                await member.move_to(target_channel)
-                logger.info(f"[Game {game_id}] Moved {member.display_name} to {target_channel.name}")
+                await member.move_to(channel)
             except discord.HTTPException as e:
-                logger.warning(
-                    f"[Game {game_id}] Failed to move {member.display_name}: "
-                    f"{e.status} {e.text}"
-                )
+                logger.warning(f"[Game {game_id}] Failed to move {member.display_name}: {e.status} {e.text}")
             except Exception as e:
                 logger.warning(f"[Game {game_id}] Failed to move {member.display_name}: {e}")
 
         await asyncio.gather(*[
-            _move_one(member, i) for i, member in enumerate(members_to_move)
-        ])
-
-        logger.info(f"[Game {game_id}] Completed moving all members to {target_channel.name}")
+            _move_one(member, channel, i) for i, (member, channel) in enumerate(pairs)
+        ], return_exceptions=True)
 
     async def clear_game(self, game_id: int):
         """
@@ -3590,15 +3605,8 @@ class Master_Bot(commands.Bot):
                     if m and m.voice:
                         all_game_members.append((m, dire_channel))
 
-                # Use _move_members_with_rate_limit style stagger
-                async def _move(member, channel, idx):
-                    if idx > 0:
-                        await asyncio.sleep(0.15 * idx)
-                    await member.move_to(channel)
-
-                await asyncio.gather(*[
-                    _move(m, ch, i) for i, (m, ch) in enumerate(all_game_members)
-                ], return_exceptions=True)
+                # Delegate the start-of-game moves to the mover service (falls back to direct).
+                await self._dispatch_moves(all_game_members, game_id)
             except Exception as e:
                 logger.exception(f"Unexpected Exception: {e}")
 
