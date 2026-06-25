@@ -452,6 +452,15 @@ func runSteamLoginCheck() int {
 		return 1
 	}
 
+	// Fetch a fresh CM server list exactly like the real game path (lobbymanager.go:2460),
+	// so this test isn't logging in against a stale/static IP pool. A failure here is itself
+	// diagnostic: it means the box can't reach Steam's directory API.
+	if err := steam.InitializeSteamDirectory(); err != nil {
+		log.Printf("[check] WARNING: could not fetch live Steam server list (%v) — falling back to the static list. If this fails, suspect network reachability to Steam.", err)
+	} else {
+		log.Printf("[check] Steam directory initialized with live server list")
+	}
+
 	failures := 0
 	for i, acct := range pool.accounts {
 		log.Printf("[check] Testing account %d (%s)...", i, acct.Username)
