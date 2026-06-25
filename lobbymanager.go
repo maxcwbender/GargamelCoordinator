@@ -442,10 +442,87 @@ func loadDotenv(path string) {
 	}
 }
 
+// runSteamLoginCheck logs into each configured Steam account, confirms the logon
+// succeeded, logs out, and reports the outcome. Invoked via: lobbymanager check
+// Exits 0 if every account logs in, non-zero if any fail — cron/healthcheck friendly.
+func runSteamLoginCheck() int {
+	pool, err := NewAccountPool()
+	if err != nil {
+		log.Printf("[check] %v", err)
+		return 1
+	}
+
+	failures := 0
+	for i, acct := range pool.accounts {
+		log.Printf("[check] Testing account %d (%s)...", i, acct.Username)
+		if checkSteamLogin(acct) {
+			log.Printf("[check] account %d (%s): LOGIN OK", i, acct.Username)
+		} else {
+			log.Printf("[check] account %d (%s): LOGIN FAILED", i, acct.Username)
+			failures++
+		}
+	}
+
+	if failures == 0 {
+		log.Printf("[check] SUCCESS: all %d account(s) logged in and out cleanly.", len(pool.accounts))
+		return 0
+	}
+	log.Printf("[check] FAILURE: %d of %d account(s) could not log in.", failures, len(pool.accounts))
+	return 1
+}
+
+// checkSteamLogin attempts a single Steam logon for one account and returns true on
+// success. It connects, logs on, waits for the result (or a timeout), then disconnects.
+func checkSteamLogin(acct AccountInfo) bool {
+	client := steam.NewClient()
+	client.Connect()
+	defer client.Disconnect()
+
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			log.Printf("[check]   timed out after 30s with no logon result (possible network / Steam CM reachability problem)")
+			return false
+		case event, ok := <-client.Events():
+			if !ok {
+				log.Printf("[check]   Steam event channel closed before logon completed")
+				return false
+			}
+			switch e := event.(type) {
+			case *steam.ConnectedEvent:
+				log.Printf("[check]   connected to Steam, sending logon...")
+				client.Auth.LogOn(&steam.LogOnDetails{
+					Username: acct.Username,
+					Password: acct.Password,
+				})
+			case *steam.LoggedOnEvent:
+				log.Printf("[check]   logon succeeded — logging out")
+				return true
+			case *steam.LogOnFailedEvent:
+				// %+v includes the EResult. Common values: 5=InvalidPassword,
+				// 63/65=SteamGuard(email), 85/88=2FA needed/mismatch,
+				// 84=RateLimitExceeded, 3=NoConnection, 20=ServiceUnavailable.
+				log.Printf("[check]   logon FAILED: %+v", e)
+				return false
+			case *steam.DisconnectedEvent:
+				log.Printf("[check]   disconnected before logon completed")
+				return false
+			}
+		}
+	}
+}
+
 func main() {
 	loadDotenv(".env")
 	// Redirect log output to stdout instead of stderr
 	log.SetOutput(os.Stdout)
+
+	// Steam login self-test: `lobbymanager check` logs into each configured account,
+	// confirms success, logs out, and exits 0 (all OK) or 1 (any failed). No HTTP server.
+	if len(os.Args) > 1 && os.Args[1] == "check" {
+		os.Exit(runSteamLoginCheck())
+	}
 
 	log.Println("Starting Gargamel Lobby Manager REST API server...")
 

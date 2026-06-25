@@ -3519,7 +3519,17 @@ class Master_Bot(commands.Bot):
         password = setup_info['password']
         
         logger.info(f"[Game {game_id}] Setting up Discord channels and messages (lobby established)")
-        
+
+        # Log the full roster with Discord display names (not raw IDs) at game start.
+        def _roster_names(ids):
+            names = []
+            for mid in ids:
+                m = self.the_guild.get_member(mid)
+                names.append(m.display_name if m else f"<unknown:{mid}>")
+            return names
+        logger.info(f"[Game {game_id}] Radiant ({len(radiant)}): {', '.join(_roster_names(radiant))}")
+        logger.info(f"[Game {game_id}] Dire ({len(dire)}): {', '.join(_roster_names(dire))}")
+
         try:
             # Create voice channels
             create_tasks = [
