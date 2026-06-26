@@ -445,7 +445,7 @@ func loadDotenv(path string) {
 // runSteamLoginCheck logs into each configured Steam account, confirms the logon
 // succeeded, logs out, and reports the outcome. Invoked via: lobbymanager check
 // Exits 0 if every account logs in, non-zero if any fail — cron/healthcheck friendly.
-func runSteamLoginCheck() int {
+func runSteamLoginCheck(guardCode, guardType string) int {
 	pool, err := NewAccountPool()
 	if err != nil {
 		log.Printf("[check] %v", err)
@@ -464,7 +464,7 @@ func runSteamLoginCheck() int {
 	failures := 0
 	for i, acct := range pool.accounts {
 		log.Printf("[check] Testing account %d (%s)...", i, acct.Username)
-		if checkSteamLogin(acct) {
+		if checkSteamLogin(acct, guardCode, guardType) {
 			log.Printf("[check] account %d (%s): LOGIN OK", i, acct.Username)
 		} else {
 			log.Printf("[check] account %d (%s): LOGIN FAILED", i, acct.Username)
@@ -482,7 +482,7 @@ func runSteamLoginCheck() int {
 
 // checkSteamLogin attempts a single Steam logon for one account and returns true on
 // success. It connects, logs on, waits for the result (or a timeout), then disconnects.
-func checkSteamLogin(acct AccountInfo) bool {
+func checkSteamLogin(acct AccountInfo, guardCode, guardType string) bool {
 	client := steam.NewClient()
 	client.Connect()
 	defer client.Disconnect()
@@ -500,11 +500,22 @@ func checkSteamLogin(acct AccountInfo) bool {
 			}
 			switch e := event.(type) {
 			case *steam.ConnectedEvent:
-				log.Printf("[check]   connected to Steam, sending logon...")
-				client.Auth.LogOn(&steam.LogOnDetails{
+				details := &steam.LogOnDetails{
 					Username: acct.Username,
 					Password: acct.Password,
-				})
+				}
+				if guardCode != "" {
+					if guardType == "email" {
+						details.AuthCode = guardCode
+						log.Printf("[check]   connected; sending logon WITH email Steam Guard code")
+					} else {
+						details.TwoFactorCode = guardCode
+						log.Printf("[check]   connected; sending logon WITH mobile Steam Guard code")
+					}
+				} else {
+					log.Printf("[check]   connected to Steam, sending logon...")
+				}
+				client.Auth.LogOn(details)
 			case *steam.LoggedOnEvent:
 				log.Printf("[check]   logon succeeded — logging out")
 				return true
@@ -530,7 +541,17 @@ func main() {
 	// Steam login self-test: `lobbymanager check` logs into each configured account,
 	// confirms success, logs out, and exits 0 (all OK) or 1 (any failed). No HTTP server.
 	if len(os.Args) > 1 && os.Args[1] == "check" {
-		os.Exit(runSteamLoginCheck())
+		// Optional Steam Guard code to test whether the accounts now require 2FA:
+		//   lobbymanager check <code>           (mobile authenticator, default)
+		//   lobbymanager check <code> email     (email Steam Guard)
+		guardCode, guardType := "", "mobile"
+		if len(os.Args) > 2 {
+			guardCode = os.Args[2]
+		}
+		if len(os.Args) > 3 {
+			guardType = os.Args[3]
+		}
+		os.Exit(runSteamLoginCheck(guardCode, guardType))
 	}
 
 	log.Println("Starting Gargamel Lobby Manager REST API server...")
