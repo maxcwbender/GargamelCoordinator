@@ -1027,6 +1027,52 @@ server.get('/api/players/:discordId', async (req, res) => {
     }
 });
 
+server.put('/api/players/me/profile', auth.requireAuth, auth.requireCsrf, (req, res) => {
+    const { rolePrefs, favoriteHeroes } = req.body || {};
+
+    if (!Array.isArray(rolePrefs) || !Array.isArray(favoriteHeroes)) {
+        return res.status(400).json({ error: 'rolePrefs and favoriteHeroes must be arrays' });
+    }
+
+    const roles = [...new Set(rolePrefs)];
+    if (roles.length > 5 || roles.some(r => !Number.isInteger(r) || r < 1 || r > 5)) {
+        return res.status(400).json({ error: 'Role preferences must be positions 1 through 5' });
+    }
+
+    const heroes = [...new Set(favoriteHeroes)];
+    if (heroes.length > 3 || heroes.some(h => !Number.isInteger(h) || h < 1)) {
+        return res.status(400).json({ error: 'Favorite heroes must be up to 3 hero ids' });
+    }
+    // Validate against the constants cache when available; fall back to a sane
+    // numeric range if OpenDota was unreachable at boot so saves don't hard-fail
+    if (Object.keys(dotaConstants.heroes).length > 0) {
+        if (heroes.some(h => !dotaConstants.heroes[h])) {
+            return res.status(400).json({ error: 'Unknown hero id' });
+        }
+    } else if (heroes.some(h => h > 500)) {
+        return res.status(400).json({ error: 'Unknown hero id' });
+    }
+
+    const registered = db.prepare('SELECT 1 FROM users WHERE discord_id = ?').get(req.session.discord_id);
+    if (!registered) return res.status(403).json({ error: 'Register for the league before editing a passport' });
+
+    try {
+        db.prepare(`
+            INSERT INTO player_profiles (discord_id, role_prefs, favorite_heroes, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(discord_id) DO UPDATE SET
+                role_prefs = excluded.role_prefs,
+                favorite_heroes = excluded.favorite_heroes,
+                updated_at = excluded.updated_at
+        `).run(req.session.discord_id, JSON.stringify(roles), JSON.stringify(heroes), Date.now());
+    } catch (err) {
+        logger.error('Profile update error:', err.message);
+        return res.status(500).json({ error: 'Database error' });
+    }
+
+    return res.json({ result: 'Profile updated' });
+});
+
 // ─── Summer trip planning API ────────────────────────────────────────────────
 const PLANNING_PW = (process.env.SUMMER_PLANNING_PASSWORD || '').trim();
 // Admin name (honor-system, same as all identity here): whoever plans under this

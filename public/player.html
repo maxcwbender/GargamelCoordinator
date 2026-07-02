@@ -327,6 +327,153 @@
     .match-link:hover {
       text-decoration: underline;
     }
+
+    /* ── Edit panel ────────────────────────────────────────── */
+    .edit-button {
+      display: inline-block;
+      background: #4e9fd1;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 10px 20px;
+      cursor: pointer;
+      margin-top: 12px;
+    }
+
+    .edit-button:hover {
+      background: #3d8ec0;
+    }
+
+    .edit-button.secondary {
+      background: #f0f0f0;
+      color: #555;
+    }
+
+    .edit-button.secondary:hover {
+      background: #e0e0e0;
+    }
+
+    .role-checkboxes {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .role-checkboxes label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: #2c3e50;
+      cursor: pointer;
+    }
+
+    .role-checkboxes input {
+      width: 18px;
+      height: 18px;
+      accent-color: #4e9fd1;
+      cursor: pointer;
+    }
+
+    .hero-picker {
+      position: relative;
+      margin-top: 12px;
+    }
+
+    .hero-picker input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .hero-picker-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      max-height: 220px;
+      overflow-y: auto;
+      background: white;
+      border: 2px solid #e0e0e0;
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+      z-index: 50;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .hero-picker-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .hero-picker-item:hover {
+      background: #f0f4ff;
+    }
+
+    .hero-picker-item img {
+      width: 48px;
+      height: 27px;
+      border-radius: 4px;
+      object-fit: cover;
+      background: #e0e0e0;
+    }
+
+    .selected-heroes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .selected-hero-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(78, 159, 209, 0.1);
+      border: 1px solid #4e9fd1;
+      border-radius: 20px;
+      padding: 4px 10px 4px 4px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #2c6e9e;
+    }
+
+    .selected-hero-chip img {
+      width: 40px;
+      height: 22px;
+      border-radius: 11px;
+      object-fit: cover;
+    }
+
+    .selected-hero-chip button {
+      background: none;
+      border: none;
+      color: #2c6e9e;
+      font-size: 1rem;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+
+    .save-status {
+      font-size: 0.85rem;
+      margin-left: 12px;
+    }
+
+    .save-status.ok { color: #2e7d32; }
+    .save-status.err { color: #c0392b; }
   </style>
 </head>
 
@@ -399,6 +546,34 @@
         <div class="section-title">Recent Gargamel Matches</div>
         <ul class="match-list" id="match-list"></ul>
         <div class="empty-note" id="matches-empty" style="display: none;">No matches played yet.</div>
+      </div>
+
+      <div style="text-align: center;">
+        <button id="edit-toggle" class="edit-button" style="display: none;">Edit My Passport</button>
+      </div>
+
+      <div class="passport-section" id="edit-panel" style="display: none;">
+        <div class="section-title">Edit Passport</div>
+
+        <div style="margin-bottom: 20px;">
+          <div style="font-weight: 600; color: #2c3e50; margin-bottom: 10px;">Preferred Roles</div>
+          <div class="role-checkboxes" id="role-checkboxes"></div>
+        </div>
+
+        <div>
+          <div style="font-weight: 600; color: #2c3e50; margin-bottom: 4px;">Favorite Heroes (up to 3)</div>
+          <div class="selected-heroes" id="selected-heroes"></div>
+          <div class="hero-picker">
+            <input id="hero-search" type="text" autocomplete="off" placeholder="Search heroes...">
+            <div class="hero-picker-dropdown" id="hero-dropdown"></div>
+          </div>
+        </div>
+
+        <div style="margin-top: 20px;">
+          <button id="save-profile" class="edit-button">Save</button>
+          <button id="cancel-edit" class="edit-button secondary">Cancel</button>
+          <span class="save-status" id="save-status"></span>
+        </div>
       </div>
     </div>
   </div>
@@ -507,6 +682,171 @@
       err.style.display = 'block';
     }
 
+    // ── Edit mode (only revealed on your own passport) ─────────────────────
+    let me = null;
+    let currentPassport = null;
+    let allHeroes = null;
+    let selectedHeroes = []; // [{id, name, img}]
+
+    function renderSelectedHeroes() {
+      const wrap = document.getElementById('selected-heroes');
+      wrap.innerHTML = '';
+      selectedHeroes.forEach(h => {
+        const chip = document.createElement('div');
+        chip.className = 'selected-hero-chip';
+        if (h.img) {
+          const img = document.createElement('img');
+          img.src = h.img;
+          img.alt = '';
+          chip.appendChild(img);
+        }
+        const name = document.createElement('span');
+        name.textContent = h.name;
+        chip.appendChild(name);
+        const remove = document.createElement('button');
+        remove.textContent = '×';
+        remove.title = 'Remove';
+        remove.addEventListener('click', () => {
+          selectedHeroes = selectedHeroes.filter(s => s.id !== h.id);
+          renderSelectedHeroes();
+        });
+        chip.appendChild(remove);
+        wrap.appendChild(chip);
+      });
+    }
+
+    async function openEditPanel() {
+      // Populate role checkboxes from current prefs
+      const boxWrap = document.getElementById('role-checkboxes');
+      boxWrap.innerHTML = '';
+      const prefs = new Set(currentPassport.rolePrefs || []);
+      for (let r = 1; r <= 5; r++) {
+        const label = document.createElement('label');
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.value = r;
+        box.checked = prefs.has(r);
+        label.appendChild(box);
+        label.appendChild(document.createTextNode(ROLE_NAMES[r]));
+        boxWrap.appendChild(label);
+      }
+
+      selectedHeroes = (currentPassport.favoriteHeroes || []).map(h => ({ ...h }));
+      renderSelectedHeroes();
+
+      if (!allHeroes) {
+        try {
+          const res = await fetch('/api/heroes');
+          if (res.ok) allHeroes = await res.json();
+        } catch (err) {
+          console.error('Hero list load error:', err);
+        }
+      }
+      document.getElementById('hero-search').placeholder =
+        allHeroes ? 'Search heroes...' : 'Hero list unavailable right now';
+
+      document.getElementById('save-status').textContent = '';
+      document.getElementById('edit-panel').style.display = 'block';
+      document.getElementById('edit-toggle').style.display = 'none';
+    }
+
+    function closeEditPanel() {
+      document.getElementById('edit-panel').style.display = 'none';
+      document.getElementById('edit-toggle').style.display = 'inline-block';
+      document.getElementById('hero-dropdown').style.display = 'none';
+      document.getElementById('hero-search').value = '';
+    }
+
+    function setupEditHandlers(discordId) {
+      document.getElementById('edit-toggle').addEventListener('click', openEditPanel);
+      document.getElementById('cancel-edit').addEventListener('click', closeEditPanel);
+
+      const search = document.getElementById('hero-search');
+      const dropdown = document.getElementById('hero-dropdown');
+
+      search.addEventListener('input', () => {
+        dropdown.innerHTML = '';
+        const q = search.value.trim().toLowerCase();
+        if (!allHeroes || q.length < 1) { dropdown.style.display = 'none'; return; }
+
+        const chosen = new Set(selectedHeroes.map(h => h.id));
+        const matches = allHeroes
+          .filter(h => h.name.toLowerCase().includes(q) && !chosen.has(h.id))
+          .slice(0, 12);
+        if (matches.length === 0) { dropdown.style.display = 'none'; return; }
+
+        matches.forEach(h => {
+          const item = document.createElement('div');
+          item.className = 'hero-picker-item';
+          const img = document.createElement('img');
+          if (h.img) img.src = h.img;
+          img.alt = '';
+          img.onerror = function () { this.style.visibility = 'hidden'; };
+          const name = document.createElement('span');
+          name.textContent = h.name;
+          item.appendChild(img);
+          item.appendChild(name);
+          item.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            if (selectedHeroes.length >= 3) {
+              document.getElementById('save-status').textContent = 'Max 3 heroes — remove one first.';
+              document.getElementById('save-status').className = 'save-status err';
+              return;
+            }
+            selectedHeroes.push(h);
+            renderSelectedHeroes();
+            search.value = '';
+            dropdown.style.display = 'none';
+          });
+          dropdown.appendChild(item);
+        });
+        dropdown.style.display = 'block';
+      });
+
+      search.addEventListener('blur', () => {
+        setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+      });
+
+      document.getElementById('save-profile').addEventListener('click', async () => {
+        const status = document.getElementById('save-status');
+        const rolePrefs = [...document.querySelectorAll('#role-checkboxes input:checked')]
+          .map(b => Number(b.value));
+        const favoriteHeroes = selectedHeroes.map(h => h.id);
+
+        status.textContent = 'Saving...';
+        status.className = 'save-status';
+        try {
+          const res = await fetch('/api/players/me/profile', {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': me.csrfToken,
+            },
+            body: JSON.stringify({ rolePrefs, favoriteHeroes }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            status.textContent = data?.error || `Save failed (HTTP ${res.status})`;
+            status.className = 'save-status err';
+            return;
+          }
+          status.textContent = 'Saved!';
+          status.className = 'save-status ok';
+          // Refresh the view with the new values
+          const fresh = await fetch(`/api/players/${discordId}`, { cache: 'no-store' });
+          if (fresh.ok) {
+            currentPassport = await fresh.json();
+            renderPassport(currentPassport);
+          }
+          closeEditPanel();
+        } catch (err) {
+          console.error('Save error:', err);
+          status.textContent = 'Network error while saving.';
+          status.className = 'save-status err';
+        }
+      });
+    }
+
     window.addEventListener('DOMContentLoaded', async () => {
       const discordId = pathDiscordId();
       if (!discordId) return showError('Invalid player URL.');
@@ -515,10 +855,25 @@
         const res = await fetch(`/api/players/${discordId}`);
         if (res.status === 404) return showError('Player not found.');
         if (!res.ok) return showError('Something went wrong loading this passport.');
-        renderPassport(await res.json());
+        currentPassport = await res.json();
+        renderPassport(currentPassport);
       } catch (err) {
         console.error('Passport load error:', err);
-        showError('Network error loading this passport.');
+        return showError('Network error loading this passport.');
+      }
+
+      // Reveal edit controls only on the viewer's own passport
+      try {
+        const meRes = await fetch('/api/me');
+        if (meRes.ok) {
+          me = await meRes.json();
+          if (me.discordId === discordId && me.registered) {
+            document.getElementById('edit-toggle').style.display = 'inline-block';
+            setupEditHandlers(discordId);
+          }
+        }
+      } catch (err) {
+        // Anonymous viewers just don't get edit controls
       }
     });
   </script>
