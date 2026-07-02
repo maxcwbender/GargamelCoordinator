@@ -797,21 +797,22 @@ async function fetchLiveGame() {
     }
 }
 
-// Serve static files from node_modules
-server.use('/node_modules', express.static('node_modules'));
-
 // ─── Website accounts (Discord login sessions) ──────────────────────────────
 // Registered BEFORE the CORS middleware below on purpose: /auth/* and /api/me
 // must never be served with Access-Control-Allow-Origin: *.
 const auth = createAuth({ db, logger, config });
 auth.registerRoutes(server);
 
-// Optional: Add CORS if needed for browsers
+// CORS: only public read-only GET APIs are cross-origin readable. Everything
+// else (auth, registration, profile edits, planning) stays same-origin only.
+const PUBLIC_CORS_RE = /^\/api\/(heroes|players\/\d+|live-game(\/status)?|recent-matches|top-rankings|discord-members)$/;
 server.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');  // Allow all for testing
-    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, PATCH, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    if (req.method === 'OPTIONS') return res.sendStatus(200);
+    if ((req.method === 'GET' || req.method === 'OPTIONS') && PUBLIC_CORS_RE.test(req.path)) {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
 });
 
