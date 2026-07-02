@@ -11,6 +11,8 @@ const SESSION_RENEW_MS = 15 * 24 * 60 * 60 * 1000; // sliding renewal when < 15d
 const STATE_TTL_S = 600;                           // oauth_state cookie lifetime
 const SESSION_COOKIE = 'gg_session';
 const STATE_COOKIE = 'oauth_state';
+const STEAM_NONCE_COOKIE = 'steam_nonce';
+const STEAM_OPENID_URL = 'https://steamcommunity.com/openid/login';
 
 const sha256hex = (s) => createHash('sha256').update(String(s)).digest('hex');
 
@@ -90,6 +92,24 @@ export function createAuth({ db, logger, config }) {
     const updateTokens = db.prepare(`
         UPDATE sessions SET access_token = ?, refresh_token = ?, token_expires_at = ? WHERE token_hash = ?
     `);
+
+    // Optional verified Steam link lives in player_profiles; the mandatory
+    // registration-derived users.steam_id is never touched from here.
+    const upsertLinkedSteam = db.prepare(`
+        INSERT INTO player_profiles (discord_id, linked_steam_id, steam_link_method, steam_linked_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(discord_id) DO UPDATE SET
+            linked_steam_id = excluded.linked_steam_id,
+            steam_link_method = excluded.steam_link_method,
+            steam_linked_at = excluded.steam_linked_at,
+            updated_at = excluded.updated_at
+    `);
+    const clearLinkedSteam = db.prepare(`
+        UPDATE player_profiles
+        SET linked_steam_id = NULL, steam_link_method = NULL, steam_linked_at = NULL, updated_at = ?
+        WHERE discord_id = ?
+    `);
+    const selectUserSteam = db.prepare('SELECT CAST(steam_id AS TEXT) AS steam_id FROM users WHERE discord_id = ?');
 
     setInterval(() => {
         try {
@@ -251,6 +271,81 @@ export function createAuth({ db, logger, config }) {
             deleteSession.run(req.session.token_hash);
             res.setHeader('Set-Cookie', cookieStr(SESSION_COOKIE, '', { maxAge: 0 }));
             return res.json({ result: 'Logged out' });
+        });
+
+        // ── Steam linking (optional) ───────────────────────────────────────
+        // Method A: one-click confirm of the Steam id already on file from
+        // registration (Discord Connections).
+        server.post('/api/steam/confirm', requireAuth, requireCsrf, (req, res) => {
+            const row = selectUserSteam.get(req.session.discord_id);
+            if (!row?.steam_id) {
+                return res.status(400).json({ error: 'No Steam account on file — register for the league first.' });
+            }
+            upsertLinkedSteam.run(req.session.discord_id, row.steam_id, 'discord_connection', Date.now(), Date.now());
+            return res.json({ result: 'Steam account confirmed' });
+        });
+
+        server.post('/api/steam/unlink', requireAuth, requireCsrf, (req, res) => {
+            clearLinkedSteam.run(Date.now(), req.session.discord_id);
+            return res.json({ result: 'Steam link removed' });
+        });
+
+        // Method B: Steam OpenID 2.0 — proves ownership, may override method A.
+        server.get('/auth/steam/login', requireAuth, (req, res) => {
+            const nonce = randomBytes(16).toString('hex');
+            res.setHeader('Set-Cookie', cookieStr(STEAM_NONCE_COOKIE, nonce, {
+                maxAge: STATE_TTL_S, path: '/auth',
+            }));
+            const url = STEAM_OPENID_URL + '?' + new URLSearchParams({
+                'openid.ns': 'http://specs.openid.net/auth/2.0',
+                'openid.mode': 'checkid_setup',
+                'openid.return_to': `${SITE_URL}/auth/steam/return?nonce=${nonce}`,
+                'openid.realm': SITE_URL,
+                'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select',
+                'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select',
+            });
+            return res.redirect(url);
+        });
+
+        server.get('/auth/steam/return', requireAuth, async (req, res) => {
+            const fail = () => res.redirect('/players/me?steam=error');
+            try {
+                // Nonce binds the return to this browser and is consumed here,
+                // so a replayed return URL is rejected.
+                const nonce = parseCookies(req)[STEAM_NONCE_COOKIE];
+                res.setHeader('Set-Cookie', cookieStr(STEAM_NONCE_COOKIE, '', { maxAge: 0, path: '/auth' }));
+                if (!nonce || !req.query.nonce || !safeEqual(req.query.nonce, nonce)) return fail();
+
+                if (req.query['openid.mode'] !== 'id_res') return fail();
+                const returnTo = String(req.query['openid.return_to'] || '');
+                if (!returnTo.startsWith(`${SITE_URL}/auth/steam/return`)) return fail();
+
+                // Round-trip every openid.* param back to Steam for verification
+                const params = new URLSearchParams();
+                for (const [k, v] of Object.entries(req.query)) {
+                    if (k.startsWith('openid.')) params.set(k, String(v));
+                }
+                params.set('openid.mode', 'check_authentication');
+                const verifyRes = await fetch(STEAM_OPENID_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: params,
+                });
+                const body = await verifyRes.text();
+                if (!/is_valid\s*:\s*true/.test(body)) return fail();
+
+                const m = String(req.query['openid.claimed_id'] || '')
+                    .match(/^https:\/\/steamcommunity\.com\/openid\/id\/(7656119\d{10})$/);
+                if (!m) return fail();
+                const steamId64 = m[1];
+
+                upsertLinkedSteam.run(req.session.discord_id, steamId64, 'steam_openid', Date.now(), Date.now());
+                logger.info(`Steam linked via OpenID for ${req.session.discord_id}`);
+                return res.redirect('/players/me?steam=linked');
+            } catch (err) {
+                logger.error('Steam OpenID return error:', err.message);
+                return fail();
+            }
         });
 
         server.get('/api/me', (req, res) => {

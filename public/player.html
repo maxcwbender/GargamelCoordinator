@@ -569,6 +569,16 @@
           </div>
         </div>
 
+        <div style="margin-top: 24px;">
+          <div style="font-weight: 600; color: #2c3e50; margin-bottom: 4px;">Steam Account</div>
+          <div class="empty-note" id="steam-link-note"></div>
+          <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px;">
+            <button id="steam-confirm" class="edit-button secondary">Confirm Steam from Registration</button>
+            <button id="steam-openid" class="edit-button secondary">Sign in through Steam</button>
+            <button id="steam-unlink" class="edit-button secondary" style="display: none;">Unlink</button>
+          </div>
+        </div>
+
         <div style="margin-top: 20px;">
           <button id="save-profile" class="edit-button">Save</button>
           <button id="cancel-edit" class="edit-button secondary">Cancel</button>
@@ -715,6 +725,53 @@
       });
     }
 
+    function renderSteamLinkControls() {
+      const note = document.getElementById('steam-link-note');
+      const unlinkBtn = document.getElementById('steam-unlink');
+      const steam = currentPassport.steam || {};
+      if (steam.linked) {
+        note.textContent = steam.linkMethod === 'steam_openid'
+          ? 'Linked and verified through Steam sign-in.'
+          : 'Linked from your registration Steam account.';
+        unlinkBtn.style.display = 'inline-block';
+      } else {
+        note.textContent = 'Not linked yet — your registration Steam account is shown by default.';
+        unlinkBtn.style.display = 'none';
+      }
+    }
+
+    async function refreshPassport(discordId) {
+      const fresh = await fetch(`/api/players/${discordId}`, { cache: 'no-store' });
+      if (fresh.ok) {
+        currentPassport = await fresh.json();
+        renderPassport(currentPassport);
+        renderSteamLinkControls();
+      }
+    }
+
+    async function steamAction(path, discordId) {
+      const status = document.getElementById('save-status');
+      try {
+        const res = await fetch(path, {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': me.csrfToken },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          status.textContent = data?.error || `Failed (HTTP ${res.status})`;
+          status.className = 'save-status err';
+          return;
+        }
+        status.textContent = data?.result || 'Done';
+        status.className = 'save-status ok';
+        await refreshPassport(discordId);
+      } catch (err) {
+        console.error('Steam link error:', err);
+        status.textContent = 'Network error.';
+        status.className = 'save-status err';
+      }
+    }
+
     async function openEditPanel() {
       // Populate role checkboxes from current prefs
       const boxWrap = document.getElementById('role-checkboxes');
@@ -733,6 +790,7 @@
 
       selectedHeroes = (currentPassport.favoriteHeroes || []).map(h => ({ ...h }));
       renderSelectedHeroes();
+      renderSteamLinkControls();
 
       if (!allHeroes) {
         try {
@@ -760,6 +818,12 @@
     function setupEditHandlers(discordId) {
       document.getElementById('edit-toggle').addEventListener('click', openEditPanel);
       document.getElementById('cancel-edit').addEventListener('click', closeEditPanel);
+
+      document.getElementById('steam-confirm').addEventListener('click', () => steamAction('/api/steam/confirm', discordId));
+      document.getElementById('steam-unlink').addEventListener('click', () => steamAction('/api/steam/unlink', discordId));
+      document.getElementById('steam-openid').addEventListener('click', () => {
+        window.location.href = '/auth/steam/login';
+      });
 
       const search = document.getElementById('hero-search');
       const dropdown = document.getElementById('hero-dropdown');
@@ -870,6 +934,17 @@
           if (me.discordId === discordId && me.registered) {
             document.getElementById('edit-toggle').style.display = 'inline-block';
             setupEditHandlers(discordId);
+
+            // Feedback after returning from the Steam OpenID round-trip
+            const steamResult = new URLSearchParams(window.location.search).get('steam');
+            if (steamResult === 'error') {
+              alert('Steam sign-in failed or was cancelled. Please try again.');
+            } else if (steamResult === 'linked') {
+              openEditPanel();
+            }
+            if (steamResult) {
+              history.replaceState(null, '', window.location.pathname);
+            }
           }
         }
       } catch (err) {
