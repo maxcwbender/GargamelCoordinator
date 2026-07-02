@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Player Passport - Gargamel Dota League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f9f9f9;
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────── */
+    .navbar {
+      background: #1a1a2e;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .navbar-brand img {
+      height: 36px;
+      width: auto;
+    }
+
+    .navbar-links {
+      display: flex;
+      gap: 8px;
+      list-style: none;
+    }
+
+    .navbar-links a {
+      color: #b0b8c8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: 6px;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .navbar-links a:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .navbar-links a.active {
+      color: #4e9fd1;
+      background: rgba(78, 159, 209, 0.1);
+    }
+
+    /* ── Page content ──────────────────────────────────────── */
+    .page-content {
+      flex: 1;
+      padding: 3rem 2rem;
+      max-width: 900px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .page-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .page-header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 6px;
+    }
+
+    .page-header p {
+      color: #888;
+      font-size: 0.9rem;
+    }
+
+    /* ── States ─────────────────────────────────────────────── */
+    .loading-spinner {
+      text-align: center;
+      padding: 60px 0;
+      color: #888;
+      font-size: 1rem;
+    }
+
+    .spinner-ring {
+      display: inline-block;
+      width: 36px;
+      height: 36px;
+      border: 3px solid #e0e0e0;
+      border-top-color: #4e9fd1;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 12px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error-box {
+      text-align: center;
+      padding: 60px 0;
+      color: #c0392b;
+      font-size: 1rem;
+    }
+
+    /* ── Passport cards ────────────────────────────────────── */
+    .passport-section {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+
+    .section-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    .identity-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 640px) {
+      .identity-row { grid-template-columns: 1fr; }
+    }
+
+    .identity-card {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px;
+      border: 1px solid #eee;
+      border-radius: 10px;
+    }
+
+    .identity-card img {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: #e0e0e0;
+      flex-shrink: 0;
+    }
+
+    .identity-platform {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+    }
+
+    .identity-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #2c3e50;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .identity-sub {
+      font-size: 0.8rem;
+      color: #999;
+      margin-top: 2px;
+    }
+
+    .link-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-top: 4px;
+      background: #eef6ee;
+      color: #2e7d32;
+    }
+
+    .link-badge.unverified {
+      background: #f4f4f4;
+      color: #888;
+    }
+
+    .rating-chip {
+      display: inline-block;
+      background: rgba(78, 159, 209, 0.12);
+      color: #2c6e9e;
+      font-weight: 700;
+      font-size: 0.9rem;
+      padding: 4px 12px;
+      border-radius: 16px;
+      margin-top: 8px;
+    }
+
+    /* ── Roles ─────────────────────────────────────────────── */
+    .role-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .role-pill {
+      padding: 8px 16px;
+      border-radius: 20px;
+      border: 2px solid #e0e0e0;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #aaa;
+      background: #fafafa;
+    }
+
+    .role-pill.preferred {
+      border-color: #4e9fd1;
+      background: rgba(78, 159, 209, 0.1);
+      color: #2c6e9e;
+    }
+
+    .empty-note {
+      color: #aaa;
+      font-size: 0.9rem;
+      font-style: italic;
+    }
+
+    /* ── Heroes ────────────────────────────────────────────── */
+    .hero-grid {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .hero-card {
+      width: 140px;
+      text-align: center;
+    }
+
+    .hero-card img {
+      width: 140px;
+      height: 79px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: #e0e0e0;
+      display: block;
+    }
+
+    .hero-card .hero-name {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #2c3e50;
+      margin-top: 6px;
+    }
+
+    /* ── Matches ───────────────────────────────────────────── */
+    .match-list {
+      list-style: none;
+    }
+
+    .match-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 4px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .match-list li:last-child {
+      border-bottom: none;
+    }
+
+    .match-id {
+      font-weight: 600;
+      color: #2c3e50;
+      font-size: 0.95rem;
+    }
+
+    .match-team {
+      font-size: 0.8rem;
+      color: #888;
+      margin-left: 10px;
+    }
+
+    .match-link {
+      color: #4e9fd1;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    .match-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <img src="/GargamelPuppets.png" alt="Logo">
+      <span>Gargamel League</span>
+    </a>
+    <ul class="navbar-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="/matches">Matches</a></li>
+      <li><a href="/rankings">Rankings</a></li>
+      <li><a href="/about">About</a></li>
+      <li><a href="/livegame">Live Game</a></li>
+    </ul>
+  </nav>
+
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Player Passport</h1>
+      <p id="passport-subtitle">Gargamel League player profile</p>
+    </div>
+
+    <div id="loading" class="loading-spinner">
+      <div class="spinner-ring"></div>
+      <div>Loading passport...</div>
+    </div>
+
+    <div id="error" class="error-box" style="display: none;">
+      Player not found.
+    </div>
+
+    <div id="passport" style="display: none;">
+      <div class="passport-section">
+        <div class="section-title">Identity</div>
+        <div class="identity-row">
+          <div class="identity-card">
+            <img id="discord-avatar" src="" alt="" onerror="this.style.visibility='hidden'">
+            <div style="min-width: 0;">
+              <div class="identity-platform">Discord</div>
+              <div class="identity-name" id="discord-name">—</div>
+              <div class="rating-chip" id="rating-chip" style="display: none;"></div>
+            </div>
+          </div>
+          <div class="identity-card">
+            <img id="steam-avatar" src="" alt="" onerror="this.style.visibility='hidden'">
+            <div style="min-width: 0;">
+              <div class="identity-platform">Steam</div>
+              <div class="identity-name" id="steam-name">—</div>
+              <div class="link-badge unverified" id="steam-badge">From registration</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="passport-section">
+        <div class="section-title">Preferred Roles</div>
+        <div class="role-pills" id="role-pills"></div>
+        <div class="empty-note" id="roles-empty" style="display: none;">No role preference set yet.</div>
+      </div>
+
+      <div class="passport-section">
+        <div class="section-title">Favorite Heroes</div>
+        <div class="hero-grid" id="hero-grid"></div>
+        <div class="empty-note" id="heroes-empty" style="display: none;">No favorite heroes chosen yet.</div>
+      </div>
+
+      <div class="passport-section">
+        <div class="section-title">Recent Gargamel Matches</div>
+        <ul class="match-list" id="match-list"></ul>
+        <div class="empty-note" id="matches-empty" style="display: none;">No matches played yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const ROLE_NAMES = {
+      1: 'Pos 1 · Carry',
+      2: 'Pos 2 · Mid',
+      3: 'Pos 3 · Offlane',
+      4: 'Pos 4 · Soft Support',
+      5: 'Pos 5 · Hard Support',
+    };
+
+    function pathDiscordId() {
+      const m = window.location.pathname.match(/^\/players\/(\d+)$/);
+      return m ? m[1] : null;
+    }
+
+    function renderPassport(p) {
+      document.getElementById('discord-name').textContent = p.discordName || 'Unknown member';
+      if (p.discordAvatar) document.getElementById('discord-avatar').src = p.discordAvatar;
+      if (typeof p.rating === 'number') {
+        const chip = document.getElementById('rating-chip');
+        chip.textContent = `Rating ${p.rating}`;
+        chip.style.display = 'inline-block';
+      }
+
+      document.getElementById('steam-name').textContent = p.steam?.personaname || 'Steam profile';
+      if (p.steam?.avatar) document.getElementById('steam-avatar').src = p.steam.avatar;
+      const badge = document.getElementById('steam-badge');
+      if (p.steam?.linked) {
+        badge.textContent = p.steam.linkMethod === 'steam_openid' ? 'Verified via Steam' : 'Confirmed by player';
+        badge.classList.remove('unverified');
+      } else {
+        badge.textContent = 'From registration';
+        badge.classList.add('unverified');
+      }
+
+      // Roles: show all five pills, highlight preferred
+      const pills = document.getElementById('role-pills');
+      pills.innerHTML = '';
+      const prefs = new Set(p.rolePrefs || []);
+      for (let r = 1; r <= 5; r++) {
+        const pill = document.createElement('div');
+        pill.className = 'role-pill' + (prefs.has(r) ? ' preferred' : '');
+        pill.textContent = ROLE_NAMES[r];
+        pills.appendChild(pill);
+      }
+      document.getElementById('roles-empty').style.display = prefs.size === 0 ? 'block' : 'none';
+
+      // Favorite heroes
+      const grid = document.getElementById('hero-grid');
+      grid.innerHTML = '';
+      const heroes = p.favoriteHeroes || [];
+      heroes.forEach(h => {
+        const card = document.createElement('div');
+        card.className = 'hero-card';
+        const img = document.createElement('img');
+        if (h.img) img.src = h.img;
+        img.alt = h.name;
+        img.onerror = function () { this.style.visibility = 'hidden'; };
+        const name = document.createElement('div');
+        name.className = 'hero-name';
+        name.textContent = h.name;
+        card.appendChild(img);
+        card.appendChild(name);
+        grid.appendChild(card);
+      });
+      document.getElementById('heroes-empty').style.display = heroes.length === 0 ? 'block' : 'none';
+
+      // Recent matches
+      const list = document.getElementById('match-list');
+      list.innerHTML = '';
+      const matches = p.recentMatches || [];
+      matches.forEach(m => {
+        const li = document.createElement('li');
+        const left = document.createElement('div');
+        const id = document.createElement('span');
+        id.className = 'match-id';
+        id.textContent = `Match ${m.matchId}`;
+        const team = document.createElement('span');
+        team.className = 'match-team';
+        team.textContent = m.team === 0 ? 'Radiant' : m.team === 1 ? 'Dire' : '';
+        left.appendChild(id);
+        left.appendChild(team);
+        const link = document.createElement('a');
+        link.className = 'match-link';
+        link.href = m.opendotaUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'View on OpenDota ↗';
+        li.appendChild(left);
+        li.appendChild(link);
+        list.appendChild(li);
+      });
+      document.getElementById('matches-empty').style.display = matches.length === 0 ? 'block' : 'none';
+
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('passport').style.display = 'block';
+    }
+
+    function showError(msg) {
+      document.getElementById('loading').style.display = 'none';
+      const err = document.getElementById('error');
+      err.textContent = msg;
+      err.style.display = 'block';
+    }
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      const discordId = pathDiscordId();
+      if (!discordId) return showError('Invalid player URL.');
+
+      try {
+        const res = await fetch(`/api/players/${discordId}`);
+        if (res.status === 404) return showError('Player not found.');
+        if (!res.ok) return showError('Something went wrong loading this passport.');
+        renderPassport(await res.json());
+      } catch (err) {
+        console.error('Passport load error:', err);
+        showError('Network error loading this passport.');
+      }
+    });
+  </script>
+</body>
+
+</html>

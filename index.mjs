@@ -841,6 +841,192 @@ server.get('/summer-planning', (req, res) => {
     return res.sendFile('summer-planning.html', { root: './public' });
 });
 
+// ─── Player Passport ─────────────────────────────────────────────────────────
+const STEAM64_BASE = 76561197960265728n;
+// account_id -> { personaname, ts } from lazy OpenDota /players fetches
+const steamIdentityCache = new Map();
+// account_id -> last failed/attempted fetch ts, so empty profiles don't burn rate limit
+const steamIdentityNegCache = new Map();
+const STEAM_IDENTITY_TTL = 12 * 60 * 60 * 1000;
+const STEAM_IDENTITY_NEG_TTL = 60 * 60 * 1000;
+
+// SteamID64 <-> 32-bit Dota account_id. BigInt is mandatory: SteamID64 > 2^53.
+function steam64ToAccountId(steamId64) {
+    try {
+        const v = BigInt(String(steamId64)) - STEAM64_BASE;
+        if (v <= 0n || v > 4294967295n) return null;
+        return Number(v);
+    } catch (_) {
+        return null;
+    }
+}
+
+const DISCORD_ID_RE = /^\d{5,25}$/;
+
+server.get('/players/me', (req, res) => {
+    const session = auth.getSession(req);
+    if (!session) {
+        return res.redirect('/auth/discord/login?next=' + encodeURIComponent('/players/me'));
+    }
+    return res.redirect(`/players/${session.discord_id}`);
+});
+
+server.get('/players/:discordId', (req, res) => {
+    if (!DISCORD_ID_RE.test(req.params.discordId)) return res.status(404).send('Not found');
+    return res.sendFile('player.html', { root: './public' });
+});
+
+// Hero list for the favorite-hero picker; served from the in-memory constants
+// cache so it costs zero OpenDota calls.
+server.get('/api/heroes', (req, res) => {
+    const heroes = Object.entries(dotaConstants.heroes)
+        .map(([id, h]) => ({ id: Number(id), name: h.name, img: h.img }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    if (heroes.length === 0) return res.status(503).json({ error: 'Hero data unavailable, try again shortly' });
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.json(heroes);
+});
+
+function parseJsonArray(text) {
+    try {
+        const v = JSON.parse(text);
+        return Array.isArray(v) ? v : [];
+    } catch (_) {
+        return [];
+    }
+}
+
+// Lazily resolve steam persona + avatar for an account_id: DB caches first,
+// at most one OpenDota call per hour per account on misses.
+async function getSteamIdentity(accountId) {
+    const now = Date.now();
+    const result = { personaname: null, avatar: null };
+
+    const avatarRow = db.prepare('SELECT avatar_url, last_updated FROM player_avatars WHERE account_id = ?').get(accountId);
+    if (avatarRow) result.avatar = avatarRow.avatar_url;
+    const statsRow = db.prepare('SELECT personaname FROM player_stats WHERE account_id = ?').get(accountId);
+    if (statsRow?.personaname) result.personaname = statsRow.personaname;
+
+    const mem = steamIdentityCache.get(accountId);
+    if (mem && now - mem.ts < STEAM_IDENTITY_TTL) {
+        result.personaname = result.personaname || mem.personaname;
+        return result;
+    }
+
+    const avatarFresh = avatarRow && (now - avatarRow.last_updated) < 7 * 24 * 60 * 60 * 1000;
+    if ((result.personaname && avatarFresh)) return result;
+
+    const lastAttempt = steamIdentityNegCache.get(accountId);
+    if (lastAttempt && now - lastAttempt < STEAM_IDENTITY_NEG_TTL) return result;
+    steamIdentityNegCache.set(accountId, now);
+
+    try {
+        const profile = await fetchOpenDota(`/players/${accountId}`);
+        if (profile?.profile) {
+            const avatarUrl = profile.profile.avatarfull || profile.profile.avatar;
+            if (avatarUrl) {
+                db.prepare('INSERT OR REPLACE INTO player_avatars (account_id, avatar_url, last_updated) VALUES (?, ?, ?)')
+                    .run(accountId, avatarUrl, now);
+                result.avatar = avatarUrl;
+            }
+            if (profile.profile.personaname) {
+                steamIdentityCache.set(accountId, { personaname: profile.profile.personaname, ts: now });
+                result.personaname = result.personaname || profile.profile.personaname;
+            }
+        }
+    } catch (err) {
+        logger.warn(`Passport steam identity fetch failed for ${accountId}: ${err.message}`);
+    }
+    return result;
+}
+
+server.get('/api/players/:discordId', async (req, res) => {
+    const discordId = req.params.discordId;
+    if (!DISCORD_ID_RE.test(discordId)) return res.status(404).json({ error: 'Player not found' });
+
+    try {
+        // CAST big ids to TEXT: discord snowflakes and SteamID64 overflow JS numbers
+        const userRow = db.prepare(`
+            SELECT CAST(discord_id AS TEXT) AS discord_id, CAST(steam_id AS TEXT) AS steam_id, rating
+            FROM users WHERE discord_id = ?
+        `).get(discordId);
+        if (!userRow) return res.status(404).json({ error: 'Player not found' });
+
+        const profile = db.prepare(`
+            SELECT role_prefs, favorite_heroes, CAST(linked_steam_id AS TEXT) AS linked_steam_id,
+                   steam_link_method
+            FROM player_profiles WHERE discord_id = ?
+        `).get(discordId) || {};
+
+        // Discord identity: guild member cache, else latest login snapshot
+        let discordName = null, discordAvatar = null;
+        const member = discordMembersById.get(discordId);
+        if (member) {
+            discordName = member.name;
+            discordAvatar = member.avatar;
+        } else {
+            const snap = db.prepare(`
+                SELECT discord_username, discord_avatar_url FROM sessions
+                WHERE discord_id = ? ORDER BY created_at DESC LIMIT 1
+            `).get(discordId);
+            discordName = snap?.discord_username || null;
+            discordAvatar = snap?.discord_avatar_url || null;
+        }
+
+        // Steam identity from the effective steam id (optional link overrides
+        // the mandatory registration-derived mapping)
+        const effectiveSteamId = profile.linked_steam_id || userRow.steam_id;
+        const accountId = steam64ToAccountId(effectiveSteamId);
+        let steam = {
+            accountId,
+            personaname: null,
+            avatar: null,
+            linked: !!profile.linked_steam_id,
+            linkMethod: profile.steam_link_method || null,
+        };
+        if (accountId) {
+            const identity = await getSteamIdentity(accountId);
+            steam.personaname = identity.personaname;
+            steam.avatar = identity.avatar;
+        }
+
+        // Role prefs + favorite heroes (hero ids resolved via constants cache)
+        const rolePrefs = parseJsonArray(profile.role_prefs || '[]')
+            .filter(r => Number.isInteger(r) && r >= 1 && r <= 5);
+        const favoriteHeroes = parseJsonArray(profile.favorite_heroes || '[]')
+            .slice(0, 3)
+            .map(id => {
+                const hero = dotaConstants.heroes[id];
+                return { id, name: hero?.name || `Hero ${id}`, img: hero?.img || null };
+            });
+
+        // 5 most recent Gargamel matches (match_id is monotonic, safe as Number)
+        const recentMatches = db.prepare(`
+            SELECT match_id, team FROM match_players
+            WHERE discord_id = ? ORDER BY match_id DESC LIMIT 5
+        `).all(discordId).map(m => ({
+            matchId: m.match_id,
+            team: m.team,
+            opendotaUrl: `https://www.opendota.com/matches/${m.match_id}`,
+        }));
+
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        return res.json({
+            discordId: userRow.discord_id,
+            discordName,
+            discordAvatar,
+            steam,
+            rolePrefs,
+            favoriteHeroes,
+            recentMatches,
+            rating: userRow.rating,
+        });
+    } catch (err) {
+        logger.error('Passport fetch error:', err.message);
+        return res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // ─── Summer trip planning API ────────────────────────────────────────────────
 const PLANNING_PW = (process.env.SUMMER_PLANNING_PASSWORD || '').trim();
 // Admin name (honor-system, same as all identity here): whoever plans under this
