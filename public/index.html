@@ -276,12 +276,27 @@
       <img class="logo-image" src="GargamelPuppets.png" alt="Gargamel League Logo">
     </div>
 
+    <div id="signin-state" class="state-hidden">
+      <div class="auth-title">Sign in to Register</div>
+      <div class="auth-description">
+        To participate in Gargamel League matches, sign in with your Discord account.<br><br>
+        Once signed in you can register for the league and set up your player passport.
+      </div>
+      <button id="discord-signin" class="authenticate-button">Sign in with Discord</button>
+    </div>
+
+    <div id="registered-state" class="state-hidden">
+      <div class="success-title">✅ You're Registered</div>
+      <div class="status-message">You're already part of the Gargamel League.</div>
+      <a class="authenticate-button" href="/players/me">View My Player Passport</a>
+    </div>
+
     <div id="auth-state" class="state-hidden">
       <div class="auth-title">Account Link Required</div>
 
       <div class="auth-description">
         To participate in Gargamel League matches, you need to link your Discord account to your Steam account.<br><br>
-        Select your current rank then click the button below to authenticate and join the Gargamel Discord Server.
+        Select your current rank then click the button below to register and join the Gargamel Discord Server.
       </div>
       <div style="color: red; font-size: 0.75rem; text-align: center; margin-bottom: 20px;">
         Warning: Before clicking the link, please ensure your Discord User Settings have your Steam Account added under Connections
@@ -307,10 +322,9 @@
           style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem; font-family: 'Inter', sans-serif; background: white; box-sizing: border-box;">
         <div id="referral-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; max-height: 180px; overflow-y: auto; background: white; border: 2px solid #e0e0e0; border-top: none; border-radius: 0 0 8px 8px; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
       </div>
-      <a id="neural-login" class="authenticate-button"
-        href="https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2Fwww.gargamel-league.com%2F&scope=identify+connections+guilds.join">
+      <button id="neural-login" class="authenticate-button">
         Register for the Gargamel League
-      </a>
+      </button>
     </div>
 
     <div id="loading-state" class="state-hidden">
@@ -321,6 +335,7 @@
     <div id="success-state" class="state-hidden">
       <div class="success-title">✅ Connection Successful</div>
       <div class="status-message">Check your Discord for access to the Gargamel League server.</div>
+      <a class="authenticate-button" href="/players/me">Set Up My Player Passport</a>
     </div>
 
     <div id="error-state" class="state-hidden">
@@ -333,7 +348,7 @@
 
   <script>
     function showState(stateName) {
-      const states = ['auth-state', 'success-state', 'error-state', 'loading-state'];
+      const states = ['signin-state', 'registered-state', 'auth-state', 'success-state', 'error-state', 'loading-state'];
       states.forEach(state => {
         const el = document.getElementById(state);
         if (el) {
@@ -351,11 +366,32 @@
       }
     }
 
-    window.onload = () => {
-      const fragment = new URLSearchParams(window.location.hash.slice(1));
-      const [accessToken, tokenType] = [fragment.get('access_token'), fragment.get('token_type')];
+    window.onload = async () => {
+      document.getElementById('discord-signin').addEventListener('click', () => {
+        window.location.href = '/auth/discord/login?next=/';
+      });
 
-      if (!accessToken) {
+      // Determine login state from the server (session cookie, never tokens in JS)
+      let me = null;
+      try {
+        const meRes = await fetch('/api/me');
+        if (meRes.ok) me = await meRes.json();
+      } catch (err) {
+        console.error('Failed to check login state:', err);
+      }
+
+      if (!me) {
+        showState('signin-state');
+        return;
+      }
+
+      if (me.registered) {
+        showState('registered-state');
+        return;
+      }
+
+      // Logged in but not registered: show the registration form
+      {
         showState('auth-state');
 
         // Referral autocomplete setup
@@ -418,53 +454,49 @@
           }, 150);
         });
 
-        // Add rank validation before allowing OAuth redirect
+        // Register directly against the session-authenticated API
         const loginButton = document.getElementById('neural-login');
-        loginButton.addEventListener('click', (e) => {
+        loginButton.addEventListener('click', async (e) => {
           const rankSelect = document.getElementById('rank-select');
           if (!rankSelect.value) {
             e.preventDefault();
             alert('Please select your Dota 2 rank before registering!');
             rankSelect.style.borderColor = '#ff4444';
-            return false;
+            return;
           }
-          // Store rank and referral in sessionStorage so we can retrieve them after OAuth redirect
-          sessionStorage.setItem('selectedRank', rankSelect.value);
-          sessionStorage.setItem('referredBy', confirmedReferral || '');
+
+          showState('loading-state');
+          try {
+            const response = await fetch('/api/register', {
+              method: 'POST',
+              body: JSON.stringify({ rank: rankSelect.value, referredBy: confirmedReferral || undefined }),
+              headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': me.csrfToken,
+              },
+            });
+            const data = await response.json().catch(() => ({}));
+
+            if (response.ok) {
+              showState('success-state');
+            } else if (response.status === 401) {
+              // Session expired mid-flow: send them back through login
+              window.location.href = '/auth/discord/login?next=/';
+            } else {
+              console.error("Backend returned an error during processing:", data);
+              const msg = data?.result || `HTTP ${response.status}`;
+              document.querySelector('#error-state .status-message').innerText =
+                `There was a problem linking your accounts:\n\n${msg}`;
+              showState('error-state');
+            }
+          } catch (err) {
+            console.error("Networking or fetch error: ", err);
+            document.querySelector('#error-state .status-message').innerText =
+              `Network error: ${err.message}`;
+            showState('error-state');
+          }
         });
-        return;
       }
-
-      showState('loading-state');
-
-      // Retrieve the rank and referral that were selected before OAuth
-      const selectedRank = sessionStorage.getItem('selectedRank');
-      const referredBy = sessionStorage.getItem('referredBy');
-      sessionStorage.removeItem('selectedRank');
-      sessionStorage.removeItem('referredBy');
-
-      fetch('https://www.gargamel-league.com/', {
-        method: 'PUT',
-        body: JSON.stringify({ accessToken, tokenType, rank: selectedRank, referredBy: referredBy || undefined }),
-        headers: { 'Content-Type': 'application/json' }
-      }).then(async response => {
-        const data = await response.json().catch(() => ({}));
-
-        if (response.ok) {
-          showState('success-state');
-        } else {
-          console.error("Backend returned an error during processing:", data);
-          const msg = data?.result || `HTTP ${response.status}`;
-          document.querySelector('#error-state .status-message').innerText =
-      `There was a problem linking your accounts:\n\n${msg}`;
-          showState('error-state');
-        }
-      }).catch( err => {
-        console.error("Networking or fetch error: ", err);
-        document.querySelector('#error-state .status-message').innerText =
-          `Network error: ${err.message}`;
-        showState('error-state');
-      });
     };
 
     // ── Live Game Toast ──────────────────────────────────────────────────────

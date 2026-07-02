@@ -1400,18 +1400,18 @@ server.get('/api/discord-members', async (req, res) => {
     return res.json(discordMembersCache.data);
 });
 
-server.put('/', async (req, res) => {
-    logger.info('PUT: ' + JSON.stringify(req.body));
-    logger.info('------------------------------------------');
+// Old implicit-grant registration endpoint. Kept as a stub for one release so
+// stale tabs get a clear message instead of a confusing 404.
+server.put('/', (req, res) => {
+    return res.status(410).json({ result: 'Registration has moved. Please reload the page and sign in with Discord.' });
+});
 
-    const { tokenType, accessToken, rank, referredBy: rawReferredBy } = req.body;
+server.post('/api/register', auth.requireAuth, auth.requireCsrf, async (req, res) => {
+    logger.info(`POST /api/register for ${req.session.discord_id}`);
+
+    const { rank, referredBy: rawReferredBy } = req.body || {};
     const validNames = new Set((discordMembersCache.data || []).map(m => m.name));
     const referredBy = (rawReferredBy && validNames.has(rawReferredBy)) ? rawReferredBy : null;
-
-    if (!tokenType || !accessToken) {
-        logger.error("Returning 400: Either missing tokentype or accesstoken.  tokenType: ${tokenType}  accessToken: ${accessToken}")
-        return res.status(400).json({ result: 'Missing token information' });
-    }
 
     if (!rank) {
         logger.error("Returning 400: Missing rank selection");
@@ -1419,28 +1419,30 @@ server.put('/', async (req, res) => {
     }
 
     try {
-        logger.info("Fetching userId and Connections")
-        const [userRes, connRes] = await Promise.all([
-            fetch('https://discord.com/api/users/@me', {
-                headers: { authorization: `${tokenType} ${accessToken}` },
-            }),
-            fetch('https://discord.com/api/users/@me/connections', {
-                headers: { authorization: `${tokenType} ${accessToken}` },
-            }),
-        ]);
+        const discordID = req.session.discord_id;
 
-        const user = await userRes.json();
+        // Read Steam identity from the user's Discord Connections using the
+        // session's server-side access token; refresh once if it has expired.
+        const fetchConnections = (token) => fetch('https://discord.com/api/users/@me/connections', {
+            headers: { authorization: `Bearer ${token}` },
+        });
+        let accessToken = req.session.access_token;
+        let connRes = accessToken ? await fetchConnections(accessToken) : { status: 401 };
+        if (connRes.status === 401) {
+            accessToken = await auth.refreshDiscordToken(req.session);
+            if (!accessToken) {
+                return res.status(401).json({ result: 'Your Discord login has expired. Please sign in again.' });
+            }
+            connRes = await fetchConnections(accessToken);
+        }
+        if (!connRes.ok) {
+            logger.error(`Connections fetch failed: ${connRes.status}`);
+            return res.status(502).json({ result: 'Could not read your Discord connections. Please try again.' });
+        }
         const connections = await connRes.json();
 
-        if (!user.id) {
-            logger.error('Returning 400: No User ID found. ID: ${user.id}');
-            return res.status(400).json({ result: 'Invalid Discord credentials. Please try again.' });
-        }
-
-        const discordID = user.id;
         let steamID = null;
         let steamName = null;
-
         for (const conn of connections) {
             if (conn.type === 'steam') {
                 steamID = conn.id;
@@ -1483,6 +1485,18 @@ server.put('/', async (req, res) => {
             stmt.run(discordID, steamID, config.MOD_ASSIGNMENT, rating, referredBy || null);
         } catch (err) {
             logger.error('DB upsert error:', err.message);
+            if (String(err.message).includes('UNIQUE')) {
+                return res.status(409).json({ result: 'That Steam account is already registered to another player. Contact a mod if this is a mistake.' });
+            }
+            return res.status(500).json({ result: 'Database error during registration' });
+        }
+
+        // Seed an empty passport profile row
+        try {
+            db.prepare('INSERT OR IGNORE INTO player_profiles (discord_id, updated_at) VALUES (?, ?)')
+                .run(discordID, Date.now());
+        } catch (err) {
+            logger.error('player_profiles seed error:', err.message);
         }
 
         //Notify local pipe
@@ -1526,16 +1540,13 @@ server.put('/', async (req, res) => {
                 });
             }
 
-            logger.info(`Successfully added ${discordID} to guild.`);
+            logger.info(`Registered: ${discordID} with Steam ${steamName} (${steamID})`);
             return res.status(201).json({ result: steamName });
 
         } catch (err) {
             logger.error('Guild add error:', err);
             return res.status(500).json({ result: 'Error adding user to guild' });
         }
-
-        logger.info(`Registered: ${discordID} with Steam ${steamName} (${steamID})`);
-        return res.status(201).json({ result: steamName });
     } catch (err) {
         logger.error('Unhandled server error:', err);
         return res.status(500).json({ result: 'Server error occurred' });
