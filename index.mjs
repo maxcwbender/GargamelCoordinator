@@ -1334,11 +1334,14 @@ server.get('/api/top-rankings', async (req, res) => {
 
 // ─── Discord member names + avatars for referral autocomplete ───────────────
 let discordMembersCache = { data: [], lastFetched: 0 };
+// discordId (string) -> { name, avatar }, for passport lookups
+let discordMembersById = new Map();
 const DISCORD_MEMBERS_TTL = 12 * 60 * 60 * 1000; // 12 hours
 
 async function refreshDiscordMembers() {
     try {
         const members = [];
+        const byId = new Map();
         let after = '0';
         let hasMore = true;
 
@@ -1367,6 +1370,7 @@ async function refreshDiscordMembers() {
                         avatar = `https://cdn.discordapp.com/embed/avatars/${index}.png`;
                     }
                     members.push({ name: displayName, avatar });
+                    if (m.user?.id) byId.set(String(m.user.id), { name: displayName, avatar });
                 }
             }
 
@@ -1376,6 +1380,7 @@ async function refreshDiscordMembers() {
 
         if (members.length > 0) {
             discordMembersCache = { data: members, lastFetched: Date.now() };
+            discordMembersById = byId;
             logger.info(`Refreshed Discord members cache: ${members.length} members with avatars`);
         }
     } catch (err) {
