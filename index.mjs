@@ -5,6 +5,7 @@ import express from 'express';
 import net from 'net';
 import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'fs';
+import { createAuth } from './auth.mjs';
 import pino from 'pino'
 const logger = pino({
   transport: {
@@ -127,6 +128,34 @@ for (const sql of columnMigrations) {
         PRIMARY KEY (match_id, award_type)
     )`);
 }
+
+// ─── Website accounts: sessions + player passport profiles ──────────────────
+// discord_id keeps INTEGER affinity to match users/match_players (a TEXT column
+// would never join against them in SQLite); JS binds/reads ids as strings.
+db.exec(`CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    discord_id INTEGER NOT NULL,
+    csrf_token TEXT NOT NULL,
+    discord_username TEXT,
+    discord_avatar_url TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    token_expires_at INTEGER,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_discord ON sessions(discord_id)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)');
+
+db.exec(`CREATE TABLE IF NOT EXISTS player_profiles (
+    discord_id INTEGER PRIMARY KEY,
+    role_prefs TEXT NOT NULL DEFAULT '[]',
+    favorite_heroes TEXT NOT NULL DEFAULT '[]',
+    linked_steam_id INTEGER,
+    steam_link_method TEXT,
+    steam_linked_at INTEGER,
+    updated_at INTEGER
+)`);
 
 // Summer trip planning (/summer-planning): shared items + per-person allergies
 // source_item_id: when a grocery row is a meal's ingredient, points at the meal's
@@ -770,6 +799,12 @@ async function fetchLiveGame() {
 
 // Serve static files from node_modules
 server.use('/node_modules', express.static('node_modules'));
+
+// ─── Website accounts (Discord login sessions) ──────────────────────────────
+// Registered BEFORE the CORS middleware below on purpose: /auth/* and /api/me
+// must never be served with Access-Control-Allow-Origin: *.
+const auth = createAuth({ db, logger, config });
+auth.registerRoutes(server);
 
 // Optional: Add CORS if needed for browsers
 server.use((req, res, next) => {
