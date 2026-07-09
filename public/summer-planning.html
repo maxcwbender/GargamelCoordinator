@@ -904,7 +904,7 @@
   <div id="gate" class="overlay hidden">
     <form class="overlay-card" id="gateForm">
       <h1>Summer Planning</h1>
-      <div class="sub">Maine Trip &middot; July 2&ndash;6, 2026</div>
+      <div class="sub">Enter your trip's password &mdash; it picks which trip you're planning</div>
       <input type="password" id="gatePassword" placeholder="Trip password" autocomplete="current-password" required>
       <button type="submit" class="btn btn-block" id="gateBtn">Enter</button>
       <div class="error-msg" id="gateError"></div>
@@ -930,8 +930,8 @@
   <div id="main" class="page-content hidden">
     <div class="page-header">
       <div>
-        <h1>Maine Trip Planning</h1>
-        <div class="trip-sub">July 2&ndash;6, 2026 &middot; Meals, snacks &amp; groceries</div>
+        <h1 id="tripTitle">Trip Planning</h1>
+        <div class="trip-sub" id="tripSub">Meals, snacks &amp; groceries</div>
       </div>
       <div class="user-chip">Planning as <strong id="userNameLabel"></strong><span id="adminBadge" class="admin-badge hidden">admin</span> &middot;
         <button class="link-btn" id="changeNameBtn">change</button>
@@ -977,13 +977,24 @@
 
   <script>
     const API = '/api/summer-planning';
-    const TRIP_DAYS = [
-      { date: '2026-07-02', dow: 'Thu', dom: 2, label: 'Thursday, July 2' },
-      { date: '2026-07-03', dow: 'Fri', dom: 3, label: 'Friday, July 3' },
-      { date: '2026-07-04', dow: 'Sat', dom: 4, label: 'Saturday, July 4' },
-      { date: '2026-07-05', dow: 'Sun', dom: 5, label: 'Sunday, July 5' },
-      { date: '2026-07-06', dow: 'Mon', dom: 6, label: 'Monday, July 6' },
-    ];
+    // Filled from the server: the trip is whichever one the entered password
+    // unlocked, so days/labels come with /data rather than being hardcoded.
+    let TRIP_DAYS = [];
+
+    // 'YYYY-MM-DD' -> { date, dow, dom, label } (UTC so the labels don't shift a
+    // day for viewers west of the date line).
+    function buildDays(dates) {
+      return (dates || []).map(date => {
+        const [y, m, d] = date.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d));
+        return {
+          date,
+          dow: dt.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
+          dom: d,
+          label: dt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }),
+        };
+      });
+    }
     const SLOTS = [
       { key: 'breakfast', label: '☕ Breakfast' },
       { key: 'lunch', label: '🥪 Lunch' },
@@ -1055,6 +1066,7 @@
     async function loadData() {
       data = await api('/data' + (myName ? '?name=' + encodeURIComponent(myName) : ''));
       isAdmin = !!data.isAdmin;
+      TRIP_DAYS = buildDays(data.trip && data.trip.dates);
     }
 
     // ── Boot ──────────────────────────────────────────────────
@@ -1144,6 +1156,9 @@
 
     // ── Rendering ─────────────────────────────────────────────
     function renderAll() {
+      const trip = data.trip || {};
+      $('tripTitle').textContent = (trip.name || 'Trip') + ' Planning';
+      $('tripSub').textContent = (trip.datesLabel ? trip.datesLabel + ' · ' : '') + 'Meals, snacks & groceries';
       $('userNameLabel').textContent = myName;
       $('adminBadge').classList.toggle('hidden', !isAdmin);
       renderCalendar();
@@ -1336,6 +1351,7 @@
 
     function renderCalendar() {
       const strip = $('dayStrip');
+      strip.style.gridTemplateColumns = `repeat(${TRIP_DAYS.length || 1}, 1fr)`;
       strip.innerHTML = TRIP_DAYS.map(d => {
         const count = data.items.filter(it => it.category === 'meal' && it.trip_date === d.date).length;
         return `<div class="day-card${expandedDate === d.date ? ' selected' : ''}" data-day="${d.date}">

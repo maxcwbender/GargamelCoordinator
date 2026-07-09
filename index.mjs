@@ -129,12 +129,15 @@ for (const sql of columnMigrations) {
 }
 
 // Summer trip planning (/summer-planning): shared items + per-person allergies
+// trip_id: which trip (see TRIPS below) a row belongs to. Rows from archived
+// trips keep their trip_id and simply become unreachable.
 // source_item_id: when a grocery row is a meal's ingredient, points at the meal's
 // id (NULL for standalone groceries). Deleting the meal cascades its ingredients.
 // quantity: number of items for the shopping list (groceries). purchased_by: who
 // marked it bought (shared flag, NULL = not purchased).
 db.exec(`CREATE TABLE IF NOT EXISTS trip_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id INTEGER NOT NULL DEFAULT 1,
     category TEXT NOT NULL CHECK (category IN ('meal','snack','drink','grocery')),
     trip_date TEXT,
     meal_slot TEXT CHECK (meal_slot IN ('breakfast','lunch','dinner') OR meal_slot IS NULL),
@@ -147,18 +150,44 @@ db.exec(`CREATE TABLE IF NOT EXISTS trip_items (
     purchased_by TEXT
 )`);
 // Existing installs: add columns if the table predates them (idempotent).
+// DEFAULT 1 on trip_id tags all pre-existing rows as trip 1 (the archived Maine trip).
 for (const sql of [
     'ALTER TABLE trip_items ADD COLUMN source_item_id INTEGER',
     'ALTER TABLE trip_items ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1',
     'ALTER TABLE trip_items ADD COLUMN purchased_by TEXT',
+    'ALTER TABLE trip_items ADD COLUMN trip_id INTEGER NOT NULL DEFAULT 1',
 ]) {
     try { db.exec(sql); } catch (_) { /* already exists */ }
 }
+// Allergies are per-trip (attendees differ trip to trip), so the key is
+// (trip_id, name_key). Installs that predate trips have name_key as the sole
+// PRIMARY KEY, which SQLite can't alter in place — rebuild the table, tagging
+// existing rows as trip 1.
+{
+    const cols = db.pragma('table_info(trip_allergies)');
+    if (cols.length > 0 && !cols.some(c => c.name === 'trip_id')) {
+        logger.info('Migrating trip_allergies to per-trip composite key schema');
+        db.exec(`ALTER TABLE trip_allergies RENAME TO trip_allergies_v1;
+            CREATE TABLE trip_allergies (
+                trip_id INTEGER NOT NULL,
+                name_key TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                allergies TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (trip_id, name_key)
+            );
+            INSERT INTO trip_allergies (trip_id, name_key, display_name, allergies, updated_at)
+                SELECT 1, name_key, display_name, allergies, updated_at FROM trip_allergies_v1;
+            DROP TABLE trip_allergies_v1;`);
+    }
+}
 db.exec(`CREATE TABLE IF NOT EXISTS trip_allergies (
-    name_key TEXT PRIMARY KEY,
+    trip_id INTEGER NOT NULL,
+    name_key TEXT NOT NULL,
     display_name TEXT NOT NULL,
     allergies TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (trip_id, name_key)
 )`);
 
 async function fetchOpenDota(path) {
@@ -807,16 +836,37 @@ server.get('/summer-planning', (req, res) => {
 });
 
 // ─── Summer trip planning API ────────────────────────────────────────────────
-const PLANNING_PW = (process.env.SUMMER_PLANNING_PASSWORD || '').trim();
+// Trips: each active trip has its own password (its own env var), and the
+// password entered at the gate is what selects the trip — the auth token derived
+// from it is trip-scoped, so every API call knows which trip it's operating on.
+//
+// Archiving a trip = removing it from this list. Its rows stay in the DB tagged
+// with its trip_id but no password reaches them anymore. Archived so far:
+//   trip 1 — Maine Trip, July 2–6 2026 (was SUMMER_PLANNING_PASSWORD).
+//   Its leftover rows are unused; purge whenever with:
+//     DELETE FROM trip_items WHERE trip_id = 1; DELETE FROM trip_allergies WHERE trip_id = 1;
+const TRIPS = [
+    {
+        id: 2,
+        name: 'Cabotville Trip',
+        datesLabel: 'July 13–16, 2026',
+        dates: ['2026-07-13', '2026-07-14', '2026-07-15', '2026-07-16'],
+        password: (process.env.SUMMER_PLANNING_PASSWORD_2 || '').trim(),
+    },
+];
 // Admin name (honor-system, same as all identity here): whoever plans under this
 // first name may remove any item, not just their own. Empty => no admin.
 const PLANNING_ADMIN = (process.env.SUMMER_PLANNING_ADMIN || '').trim();
 const isPlanningAdmin = (name) => !!PLANNING_ADMIN && String(name).trim().toLowerCase() === PLANNING_ADMIN.toLowerCase();
-// Deterministic token: survives restarts with no session store; rotating the
-// password invalidates all stored tokens. Null when unconfigured => fail closed.
-const planningToken = PLANNING_PW
-    ? createHmac('sha256', PLANNING_PW).update('summer-planning-token-v1').digest('hex')
-    : null;
+// Deterministic per-trip token: survives restarts with no session store; rotating
+// a trip's password invalidates its stored tokens. The trip id in the HMAC input
+// keeps tokens distinct even if two trips shared a password. Trips with no
+// password configured get no token => fail closed.
+for (const trip of TRIPS) {
+    trip.token = trip.password
+        ? createHmac('sha256', trip.password).update(`summer-planning-token-v2-trip-${trip.id}`).digest('hex')
+        : null;
+}
 
 function planningSafeEqual(a, b) {
     // Hash both sides so timingSafeEqual always gets equal-length buffers
@@ -827,24 +877,24 @@ function planningSafeEqual(a, b) {
 }
 
 function requirePlanningAuth(req, res, next) {
-    if (!planningToken) return res.status(503).json({ error: 'Planning is not configured on this server' });
+    const configured = TRIPS.filter(t => t.token);
+    if (configured.length === 0) return res.status(503).json({ error: 'Planning is not configured on this server' });
     const header = req.get('authorization') || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-    if (!token || !planningSafeEqual(token, planningToken)) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
+    const trip = token ? configured.find(t => planningSafeEqual(token, t.token)) : null;
+    if (!trip) return res.status(401).json({ error: 'Unauthorized' });
+    req.trip = trip;
     next();
 }
 
-const TRIP_DATES = ['2026-07-02', '2026-07-03', '2026-07-04', '2026-07-05', '2026-07-06'];
 const MEAL_SLOTS = ['breakfast', 'lunch', 'dinner'];
 const ITEM_CATEGORIES = ['meal', 'snack', 'drink', 'grocery'];
 const MAX_INGREDIENTS = 40;
 
 // Insert a single trip item. source is the parent meal id for ingredients, else null.
 const insertTripItem = db.prepare(`INSERT INTO trip_items
-    (category, trip_date, meal_slot, item_name, notes, created_by, created_at, source_item_id, quantity)
-    VALUES (@category, @tripDate, @mealSlot, @itemName, @notes, @createdBy, @createdAt, @sourceItemId, @quantity)`);
+    (trip_id, category, trip_date, meal_slot, item_name, notes, created_by, created_at, source_item_id, quantity)
+    VALUES (@tripId, @category, @tripDate, @mealSlot, @itemName, @notes, @createdBy, @createdAt, @sourceItemId, @quantity)`);
 
 // Clamp a quantity to a positive integer 1..9999, or return fallback if unusable.
 function parseQuantity(raw, fallback = 1) {
@@ -873,22 +923,26 @@ function cleanIngredients(raw) {
     return out.length > MAX_INGREDIENTS ? null : out;
 }
 
+// The password is the trip selector: whichever active trip it matches is the
+// trip the returned token unlocks.
 server.post('/api/summer-planning/verify', (req, res) => {
-    if (!planningToken) return res.status(503).json({ error: 'Planning is not configured on this server' });
+    const configured = TRIPS.filter(t => t.token);
+    if (configured.length === 0) return res.status(503).json({ error: 'Planning is not configured on this server' });
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (!password || !planningSafeEqual(password, PLANNING_PW)) {
-        return res.status(401).json({ error: 'Incorrect password' });
-    }
-    return res.json({ token: planningToken });
+    const trip = password ? configured.find(t => planningSafeEqual(password, t.password)) : null;
+    if (!trip) return res.status(401).json({ error: 'Incorrect password' });
+    return res.json({ token: trip.token });
 });
 
 server.get('/api/summer-planning/data', requirePlanningAuth, (req, res) => {
-    const items = db.prepare('SELECT * FROM trip_items ORDER BY created_at').all();
-    const allergies = db.prepare('SELECT name_key, display_name, allergies FROM trip_allergies ORDER BY display_name').all();
+    const items = db.prepare('SELECT * FROM trip_items WHERE trip_id = ? ORDER BY created_at').all(req.trip.id);
+    const allergies = db.prepare('SELECT name_key, display_name, allergies FROM trip_allergies WHERE trip_id = ? ORDER BY display_name').all(req.trip.id);
     // isAdmin is derived from the caller's claimed name; we never expose the admin
     // name itself, so non-admins just get false.
     const isAdmin = isPlanningAdmin(req.query.name || '');
-    return res.json({ items, allergies, isAdmin });
+    // The frontend renders whichever trip the token selected (name, dates, calendar).
+    const trip = { id: req.trip.id, name: req.trip.name, datesLabel: req.trip.datesLabel, dates: req.trip.dates };
+    return res.json({ items, allergies, isAdmin, trip });
 });
 
 server.post('/api/summer-planning/items', requirePlanningAuth, (req, res) => {
@@ -907,7 +961,7 @@ server.post('/api/summer-planning/items', requirePlanningAuth, (req, res) => {
     let mealSlot = null;
     let ingredients = [];
     if (category === 'meal') {
-        if (!TRIP_DATES.includes(body.tripDate)) return res.status(400).json({ error: 'Meal date must be a trip date (Jul 2-6, 2026)' });
+        if (!req.trip.dates.includes(body.tripDate)) return res.status(400).json({ error: `Meal date must be a trip date (${req.trip.datesLabel})` });
         if (!MEAL_SLOTS.includes(body.mealSlot)) return res.status(400).json({ error: 'Meal slot must be breakfast, lunch, or dinner' });
         tripDate = body.tripDate;
         mealSlot = body.mealSlot;
@@ -916,13 +970,14 @@ server.post('/api/summer-planning/items', requirePlanningAuth, (req, res) => {
     }
 
     const createdAt = Date.now();
+    const tripId = req.trip.id;
     const quantity = category === 'grocery' ? parseQuantity(body.quantity, 1) : 1;
     // Insert the item and any meal ingredients (as linked grocery rows) atomically.
     const create = db.transaction(() => {
-        const info = insertTripItem.run({ category, tripDate, mealSlot, itemName, notes: notes || null, createdBy, createdAt, sourceItemId: null, quantity });
+        const info = insertTripItem.run({ tripId, category, tripDate, mealSlot, itemName, notes: notes || null, createdBy, createdAt, sourceItemId: null, quantity });
         const mealId = info.lastInsertRowid;
         for (const ing of ingredients) {
-            insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ing.name, notes: null, createdBy, createdAt, sourceItemId: mealId, quantity: ing.quantity });
+            insertTripItem.run({ tripId, category: 'grocery', tripDate: null, mealSlot: null, itemName: ing.name, notes: null, createdBy, createdAt, sourceItemId: mealId, quantity: ing.quantity });
         }
         return mealId;
     });
@@ -943,13 +998,13 @@ server.post('/api/summer-planning/items/:id/ingredients', requirePlanningAuth, (
     if (!name) return res.status(400).json({ error: 'Name is required' });
     if (!ingredientName || ingredientName.length > 100) return res.status(400).json({ error: 'Ingredient is required (max 100 chars)' });
 
-    const meal = db.prepare('SELECT created_by, category FROM trip_items WHERE id = ?').get(mealId);
+    const meal = db.prepare('SELECT created_by, category FROM trip_items WHERE id = ? AND trip_id = ?').get(mealId, req.trip.id);
     if (!meal || meal.category !== 'meal') return res.status(404).json({ error: 'Meal not found' });
     const isOwner = meal.created_by.trim().toLowerCase() === name.toLowerCase();
     if (!isOwner && !isPlanningAdmin(name)) return res.status(403).json({ error: 'You can only edit your own meals' });
 
     const quantity = parseQuantity(req.body?.quantity, 1);
-    const info = insertTripItem.run({ category: 'grocery', tripDate: null, mealSlot: null, itemName: ingredientName, notes: null, createdBy: meal.created_by, createdAt: Date.now(), sourceItemId: mealId, quantity });
+    const info = insertTripItem.run({ tripId: req.trip.id, category: 'grocery', tripDate: null, mealSlot: null, itemName: ingredientName, notes: null, createdBy: meal.created_by, createdAt: Date.now(), sourceItemId: mealId, quantity });
     const item = db.prepare('SELECT * FROM trip_items WHERE id = ?').get(info.lastInsertRowid);
     return res.status(201).json({ item });
 });
@@ -960,14 +1015,14 @@ server.delete('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) 
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid item id' });
     if (!name) return res.status(400).json({ error: 'Name is required' });
 
-    const row = db.prepare('SELECT created_by FROM trip_items WHERE id = ?').get(id);
+    const row = db.prepare('SELECT created_by FROM trip_items WHERE id = ? AND trip_id = ?').get(id, req.trip.id);
     if (!row) return res.status(404).json({ error: 'Item not found' });
     const isOwner = row.created_by.trim().toLowerCase() === name.toLowerCase();
     if (!isOwner && !isPlanningAdmin(name)) {
         return res.status(403).json({ error: 'You can only remove your own items' });
     }
     // Deleting a meal also removes the ingredient groceries linked to it.
-    db.prepare('DELETE FROM trip_items WHERE id = ? OR source_item_id = ?').run(id, id);
+    db.prepare('DELETE FROM trip_items WHERE (id = ? OR source_item_id = ?) AND trip_id = ?').run(id, id, req.trip.id);
     logger.info(`[Planning] ${name} removed item ${id}${isOwner ? '' : ' (admin)'}`);
     return res.json({ ok: true });
 });
@@ -985,7 +1040,7 @@ server.patch('/api/summer-planning/items/:id', requirePlanningAuth, (req, res) =
     if (!itemName || itemName.length > 100) return res.status(400).json({ error: 'Item name is required (max 100 chars)' });
     if (notes.length > 300) return res.status(400).json({ error: 'Notes too long (max 300 chars)' });
 
-    const row = db.prepare('SELECT created_by, category, quantity FROM trip_items WHERE id = ?').get(id);
+    const row = db.prepare('SELECT created_by, category, quantity FROM trip_items WHERE id = ? AND trip_id = ?').get(id, req.trip.id);
     if (!row) return res.status(404).json({ error: 'Item not found' });
     if (row.category === 'meal') return res.status(400).json({ error: 'Meals are not editable here' });
     const isOwner = row.created_by.trim().toLowerCase() === name.toLowerCase();
@@ -1009,8 +1064,8 @@ server.put('/api/summer-planning/groceries/purchased', requirePlanningAuth, (req
     if (!itemName) return res.status(400).json({ error: 'Item name is required' });
 
     const info = db.prepare(
-        `UPDATE trip_items SET purchased_by = ? WHERE category = 'grocery' AND lower(trim(item_name)) = lower(trim(?))`
-    ).run(purchased ? name : null, itemName);
+        `UPDATE trip_items SET purchased_by = ? WHERE category = 'grocery' AND lower(trim(item_name)) = lower(trim(?)) AND trip_id = ?`
+    ).run(purchased ? name : null, itemName, req.trip.id);
     if (info.changes === 0) return res.status(404).json({ error: 'No matching groceries' });
     logger.info(`[Planning] ${name} marked "${itemName}" ${purchased ? 'purchased' : 'unpurchased'} (${info.changes})`);
     return res.json({ ok: true, updated: info.changes });
@@ -1022,17 +1077,17 @@ server.put('/api/summer-planning/allergies', requirePlanningAuth, (req, res) => 
     if (!name || name.length > 40) return res.status(400).json({ error: 'Name is required (max 40 chars)' });
     if (!allergies || allergies.length > 500) return res.status(400).json({ error: 'Allergies text is required (max 500 chars)' });
 
-    db.prepare(`INSERT INTO trip_allergies (name_key, display_name, allergies, updated_at) VALUES (?, ?, ?, ?)
-        ON CONFLICT(name_key) DO UPDATE SET display_name = excluded.display_name,
+    db.prepare(`INSERT INTO trip_allergies (trip_id, name_key, display_name, allergies, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(trip_id, name_key) DO UPDATE SET display_name = excluded.display_name,
             allergies = excluded.allergies, updated_at = excluded.updated_at`)
-        .run(name.toLowerCase(), name, allergies, Date.now());
+        .run(req.trip.id, name.toLowerCase(), name, allergies, Date.now());
     return res.json({ ok: true });
 });
 
 server.delete('/api/summer-planning/allergies', requirePlanningAuth, (req, res) => {
     const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
     if (!name) return res.status(400).json({ error: 'Name is required' });
-    const info = db.prepare('DELETE FROM trip_allergies WHERE name_key = ?').run(name.toLowerCase());
+    const info = db.prepare('DELETE FROM trip_allergies WHERE trip_id = ? AND name_key = ?').run(req.trip.id, name.toLowerCase());
     if (info.changes === 0) return res.status(404).json({ error: 'No allergy entry found' });
     return res.json({ ok: true });
 });
