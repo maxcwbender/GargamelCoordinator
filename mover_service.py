@@ -6,8 +6,12 @@ Why this exists: Discord limits PATCH /guilds/{guild_id}/members/{user_id} to 10
 per ~10s on one bucket keyed by guild_id, scope=user (per-token). When the main bot mixes
 moves with its other member edits (roles/nicks), a full 10-player lobby overruns the window
 and discord.py silently stalls ~10s. The limit is PER TOKEN, so this service spreads moves
-across a pool of mover tokens (MOVER_TOKEN, MOVER_TOKEN_2, ...) for near-instant bursts and
-keeps moves off the main bot's bucket entirely. See RATELIMIT_DIAG.md for the proof.
+across a pool of mover tokens (MOVER_TOKEN, MOVER_TOKEN_2, ...) and keeps moves off the
+main bot's bucket entirely. See RATELIMIT_DIAG.md for the proof.
+
+Individual moves are additionally spaced MOVE_SPACING apart pool-wide (not per token):
+moving a whole lobby in one simultaneous burst was disconnecting members' audio client-side,
+even though the rate-limit budget allowed it.
 
 REST-only (no discord.py gateway): a move is fully expressed as (guild_id, user_id, channel_id).
 
@@ -39,6 +43,8 @@ DEFAULT_LIMIT = 10        # Discord's member-move limit; reconciled from real he
 DEFAULT_WINDOW = 10.0     # seconds; reconciled from X-RateLimit-Reset-After
 MAX_RETRIES = 3           # defensive: bounded retries if a 429 ever slips through
 RESET_MARGIN = 0.1        # pad the reconciled window so we never roll before Discord does
+MOVE_SPACING = 0.1        # min seconds between any two moves pool-wide; simultaneous batch
+                          # moves were dropping members' voice audio
 
 
 @dataclass
@@ -85,8 +91,23 @@ class TokenLane:
 
 
 class MoverPool:
-    def __init__(self, lanes: list[TokenLane]):
+    def __init__(self, lanes: list[TokenLane], spacing: float = MOVE_SPACING):
         self.lanes = lanes
+        self.spacing = spacing
+        self._pace_lock = asyncio.Lock()
+        self._next_send_at = 0.0
+
+    async def _pace(self):
+        """Hold this move until `spacing` after the previous one, across ALL lanes.
+        The audio drop happens on the member's client when several moves land at once,
+        so the gap must be pool-wide — per-lane spacing would still allow simultaneous
+        sends from different tokens. Claims a send time under the lock, sleeps outside it."""
+        async with self._pace_lock:
+            now = time.monotonic()
+            wait = self._next_send_at - now
+            self._next_send_at = max(now, self._next_send_at) + self.spacing
+        if wait > 0:
+            await asyncio.sleep(wait)
 
     async def acquire_slot(self) -> TokenLane:
         """Reserve one request slot on whichever lane has budget. If all lanes are
@@ -143,6 +164,7 @@ class MoverPool:
 
     async def dispatch_one(self, guild_id: int, move: Move, retries: int = 0) -> dict:
         lane = await self.acquire_slot()
+        await self._pace()
         try:
             status, headers, body = await self._raw_move(lane, guild_id, move)
         except aiohttp.ClientError as e:
