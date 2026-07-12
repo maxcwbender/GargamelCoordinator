@@ -17,7 +17,10 @@ logger = logging.getLogger("mover_client")
 
 
 class MoverClient:
-    def __init__(self, base_url: str = "http://127.0.0.1:9997", timeout: float = 8.0):
+    # Generous timeout: the mover SERIALIZES moves (~RTT + 0.1s each, pool-wide), so two
+    # 10-player batches landing together can take ~7s+. A premature timeout here would
+    # trip the master's direct-move fallback and double-move players.
+    def __init__(self, base_url: str = "http://127.0.0.1:9997", timeout: float = 25.0):
         self.base_url = base_url.rstrip("/")
         self.timeout = aiohttp.ClientTimeout(total=timeout)
 
