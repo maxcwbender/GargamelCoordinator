@@ -1265,13 +1265,42 @@ class Master_Bot(commands.Bot):
     async def trigger_gamemode_poll(self, game_id: int):
         """Automatically create and start a game mode poll for a lobby."""
         try:
+            # The lobbymanager fires this callback exactly once, the moment the
+            # lobby fills (7 players + bot). When players are already waiting
+            # from a previous game, that beats setup_discord_for_game() posting
+            # the lobby message (games 595/596 on 2026-07-16). A missing
+            # message here means "not posted yet", not "never" — wait for it
+            # instead of dropping the one-shot trigger.
             message = self.lobby_messages.get(game_id)
             if not message:
-                logger.warning(f"[Game {game_id}] No lobby message found — cannot start poll.")
-                return
+                logger.info(
+                    f"[Game {game_id}] Poll triggered before lobby message exists "
+                    f"(Discord setup still running) — waiting for it. "
+                    f"Games with lobby messages: {list(self.lobby_messages.keys())}"
+                )
+                for attempt in range(60):
+                    await asyncio.sleep(2)
+                    message = self.lobby_messages.get(game_id)
+                    if message:
+                        logger.info(
+                            f"[Game {game_id}] Lobby message appeared after ~{(attempt + 1) * 2}s — starting poll."
+                        )
+                        break
+                else:
+                    logger.error(
+                        f"[Game {game_id}] Lobby message still missing after 120s — cannot start poll. "
+                        f"Games with lobby messages: {list(self.lobby_messages.keys())}"
+                    )
+                    return
 
             # Check if polling is already done via REST API
             status = await self.rest_api.get_game_status(game_id)
+            logger.info(
+                f"[Game {game_id}] Poll trigger state: "
+                f"polling_active={status.get('polling_active') if status else 'n/a'}, "
+                f"polling_done={status.get('polling_done') if status else 'n/a'}, "
+                f"lobby_state={status.get('state') if status else 'n/a'}"
+            )
             if status:
                 if status.get("polling_done", False):
                     logger.info(f"[Game {game_id}] Poll already finished, skipping.")
@@ -1394,8 +1423,11 @@ class Master_Bot(commands.Bot):
                 action = data.get("action", "")
                 
                 if action == "start_poll":
-                    await self.trigger_gamemode_poll(game_id)
-                
+                    # Run in the background: trigger_gamemode_poll may wait for
+                    # Discord setup to post the lobby message, and the
+                    # lobbymanager's HTTP client shouldn't be held open for that.
+                    asyncio.create_task(self.trigger_gamemode_poll(game_id))
+
                 return web.json_response({"status": "received"})
             except Exception as e:
                 logger.exception(f"Error handling poll callback: {e}")
@@ -1646,8 +1678,23 @@ class Master_Bot(commands.Bot):
         """
         mod_id = interaction.user.id
         chan_id = int(self.config["MOD_CHANNEL_ID"])
+
+        # Acknowledge within Discord's 3s interaction window before the DB
+        # writes and member/role updates below — responding only at the end
+        # killed /approve with 10062 Unknown interaction (2026-07-16). If the
+        # token is already dead, bail before recording anything so the mod can
+        # simply re-run the command.
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            logger.warning(
+                f"[mod_decision] Interaction from mod {mod_id} expired before it "
+                f"could be acknowledged; nothing recorded — the command must be re-run."
+            )
+            return
+
         if interaction.channel_id != chan_id:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"<@{mod_id}>: please use <#{chan_id}>", ephemeral=True
             )
 
@@ -1656,7 +1703,7 @@ class Master_Bot(commands.Bot):
         )
 
         if not registrant_id:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"<@{mod_id}>: no registrant assigned. Use /poll_registration.",
                 ephemeral=True,
             )
@@ -1703,9 +1750,16 @@ class Master_Bot(commands.Bot):
                     f"In review for the Gargamel League Server you were flagged by {D} mods. Contact <@{bender}>."
                 )
 
-        await interaction.response.send_message(
-            "Thanks, moderation recorded.", ephemeral=True
-        )
+        try:
+            await interaction.followup.send(
+                "Thanks, moderation recorded.", ephemeral=True
+            )
+        except discord.HTTPException as e:
+            # The decision is already recorded; only the confirmation failed.
+            logger.warning(
+                f"[mod_decision] Decision for registrant {registrant_id} recorded, "
+                f"but could not confirm to mod {mod_id}: {e}"
+            )
 
     # ----------------- #
     # Event Listeners   #
@@ -2013,6 +2067,47 @@ class Master_Bot(commands.Bot):
             DB.execute(f"UPDATE users SET rating={rating} WHERE discord_id={user.id}")
             await interaction.response.send_message(
                 f"Set {user.display_name}'s rating to {rating}.", ephemeral=True
+            )
+
+        @app_commands.command(
+            name="set_behavior_score",
+            description="Set behavior score for a user (0-10000, low scores get skipped in queue)",
+        )
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(
+            user="User",
+            score="New behavior score (0 = worst, 10000 = clean record)",
+        )
+        async def set_behavior_score(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            score: app_commands.Range[int, DB.BEHAVIOR_SCORE_MIN, DB.BEHAVIOR_SCORE_MAX],
+        ):
+            """
+            Allows mods to set a player's behavior score.
+
+            Must be used in mod channel. Low scores make the player heavily
+            skipped when more players are queued than a game needs.
+
+            Args:
+                interaction (discord.Interaction): Interaction invoking the command.
+                user (discord.Member): User whose behavior score is being set.
+                score (int): New behavior score (0-10000).
+            """
+            mod_channel = int(self.config["MOD_CHANNEL_ID"])
+            if interaction.channel_id != mod_channel:
+                return await interaction.response.send_message(
+                    f"Use <#{mod_channel}>", ephemeral=True
+                )
+
+            if DB.fetch_rating(user.id) is None:
+                return await interaction.response.send_message(
+                    f"{user.display_name} isn't registered.", ephemeral=True
+                )
+
+            DB.set_behavior_score(user.id, score)
+            await interaction.response.send_message(
+                f"Set {user.display_name}'s behavior score to {score}.", ephemeral=True
             )
 
         @app_commands.command(
@@ -3007,6 +3102,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(reject)
         self.tree.add_command(vouch)
         self.tree.add_command(set_rating)
+        self.tree.add_command(set_behavior_score)
         self.tree.add_command(list_registration_queue)
         self.tree.add_command(assign_registrant)
         self.tree.add_command(force_start)
