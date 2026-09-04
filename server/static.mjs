@@ -45,6 +45,32 @@ function assertSafeStaticRoot(dir) {
 // file-looking requests so missing files 404 instead of returning index.html.
 const looksLikeFile = (path) => /\.[a-zA-Z0-9]{1,8}$/.test(path.split('?')[0]);
 
+// Any dot-prefixed segment (/.git/config, /.gitignore, /.env, /..) — never
+// worth the app shell, always a probe or a mistake.
+const hasDotSegment = (path) => path.split('/').some(seg => seg.startsWith('.'));
+
+// True when the request path corresponds to a real file or directory in the
+// repo. Those must 404 rather than receive the SPA shell: a 200 on
+// /lobbymanager or /config.json/ — even one that only carries index.html —
+// makes exposure probes ambiguous and advertises what exists on disk.
+function resolvesToRepoEntry(reqPath, repoRoot) {
+    let decoded;
+    try {
+        decoded = decodeURIComponent(reqPath);
+    } catch {
+        return true; // malformed encoding — treat as a probe
+    }
+    const trimmed = decoded.replace(/\/+$/, '');
+    if (!trimmed) return false; // "/" itself is the app shell
+    try {
+        const abs = resolve(repoRoot, '.' + trimmed);
+        if (abs !== repoRoot && !abs.startsWith(repoRoot + sep)) return true; // escaped the repo
+        return existsSync(abs);
+    } catch {
+        return true; // unresolvable (null bytes etc.) — treat as a probe
+    }
+}
+
 export function mountStatic(server) {
     const distDir = assertSafeStaticRoot(join(ROOT, 'client', 'dist'));
     const indexHtml = join(distDir, 'index.html');
@@ -66,12 +92,16 @@ export function mountStatic(server) {
         maxAge: 0,
     }));
 
-    // SPA fallback: every remaining GET that isn't an API call and doesn't look
-    // like a file request gets the app shell; client-side routing takes it from
-    // there. The served path is a constant — request input is never used.
+    // SPA fallback: every remaining GET that isn't an API call, doesn't look
+    // like a file request, has no dot-prefixed segment, and doesn't name a real
+    // repo entry gets the app shell; client-side routing takes it from there.
+    // The served path is a constant — request input is never used to pick a file.
+    const repoRoot = resolve(ROOT);
     server.get(/.*/, (req, res, next) => {
         if (req.path.startsWith('/api/')) return next();
+        if (hasDotSegment(req.path)) return next();
         if (looksLikeFile(req.path)) return next();
+        if (resolvesToRepoEntry(req.path, repoRoot)) return next();
         if (!existsSync(indexHtml)) {
             return res.status(503).type('text/plain').send('Frontend not built yet. Run: npm run build');
         }
