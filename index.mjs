@@ -349,7 +349,19 @@ async function fetchAndSaveAvatars(accountIds) {
     }
 }
 
-async function refreshMatchCache() {
+// Single-flight wrapper: concurrent callers (boot, interval, stale-cache API hits)
+// share one in-progress refresh instead of stacking duplicate OpenDota crawls.
+let matchCacheRefreshInFlight = null;
+function refreshMatchCache() {
+    if (!matchCacheRefreshInFlight) {
+        matchCacheRefreshInFlight = doRefreshMatchCache().finally(() => {
+            matchCacheRefreshInFlight = null;
+        });
+    }
+    return matchCacheRefreshInFlight;
+}
+
+async function doRefreshMatchCache() {
     try {
         logger.info('Refreshing OpenDota match cache...');
         if (dotaConstants.lastFetched === 0) await fetchDotaConstants();
@@ -695,8 +707,11 @@ async function refreshPlayerStats() {
     }
 }
 
-// Initial fetch on startup (await to ensure cache is ready before serving)
-await refreshMatchCache();
+// Initial fetch on startup, in the background: awaiting it here blocked the whole
+// module — server.listen never ran until the ~15s OpenDota crawl (10 matches with a
+// 1.1s spacing) finished, so the reverse proxy answered 502 for that entire window.
+// /api/recent-matches already refreshes on-demand if this hasn't completed yet.
+refreshMatchCache();
 
 // Set up periodic background refresh every 10 minutes
 setInterval(() => {
