@@ -280,6 +280,8 @@
           <button id="copy-button" class="copy-button" type="button">Copy</button>
         </div>
 
+        <p id="server-note" class="fine-print state-hidden"></p>
+
         <p class="fine-print">
           No phone? You can also get notifications in your browser:
           <a id="web-link" href="#" target="_blank" rel="noopener">subscribe on the ntfy web app</a>.
@@ -317,6 +319,15 @@
           || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
         const isAndroid = /Android/.test(navigator.userAgent);
 
+        // On our own ntfy server, subscribers must point the app at it too — the
+        // apps default to ntfy.sh.
+        const isDefaultServer = host === 'ntfy.sh';
+        if (!isDefaultServer) {
+          const note = document.getElementById('server-note');
+          note.textContent = `This topic lives on our own server: ${server}`;
+          note.classList.remove('state-hidden');
+        }
+
         const button = document.getElementById('signup-button');
         const step = document.getElementById('step-subscribe');
         if (isAndroid) {
@@ -324,7 +335,8 @@
         } else if (isIOS) {
           button.textContent = 'Copy topic to subscribe';
           step.textContent = 'Tap the button above to copy the topic, then open the ntfy app, '
-            + 'tap + to add a subscription, and paste the topic name:';
+            + 'tap + to add a subscription, and paste the topic name'
+            + (isDefaultServer ? ':' : `. Turn on "Use another server" and enter ${server}:`);
           button.href = '#';
           button.addEventListener('click', async (e) => {
             e.preventDefault();

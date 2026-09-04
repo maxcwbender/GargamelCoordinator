@@ -14,6 +14,11 @@ Notifications sent:
   - Ready check initiated.
   - Custom messages from the /notify mod command (no cooldown).
 
+Automatic queue/ready-check alerts publish with Cache:no — they go only to live
+subscribers and never sit in ntfy's ~12h replay cache (a stale "9/10!" is misleading).
+/notify announcements stay cached so late openers of the app still see them. Nothing
+published to ntfy.sh can be deleted afterward, so caching is decided at send time.
+
 All publishes run in a worker thread (requests is blocking) and are fire-and-forget:
 a dead ntfy.sh can never stall or break queue handling.
 """
@@ -40,6 +45,10 @@ class NtfyNotifier:
     def __init__(self, topic: str | None = None, server: str | None = None):
         self.topic = (topic or os.environ.get("NTFY_TOPIC", "")).strip()
         self.server = (server or os.environ.get("NTFY_SERVER", DEFAULT_SERVER)).rstrip("/")
+        # Publish access token (NTFY_TOKEN). Needed once the topic is write-protected —
+        # a reserved topic on ntfy.sh or an ACL'd topic on a self-hosted server — so only
+        # the bot can publish while subscribing stays open to everyone.
+        self.token = os.environ.get("NTFY_TOKEN", "").strip()
         self._last_sent: dict[str, float] = {}
         if not self.topic:
             logger.warning("NTFY_TOPIC not set; queue push notifications are disabled.")
@@ -113,7 +122,7 @@ class NtfyNotifier:
 
         async def _send():
             try:
-                await asyncio.to_thread(self._publish, message, title, priority, tags)
+                await asyncio.to_thread(self._publish, message, title, priority, tags, False)
                 logger.info(f"[ntfy] Sent '{key}' notification.")
             except Exception as e:
                 logger.warning(f"[ntfy] Notification '{key}' failed: {e}")
@@ -123,15 +132,24 @@ class NtfyNotifier:
         except RuntimeError:
             # No event loop (e.g. called from sync test code) — send inline.
             try:
-                self._publish(message, title, priority, tags)
+                self._publish(message, title, priority, tags, False)
             except Exception as e:
                 logger.warning(f"[ntfy] Notification '{key}' failed: {e}")
 
-    def _publish(self, message: str, title: str, priority: str, tags: str) -> None:
+    def _publish(self, message: str, title: str, priority: str, tags: str, cache: bool = True) -> None:
+        headers = {"Title": title, "Priority": priority, "Tags": tags}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        if not cache:
+            # Deliver to subscribers but never store server-side: ntfy.sh keeps cached
+            # messages ~12h and replays them to anyone who subscribes or reconnects,
+            # and published messages can't be deleted. Queue-state alerts are stale
+            # within minutes, so they shouldn't linger in anyone's history.
+            headers["Cache"] = "no"
         resp = requests.post(
             f"{self.server}/{self.topic}",
             data=message.encode("utf-8"),
-            headers={"Title": title, "Priority": priority, "Tags": tags},
+            headers=headers,
             timeout=10,
         )
         resp.raise_for_status()
