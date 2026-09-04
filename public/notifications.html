@@ -39,6 +39,7 @@
     }
 
     .navbar-brand {
+      flex-shrink: 0;
       font-size: 1.25rem;
       font-weight: 700;
       color: #fff;
@@ -57,9 +58,18 @@
       display: flex;
       gap: 8px;
       list-style: none;
+      min-width: 0;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+
+    .navbar-links::-webkit-scrollbar {
+      display: none;
     }
 
     .navbar-links a {
+      white-space: nowrap;
       color: #b0b8c8;
       text-decoration: none;
       font-size: 0.9rem;
@@ -243,12 +253,12 @@
       <div class="card-title">🔔 Queue Notifications</div>
       <p class="card-description">
         Get a push notification on your phone when the Gargamel Queue is filling up
-        (8, 9, and 10 players) and when a ready check fires — so you never miss a game.
+        (8, 9, and 10 players) and when a ready check fires, so you never miss a game.
         Powered by the free <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> app.
       </p>
 
       <div id="unavailable" class="card-description state-hidden">
-        Notifications aren't configured right now — check back later.
+        Notifications aren't configured right now. Check back later.
       </div>
 
       <div id="signup-area" class="state-hidden">
@@ -260,7 +270,7 @@
               <a href="https://apps.apple.com/us/app/ntfy/id1625396347" target="_blank" rel="noopener">iOS</a> ·
               <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Android</a>
             </li>
-            <li>Tap the button above to open the app and subscribe. If it doesn't open,
+            <li id="step-subscribe">Tap the button above to subscribe. If it doesn't work,
               add a subscription in the app manually with this topic:</li>
           </ol>
         </div>
@@ -271,7 +281,7 @@
         </div>
 
         <p class="fine-print">
-          No phone? You can also get notifications in your browser —
+          No phone? You can also get notifications in your browser:
           <a id="web-link" href="#" target="_blank" rel="noopener">subscribe on the ntfy web app</a>.
         </p>
       </div>
@@ -288,19 +298,49 @@
         const { server, topic } = await res.json();
 
         const host = server.replace(/^https?:\/\//, '');
-        // ntfy:// deep link opens the subscribe flow directly in the iOS/Android app.
-        document.getElementById('signup-button').href = `ntfy://${host}/${topic}`;
         document.getElementById('web-link').href = `${server}/${topic}`;
         document.getElementById('topic-box').textContent = topic;
 
-        const copyBtn = document.getElementById('copy-button');
-        copyBtn.addEventListener('click', async () => {
+        const copyTopic = async () => {
           try {
             await navigator.clipboard.writeText(topic);
-            copyBtn.textContent = 'Copied!';
+            return true;
           } catch {
-            copyBtn.textContent = 'Select it';
+            return false;
           }
+        };
+
+        // Only the ANDROID ntfy app registers the ntfy:// scheme; the iOS app has no
+        // subscribe deep link, so there the best we can do is copy the topic and walk
+        // the player through pasting it into the app. Desktop goes to the web app.
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+          || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        const isAndroid = /Android/.test(navigator.userAgent);
+
+        const button = document.getElementById('signup-button');
+        const step = document.getElementById('step-subscribe');
+        if (isAndroid) {
+          button.href = `ntfy://${host}/${topic}`;
+        } else if (isIOS) {
+          button.textContent = 'Copy topic to subscribe';
+          step.textContent = 'Tap the button above to copy the topic, then open the ntfy app, '
+            + 'tap + to add a subscription, and paste the topic name:';
+          button.href = '#';
+          button.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const ok = await copyTopic();
+            button.textContent = ok ? 'Topic copied! Now open ntfy → + → paste'
+                                    : 'Copy failed — long-press the topic below';
+          });
+        } else {
+          button.href = `${server}/${topic}`;
+          button.target = '_blank';
+          button.rel = 'noopener';
+        }
+
+        const copyBtn = document.getElementById('copy-button');
+        copyBtn.addEventListener('click', async () => {
+          copyBtn.textContent = (await copyTopic()) ? 'Copied!' : 'Select it';
           setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
         });
 
