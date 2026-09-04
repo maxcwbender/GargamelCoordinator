@@ -19,6 +19,7 @@ from urllib.parse import urljoin
 
 import DBFunctions as DB
 from mover_client import MoverClient
+from ntfy_notifier import NtfyNotifier
 from logger import setup_logging
 import logging
 from dotenv import load_dotenv
@@ -362,6 +363,8 @@ class Master_Bot(commands.Bot):
         # run on a dedicated token pool, off the main bot's rate-limit bucket. Falls back to
         # moving players directly if the service is unreachable (see _dispatch_moves).
         self.mover = MoverClient(base_url=self.config.get("MOVER_API_URL", "http://127.0.0.1:9997"))
+        # Phone push notifications (queue filling / ready check) via ntfy — topic from NTFY_TOPIC in .env.
+        self.notifier = NtfyNotifier()
         self.coordinator = TC.TheCoordinator(self, None)  # Coordinator doesn't need dota_talker anymore
         self.pending_matches = set()
         self.ready_check_lock = asyncio.Lock()
@@ -585,6 +588,7 @@ class Master_Bot(commands.Bot):
         # Add player to queue
         pool_size = self.coordinator.add_player(interaction.user.id, rating)
         await self.update_queue_status_message()
+        self.notifier.queue_update(pool_size, self.config["TEAM_SIZE"] * 2)
 
         # Start game loop if enough players
         if pool_size >= self.config["TEAM_SIZE"] * 2:
@@ -698,6 +702,7 @@ class Master_Bot(commands.Bot):
                 pass
 
         self.ready_check_status = True
+        self.notifier.ready_check()
 
         try:
             await self.update_queue_status_message(new_message=True, content="Ready check in progress!")
@@ -2111,6 +2116,55 @@ class Master_Bot(commands.Bot):
             )
 
         @app_commands.command(
+            name="notify",
+            description="Push a custom notification to Gargamel queue notification subscribers",
+        )
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(
+            message="Notification text sent to all subscribers' phones",
+            title="Optional notification title (default: Gargamel League)",
+        )
+        async def notify(
+            interaction: discord.Interaction,
+            message: str,
+            title: str = "Gargamel League",
+        ):
+            """
+            Pushes a custom ntfy notification to everyone subscribed to the
+            queue-notification topic. For testing and announcements.
+
+            Must be used in mod channel. Bypasses the automatic queue-threshold
+            cooldowns.
+
+            Args:
+                interaction (discord.Interaction): Interaction invoking the command.
+                message (str): Notification body.
+                title (str): Notification title.
+            """
+            mod_channel = int(self.config["MOD_CHANNEL_ID"])
+            if interaction.channel_id != mod_channel:
+                return await interaction.response.send_message(
+                    f"Use <#{mod_channel}>", ephemeral=True
+                )
+
+            if not self.notifier.enabled:
+                return await interaction.response.send_message(
+                    "Notifications aren't configured (NTFY_TOPIC is unset).", ephemeral=True
+                )
+
+            # Defer: the publish is a real HTTP round trip to ntfy.sh.
+            await interaction.response.defer(thinking=True, ephemeral=True)
+            sent = await self.notifier.send_custom(message, title)
+            if sent:
+                await interaction.followup.send(
+                    f"Notification pushed to subscribers:\n**{title}**\n{message}", ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    "Failed to push the notification (see bot logs).", ephemeral=True
+                )
+
+        @app_commands.command(
             name="list_registration_queue",
             description="List all players awaiting moderation approval"
         )
@@ -3103,6 +3157,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(vouch)
         self.tree.add_command(set_rating)
         self.tree.add_command(set_behavior_score)
+        self.tree.add_command(notify)
         self.tree.add_command(list_registration_queue)
         self.tree.add_command(assign_registrant)
         self.tree.add_command(force_start)

@@ -835,6 +835,19 @@ server.get('/summer-planning', (req, res) => {
     return res.sendFile('summer-planning.html', { root: './public' });
 });
 
+server.get('/notifications', (req, res) => {
+    return res.sendFile('notifications.html', { root: './public' });
+});
+
+// ntfy topic for the queue-notification signup page. The topic name is public by
+// design (anyone may subscribe); it lives in .env only so the repo never pins it.
+server.get('/api/ntfy-info', (req, res) => {
+    const topic = (process.env.NTFY_TOPIC || '').trim();
+    if (!topic) return res.status(503).json({ error: 'Notifications are not configured' });
+    const ntfyServer = (process.env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/+$/, '');
+    return res.json({ server: ntfyServer, topic });
+});
+
 // ─── Summer trip planning API ────────────────────────────────────────────────
 // Trips: each active trip has its own password (its own env var), and the
 // password entered at the gate is what selects the trip — the auth token derived

@@ -2,5 +2,6 @@ numpy
 dota2
 steam
 python-dotenv
+requests
 pytest
 pytest-asyncio
