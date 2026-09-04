@@ -4,7 +4,14 @@ import itertools
 import json
 import heapq
 from typing import List, Tuple, Set
-from DBFunctions import power_mean, unfun_score, fetch_rating, fetch_steam_id
+from DBFunctions import (
+    power_mean,
+    unfun_score,
+    fetch_rating,
+    fetch_steam_id,
+    fetch_behavior_score,
+    BEHAVIOR_SCORE_MAX,
+)
 import logging
 import time
 from datetime import datetime
@@ -171,24 +178,43 @@ class TheCoordinator:
         # --- Step 1: Calculate weights based on time waited ---
         for user, (rating, join_time, rand) in self.queue.items():
             wait_minutes = max((now - join_time) / 60.0, 0.1)
-            # Soft curve: flat for first ~5 min (fair among simultaneous joiners),
-            # ramps steeply after 10+ min, effectively guaranteed by 30 min.
-            weights.append(1 + (wait_minutes / 5.0) ** 3)
+            # Soft curve: players who joined within ~5 min of each other are
+            # near-even (a 5-min head start is only a ~12% weight edge), then
+            # it ramps hard — 2x at 10 min, ~9x at 20, ~28x at 30 — so long
+            # waiters are effectively guaranteed a seat.
+            weight = 1 + (wait_minutes / 10.0) ** 3
+            # Behavior punishment: a low behavior score scales the weight down
+            # hard, so those players are heavily skipped whenever the queue
+            # holds more players than a game needs. With exactly TEAM_SIZE*2
+            # queued everyone is seated regardless, so this only bites when
+            # someone has to be cut. The 0.01 floor plus the cubic wait curve
+            # means even a 0-score player still gets seated eventually.
+            try:
+                behavior = fetch_behavior_score(user)
+            except Exception as e:
+                logger.error(f"[Coordinator] Could not fetch behavior score for {user}, treating as clean: {e}")
+                behavior = BEHAVIOR_SCORE_MAX
+            behavior_factor = max(
+                (behavior / BEHAVIOR_SCORE_MAX) ** config.get("BEHAVIOR_PUNISH_POWER", 3),
+                0.01,
+            )
+            if behavior_factor < 1:
+                logger.info(f"[Coordinator] {user} behavior score {behavior} -> selection weight x{behavior_factor:.3f}")
+            weights.append(weight * behavior_factor)
             users.append(user)
 
-        # --- Step 2: Weighted random selection ---
-        chosen_users = random.choices(users, weights=weights, k=config["TEAM_SIZE"] * 2)
-
-        # Remove duplicates (choices() allows replacement)
-        chosen_users = list(dict.fromkeys(chosen_users))
-
-        # Fill remaining slots if duplicates reduced count
-        if len(chosen_users) < config["TEAM_SIZE"] * 2:
-            for u in users:
-                if u not in chosen_users:
-                    chosen_users.append(u)
-                if len(chosen_users) >= config["TEAM_SIZE"] * 2:
-                    break
+        # --- Step 2: Weighted random selection (without replacement) ---
+        # Draw one seat at a time, removing each pick from the pool. choices()
+        # samples with replacement, and backfilling its duplicates in queue
+        # order would ignore the weights entirely - handing punished/low-weight
+        # players a seat anyway whenever duplicates occurred.
+        pool = list(zip(users, weights))
+        chosen_users = []
+        while len(chosen_users) < config["TEAM_SIZE"] * 2:
+            pool_users, pool_weights = zip(*pool)
+            pick = random.choices(pool_users, weights=pool_weights, k=1)[0]
+            chosen_users.append(pick)
+            pool = [(u, w) for u, w in pool if u != pick]
 
         ratings = [self.queue[u][0] for u in chosen_users]
 

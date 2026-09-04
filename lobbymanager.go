@@ -442,10 +442,117 @@ func loadDotenv(path string) {
 	}
 }
 
+// runSteamLoginCheck logs into each configured Steam account, confirms the logon
+// succeeded, logs out, and reports the outcome. Invoked via: lobbymanager check
+// Exits 0 if every account logs in, non-zero if any fail — cron/healthcheck friendly.
+func runSteamLoginCheck(guardCode, guardType string) int {
+	pool, err := NewAccountPool()
+	if err != nil {
+		log.Printf("[check] %v", err)
+		return 1
+	}
+
+	// Fetch a fresh CM server list exactly like the real game path (lobbymanager.go:2460),
+	// so this test isn't logging in against a stale/static IP pool. A failure here is itself
+	// diagnostic: it means the box can't reach Steam's directory API.
+	if err := steam.InitializeSteamDirectory(); err != nil {
+		log.Printf("[check] WARNING: could not fetch live Steam server list (%v) — falling back to the static list. If this fails, suspect network reachability to Steam.", err)
+	} else {
+		log.Printf("[check] Steam directory initialized with live server list")
+	}
+
+	failures := 0
+	for i, acct := range pool.accounts {
+		log.Printf("[check] Testing account %d (%s)...", i, acct.Username)
+		if checkSteamLogin(acct, guardCode, guardType) {
+			log.Printf("[check] account %d (%s): LOGIN OK", i, acct.Username)
+		} else {
+			log.Printf("[check] account %d (%s): LOGIN FAILED", i, acct.Username)
+			failures++
+		}
+	}
+
+	if failures == 0 {
+		log.Printf("[check] SUCCESS: all %d account(s) logged in and out cleanly.", len(pool.accounts))
+		return 0
+	}
+	log.Printf("[check] FAILURE: %d of %d account(s) could not log in.", failures, len(pool.accounts))
+	return 1
+}
+
+// checkSteamLogin attempts a single Steam logon for one account and returns true on
+// success. It connects, logs on, waits for the result (or a timeout), then disconnects.
+func checkSteamLogin(acct AccountInfo, guardCode, guardType string) bool {
+	client := steam.NewClient()
+	client.Connect()
+	defer client.Disconnect()
+
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			log.Printf("[check]   timed out after 30s with no logon result (possible network / Steam CM reachability problem)")
+			return false
+		case event, ok := <-client.Events():
+			if !ok {
+				log.Printf("[check]   Steam event channel closed before logon completed")
+				return false
+			}
+			switch e := event.(type) {
+			case *steam.ConnectedEvent:
+				details := &steam.LogOnDetails{
+					Username: acct.Username,
+					Password: acct.Password,
+				}
+				if guardCode != "" {
+					if guardType == "email" {
+						details.AuthCode = guardCode
+						log.Printf("[check]   connected; sending logon WITH email Steam Guard code")
+					} else {
+						details.TwoFactorCode = guardCode
+						log.Printf("[check]   connected; sending logon WITH mobile Steam Guard code")
+					}
+				} else {
+					log.Printf("[check]   connected to Steam, sending logon...")
+				}
+				client.Auth.LogOn(details)
+			case *steam.LoggedOnEvent:
+				log.Printf("[check]   logon succeeded — logging out")
+				return true
+			case *steam.LogOnFailedEvent:
+				// %+v includes the EResult. Common values: 5=InvalidPassword,
+				// 63/65=SteamGuard(email), 85/88=2FA needed/mismatch,
+				// 84=RateLimitExceeded, 3=NoConnection, 20=ServiceUnavailable.
+				log.Printf("[check]   logon FAILED: %+v", e)
+				return false
+			case *steam.DisconnectedEvent:
+				log.Printf("[check]   disconnected before logon completed")
+				return false
+			}
+		}
+	}
+}
+
 func main() {
 	loadDotenv(".env")
 	// Redirect log output to stdout instead of stderr
 	log.SetOutput(os.Stdout)
+
+	// Steam login self-test: `lobbymanager check` logs into each configured account,
+	// confirms success, logs out, and exits 0 (all OK) or 1 (any failed). No HTTP server.
+	if len(os.Args) > 1 && os.Args[1] == "check" {
+		// Optional Steam Guard code to test whether the accounts now require 2FA:
+		//   lobbymanager check <code>           (mobile authenticator, default)
+		//   lobbymanager check <code> email     (email Steam Guard)
+		guardCode, guardType := "", "mobile"
+		if len(os.Args) > 2 {
+			guardCode = os.Args[2]
+		}
+		if len(os.Args) > 3 {
+			guardType = os.Args[3]
+		}
+		os.Exit(runSteamLoginCheck(guardCode, guardType))
+	}
 
 	log.Println("Starting Gargamel Lobby Manager REST API server...")
 

@@ -18,6 +18,7 @@ import aiohttp
 from urllib.parse import urljoin
 
 import DBFunctions as DB
+from mover_client import MoverClient
 from logger import setup_logging
 import logging
 from dotenv import load_dotenv
@@ -357,6 +358,10 @@ class Master_Bot(commands.Bot):
         self.pending_game_task: asyncio.Task | None = None
         self.lobby_messages: dict[int, discord.Message] = {}
         self.rest_api = RESTAPIClient(base_url=self.config.get("REST_API_URL", "http://localhost:8080"))
+        # All player voice-moves are delegated to the standalone mover microservice so they
+        # run on a dedicated token pool, off the main bot's rate-limit bucket. Falls back to
+        # moving players directly if the service is unreachable (see _dispatch_moves).
+        self.mover = MoverClient(base_url=self.config.get("MOVER_API_URL", "http://127.0.0.1:9997"))
         self.coordinator = TC.TheCoordinator(self, None)  # Coordinator doesn't need dota_talker anymore
         self.pending_matches = set()
         self.ready_check_lock = asyncio.Lock()
@@ -1260,13 +1265,42 @@ class Master_Bot(commands.Bot):
     async def trigger_gamemode_poll(self, game_id: int):
         """Automatically create and start a game mode poll for a lobby."""
         try:
+            # The lobbymanager fires this callback exactly once, the moment the
+            # lobby fills (7 players + bot). When players are already waiting
+            # from a previous game, that beats setup_discord_for_game() posting
+            # the lobby message (games 595/596 on 2026-07-16). A missing
+            # message here means "not posted yet", not "never" — wait for it
+            # instead of dropping the one-shot trigger.
             message = self.lobby_messages.get(game_id)
             if not message:
-                logger.warning(f"[Game {game_id}] No lobby message found — cannot start poll.")
-                return
+                logger.info(
+                    f"[Game {game_id}] Poll triggered before lobby message exists "
+                    f"(Discord setup still running) — waiting for it. "
+                    f"Games with lobby messages: {list(self.lobby_messages.keys())}"
+                )
+                for attempt in range(60):
+                    await asyncio.sleep(2)
+                    message = self.lobby_messages.get(game_id)
+                    if message:
+                        logger.info(
+                            f"[Game {game_id}] Lobby message appeared after ~{(attempt + 1) * 2}s — starting poll."
+                        )
+                        break
+                else:
+                    logger.error(
+                        f"[Game {game_id}] Lobby message still missing after 120s — cannot start poll. "
+                        f"Games with lobby messages: {list(self.lobby_messages.keys())}"
+                    )
+                    return
 
             # Check if polling is already done via REST API
             status = await self.rest_api.get_game_status(game_id)
+            logger.info(
+                f"[Game {game_id}] Poll trigger state: "
+                f"polling_active={status.get('polling_active') if status else 'n/a'}, "
+                f"polling_done={status.get('polling_done') if status else 'n/a'}, "
+                f"lobby_state={status.get('state') if status else 'n/a'}"
+            )
             if status:
                 if status.get("polling_done", False):
                     logger.info(f"[Game {game_id}] Poll already finished, skipping.")
@@ -1389,8 +1423,11 @@ class Master_Bot(commands.Bot):
                 action = data.get("action", "")
                 
                 if action == "start_poll":
-                    await self.trigger_gamemode_poll(game_id)
-                
+                    # Run in the background: trigger_gamemode_poll may wait for
+                    # Discord setup to post the lobby message, and the
+                    # lobbymanager's HTTP client shouldn't be held open for that.
+                    asyncio.create_task(self.trigger_gamemode_poll(game_id))
+
                 return web.json_response({"status": "received"})
             except Exception as e:
                 logger.exception(f"Error handling poll callback: {e}")
@@ -1641,8 +1678,23 @@ class Master_Bot(commands.Bot):
         """
         mod_id = interaction.user.id
         chan_id = int(self.config["MOD_CHANNEL_ID"])
+
+        # Acknowledge within Discord's 3s interaction window before the DB
+        # writes and member/role updates below — responding only at the end
+        # killed /approve with 10062 Unknown interaction (2026-07-16). If the
+        # token is already dead, bail before recording anything so the mod can
+        # simply re-run the command.
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            logger.warning(
+                f"[mod_decision] Interaction from mod {mod_id} expired before it "
+                f"could be acknowledged; nothing recorded — the command must be re-run."
+            )
+            return
+
         if interaction.channel_id != chan_id:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"<@{mod_id}>: please use <#{chan_id}>", ephemeral=True
             )
 
@@ -1651,7 +1703,7 @@ class Master_Bot(commands.Bot):
         )
 
         if not registrant_id:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"<@{mod_id}>: no registrant assigned. Use /poll_registration.",
                 ephemeral=True,
             )
@@ -1698,9 +1750,16 @@ class Master_Bot(commands.Bot):
                     f"In review for the Gargamel League Server you were flagged by {D} mods. Contact <@{bender}>."
                 )
 
-        await interaction.response.send_message(
-            "Thanks, moderation recorded.", ephemeral=True
-        )
+        try:
+            await interaction.followup.send(
+                "Thanks, moderation recorded.", ephemeral=True
+            )
+        except discord.HTTPException as e:
+            # The decision is already recorded; only the confirmation failed.
+            logger.warning(
+                f"[mod_decision] Decision for registrant {registrant_id} recorded, "
+                f"but could not confirm to mod {mod_id}: {e}"
+            )
 
     # ----------------- #
     # Event Listeners   #
@@ -2008,6 +2067,47 @@ class Master_Bot(commands.Bot):
             DB.execute(f"UPDATE users SET rating={rating} WHERE discord_id={user.id}")
             await interaction.response.send_message(
                 f"Set {user.display_name}'s rating to {rating}.", ephemeral=True
+            )
+
+        @app_commands.command(
+            name="set_behavior_score",
+            description="Set behavior score for a user (0-10000, low scores get skipped in queue)",
+        )
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(
+            user="User",
+            score="New behavior score (0 = worst, 10000 = clean record)",
+        )
+        async def set_behavior_score(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            score: app_commands.Range[int, DB.BEHAVIOR_SCORE_MIN, DB.BEHAVIOR_SCORE_MAX],
+        ):
+            """
+            Allows mods to set a player's behavior score.
+
+            Must be used in mod channel. Low scores make the player heavily
+            skipped when more players are queued than a game needs.
+
+            Args:
+                interaction (discord.Interaction): Interaction invoking the command.
+                user (discord.Member): User whose behavior score is being set.
+                score (int): New behavior score (0-10000).
+            """
+            mod_channel = int(self.config["MOD_CHANNEL_ID"])
+            if interaction.channel_id != mod_channel:
+                return await interaction.response.send_message(
+                    f"Use <#{mod_channel}>", ephemeral=True
+                )
+
+            if DB.fetch_rating(user.id) is None:
+                return await interaction.response.send_message(
+                    f"{user.display_name} isn't registered.", ephemeral=True
+                )
+
+            DB.set_behavior_score(user.id, score)
+            await interaction.response.send_message(
+                f"Set {user.display_name}'s behavior score to {score}.", ephemeral=True
             )
 
         @app_commands.command(
@@ -2456,22 +2556,18 @@ class Master_Bot(commands.Bot):
                 # Update voice channel assignments based on rebalanced teams
                 radiant_channel, dire_channel = self.game_channels.get(game_id, (None, None))
                 if radiant_channel and dire_channel:
-                    # Move players to correct voice channels based on rebalanced teams
+                    # Move players to their rebalanced team channels via the mover service.
+                    rebalance_pairs = []
                     for discord_id in radiant_discord_ids:
                         member = self.the_guild.get_member(discord_id)
                         if member and member.voice:
-                            try:
-                                await member.move_to(radiant_channel)
-                            except (discord.HTTPException, discord.ClientException):
-                                logger.debug(f"[Game {game_id}] Couldn't move {discord_id} to Radiant channel")
+                            rebalance_pairs.append((member, radiant_channel))
                     
                     for discord_id in dire_discord_ids:
                         member = self.the_guild.get_member(discord_id)
                         if member and member.voice:
-                            try:
-                                await member.move_to(dire_channel)
-                            except (discord.HTTPException, discord.ClientException):
-                                logger.debug(f"[Game {game_id}] Couldn't move {discord_id} to Dire channel")
+                            rebalance_pairs.append((member, dire_channel))
+                    await self._dispatch_moves(rebalance_pairs, game_id)
                 
                 # Use the teams from REST API for the embed
                 radiant = radiant_discord_ids
@@ -3006,6 +3102,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(reject)
         self.tree.add_command(vouch)
         self.tree.add_command(set_rating)
+        self.tree.add_command(set_behavior_score)
         self.tree.add_command(list_registration_queue)
         self.tree.add_command(assign_registrant)
         self.tree.add_command(force_start)
@@ -3195,55 +3292,69 @@ class Master_Bot(commands.Bot):
 
     async def _move_members_with_rate_limit(self, members: list, target_channel: discord.VoiceChannel, game_id: int):
         """
-        Move members to target channel.
-        discord.py handles rate limiting internally via X-RateLimit headers and
-        automatic 429 retry, so we fire all moves concurrently and let the HTTP
-        client pace them. A small per-member stagger avoids a thundering-herd
-        burst against the per-route bucket.
-
-        Args:
-            members: List of discord.Member objects to move
-            target_channel: Target voice channel
-            game_id: Game ID for logging
+        Move members to target_channel via the mover microservice (off the main bot's
+        rate-limit bucket), skipping anyone not in voice or already in the target.
+        Falls back to direct moves if the mover is unreachable (see _dispatch_moves).
         """
-        if not members:
+        pairs = self._filter_moves(members, target_channel)
+        if not pairs:
+            logger.info(f"[Game {game_id}] No members need to be moved")
             return
+        logger.info(f"[Game {game_id}] Moving {len(pairs)} members to {target_channel.name}")
+        await self._dispatch_moves(pairs, game_id)
+        logger.info(f"[Game {game_id}] Completed moving members to {target_channel.name}")
 
-        # Filter out members that don't need to be moved
-        members_to_move = []
+    def _filter_moves(self, members: list, target_channel: discord.VoiceChannel):
+        """Build (member, channel) pairs for members that actually need moving:
+        connected to voice and not already in the target channel."""
+        pairs = []
         for member in members:
             if not member.voice or not member.voice.channel:
                 continue
             if member.voice.channel.id == target_channel.id:
                 continue
-            members_to_move.append(member)
+            pairs.append((member, target_channel))
+        return pairs
 
-        if not members_to_move:
-            logger.info(f"[Game {game_id}] No members need to be moved")
+    async def _dispatch_moves(self, pairs: list, game_id: int):
+        """Delegate a batch of moves to the mover service. `pairs` is a list of
+        (discord.Member, discord.VoiceChannel). Awaits fully so callers that delete the
+        game channels afterward stay correctly ordered. Falls back to direct discord.py
+        moves for the whole batch if the service is unreachable, or for any moves it
+        reports as failed."""
+        if not pairs:
             return
+        moves = [(member.id, channel.id) for member, channel in pairs]
+        result = await self.mover.move_batch(self.the_guild.id, moves)
+        if result is None:
+            logger.warning(f"[Game {game_id}] Mover service unreachable — falling back to direct moves")
+            await self._fallback_move(pairs, game_id)
+            return
+        failed_keys = {
+            (r["user_id"], r["channel_id"])
+            for r in result.get("results", []) if not r.get("ok")
+        }
+        if failed_keys:
+            failed_pairs = [(m, ch) for m, ch in pairs if (m.id, ch.id) in failed_keys]
+            logger.warning(f"[Game {game_id}] Mover reported {len(failed_pairs)} failed move(s) — retrying directly")
+            await self._fallback_move(failed_pairs, game_id)
 
-        logger.info(f"[Game {game_id}] Moving {len(members_to_move)} members to {target_channel.name}")
-
-        async def _move_one(member: discord.Member, index: int):
-            """Move a single member with a small stagger to spread requests."""
+    async def _fallback_move(self, pairs: list, game_id: int):
+        """Direct discord.py moves (the pre-mover behavior); the only place move_to remains.
+        A small per-member stagger avoids a thundering-herd burst against the per-route bucket."""
+        async def _move_one(member, channel, index):
             if index > 0:
                 await asyncio.sleep(0.15 * index)
             try:
-                await member.move_to(target_channel)
-                logger.info(f"[Game {game_id}] Moved {member.display_name} to {target_channel.name}")
+                await member.move_to(channel)
             except discord.HTTPException as e:
-                logger.warning(
-                    f"[Game {game_id}] Failed to move {member.display_name}: "
-                    f"{e.status} {e.text}"
-                )
+                logger.warning(f"[Game {game_id}] Failed to move {member.display_name}: {e.status} {e.text}")
             except Exception as e:
                 logger.warning(f"[Game {game_id}] Failed to move {member.display_name}: {e}")
 
         await asyncio.gather(*[
-            _move_one(member, i) for i, member in enumerate(members_to_move)
-        ])
-
-        logger.info(f"[Game {game_id}] Completed moving all members to {target_channel.name}")
+            _move_one(member, channel, i) for i, (member, channel) in enumerate(pairs)
+        ], return_exceptions=True)
 
     async def clear_game(self, game_id: int):
         """
@@ -3504,7 +3615,17 @@ class Master_Bot(commands.Bot):
         password = setup_info['password']
         
         logger.info(f"[Game {game_id}] Setting up Discord channels and messages (lobby established)")
-        
+
+        # Log the full roster with Discord display names (not raw IDs) at game start.
+        def _roster_names(ids):
+            names = []
+            for mid in ids:
+                m = self.the_guild.get_member(mid)
+                names.append(m.display_name if m else f"<unknown:{mid}>")
+            return names
+        logger.info(f"[Game {game_id}] Radiant ({len(radiant)}): {', '.join(_roster_names(radiant))}")
+        logger.info(f"[Game {game_id}] Dire ({len(dire)}): {', '.join(_roster_names(dire))}")
+
         try:
             # Create voice channels
             create_tasks = [
@@ -3590,15 +3711,8 @@ class Master_Bot(commands.Bot):
                     if m and m.voice:
                         all_game_members.append((m, dire_channel))
 
-                # Use _move_members_with_rate_limit style stagger
-                async def _move(member, channel, idx):
-                    if idx > 0:
-                        await asyncio.sleep(0.15 * idx)
-                    await member.move_to(channel)
-
-                await asyncio.gather(*[
-                    _move(m, ch, i) for i, (m, ch) in enumerate(all_game_members)
-                ], return_exceptions=True)
+                # Delegate the start-of-game moves to the mover service (falls back to direct).
+                await self._dispatch_moves(all_game_members, game_id)
             except Exception as e:
                 logger.exception(f"Unexpected Exception: {e}")
 

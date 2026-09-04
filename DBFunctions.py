@@ -90,6 +90,44 @@ def fetch_rating(discord_id: str):
     return fetch_one(query,
         (discord_id,))
 
+# --- Behavior score ---
+# Scale mirrors Dota's conduct summary: 0 (worst) to 10000 (clean record).
+# Currently only adjustable via the /set_behavior_score slash command; other
+# sources (reports, match results, etc.) may feed into it later.
+BEHAVIOR_SCORE_MIN = 0
+BEHAVIOR_SCORE_MAX = 10000
+DEFAULT_BEHAVIOR_SCORE = BEHAVIOR_SCORE_MAX
+
+def fetch_behavior_score(discord_id) -> int:
+    """
+    Returns the behavior score associated with the given Discord id.
+
+    Args:
+        discord_id: the Discord id to look up
+
+    Returns:
+        int: the user's behavior score, or DEFAULT_BEHAVIOR_SCORE if the user
+        has no row or no score recorded.
+    """
+    query = "SELECT behavior_score FROM users WHERE discord_id = ?"
+    score = fetch_one(query, (discord_id,))
+    return DEFAULT_BEHAVIOR_SCORE if score is None else score
+
+def set_behavior_score(discord_id, score: int):
+    """
+    Sets the behavior score for the given Discord id, clamped to
+    [BEHAVIOR_SCORE_MIN, BEHAVIOR_SCORE_MAX].
+
+    Args:
+        discord_id: the Discord id of the user to update
+        score (int): the new behavior score
+    """
+    score = max(BEHAVIOR_SCORE_MIN, min(BEHAVIOR_SCORE_MAX, int(score)))
+    execute(
+        "UPDATE users SET behavior_score = ? WHERE discord_id = ?",
+        (score, discord_id),
+    )
+
 # Use this as a temporary lobby + 1 before making the actual game when it starts
 
 def query_mod_results(user_id: int) -> tuple[int, int, int]:
