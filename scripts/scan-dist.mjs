@@ -27,15 +27,21 @@ const MARKERS = [
     'SUMMER_PLANNING_PASSWORD', 'process.env.',
 ];
 
-// Load real secret values (never printed — only used for containment checks).
-const secretValues = [];
+// Keys whose values are public by design and expected to appear in frontend
+// code — the Discord OAuth client id is baked into the register link, and the
+// site's own URL shows up inside the OAuth redirect parameter.
+const PUBLIC_KEYS = new Set(['CLIENT_ID', 'SITE_URL', 'BOT_OAUTH_SITE', 'NTFY_SERVER']);
+
+// Load real secret values (values are never printed — only key names are; the
+// values are used solely for containment checks).
+const secretValues = []; // [{ key, value }]
 const envPath = join(ROOT, '.env');
 if (existsSync(envPath)) {
     for (const line of readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-        const m = line.match(/^[A-Z0-9_]+=(.+)$/);
-        if (m) {
-            const v = m[1].trim().replace(/^["']|["']$/g, '');
-            if (v.length >= 8) secretValues.push(v); // ignore short/boolean-ish values
+        const m = line.match(/^([A-Z0-9_]+)=(.+)$/);
+        if (m && !PUBLIC_KEYS.has(m[1])) {
+            const v = m[2].trim().replace(/^["']|["']$/g, '');
+            if (v.length >= 8) secretValues.push({ key: `.env:${m[1]}`, value: v }); // ignore short/boolean-ish values
         }
     }
 }
@@ -43,8 +49,9 @@ const cfgPath = join(ROOT, 'config.json');
 if (existsSync(cfgPath)) {
     try {
         const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
-        for (const v of Object.values(cfg)) {
-            if (typeof v === 'string' && v.length >= 8) secretValues.push(v);
+        for (const [k, v] of Object.entries(cfg)) {
+            if (PUBLIC_KEYS.has(k)) continue;
+            if (typeof v === 'string' && v.length >= 8) secretValues.push({ key: `config.json:${k}`, value: v });
         }
     } catch { /* unreadable config is not this script's problem */ }
 }
@@ -72,10 +79,10 @@ for (const file of walk(DIST)) {
             console.error(`FAIL  ${rel} contains marker "${marker}"`);
         }
     }
-    for (const value of secretValues) {
+    for (const { key, value } of secretValues) {
         if (content.includes(value)) {
             failures++;
-            console.error(`FAIL  ${rel} contains an actual secret value from .env/config.json`);
+            console.error(`FAIL  ${rel} contains the actual value of ${key}`);
         }
     }
 }
