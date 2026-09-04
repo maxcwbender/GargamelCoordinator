@@ -1,0 +1,583 @@
+import fetch from 'node-fetch';
+import { db } from '../db.mjs';
+import { logger } from '../logger.mjs';
+import {
+    OPENDOTA_BASE, LEAGUE_ID, CACHE_TTL_MS, PLAYER_STATS_TTL_MS,
+    CURRENT_SEASON, SEASON_2_FIRST_MATCH, CONSTANTS_TTL_MS,
+} from '../config.mjs';
+
+// ─── Caches ──────────────────────────────────────────────────────────────────
+export let matchCache = { data: null, lastFetched: 0 };
+export let playerStatsCache = { data: null, lastFetched: 0 };
+let refreshingStats = false; // Prevent concurrent refreshes
+export const isRefreshingStats = () => refreshingStats;
+
+// ─── Dota 2 Hero & Item Constants (from OpenDota) ────────────────────────────
+export let dotaConstants = { heroes: {}, items: {}, lastFetched: 0 };
+
+export async function fetchDotaConstants() {
+    try {
+        logger.info('[Constants] Fetching hero and item data from OpenDota...');
+        const [heroesRes, itemsRes] = await Promise.all([
+            fetch(`${OPENDOTA_BASE}/constants/heroes`),
+            fetch(`${OPENDOTA_BASE}/constants/items`)
+        ]);
+
+        if (heroesRes.ok) {
+            const heroes = await heroesRes.json();
+            const heroMap = {};
+            for (const [, hero] of Object.entries(heroes)) {
+                const slug = hero.name.replace('npc_dota_hero_', '');
+                heroMap[hero.id] = {
+                    name: hero.localized_name,
+                    img: `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/${slug}.png`
+                };
+            }
+            dotaConstants.heroes = heroMap;
+        }
+
+        if (itemsRes.ok) {
+            const items = await itemsRes.json();
+            const itemMap = {};
+            for (const [key, item] of Object.entries(items)) {
+                if (item.id) {
+                    itemMap[item.id] = {
+                        name: item.dname || key,
+                        img: `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${key}.png`
+                    };
+                }
+            }
+            dotaConstants.items = itemMap;
+        }
+
+        dotaConstants.lastFetched = Date.now();
+        logger.info(`[Constants] Loaded ${Object.keys(dotaConstants.heroes).length} heroes, ${Object.keys(dotaConstants.items).length} items`);
+    } catch (err) {
+        logger.error('[Constants] Failed to fetch:', err.message);
+    }
+}
+
+export async function fetchOpenDota(path) {
+    const res = await fetch(`${OPENDOTA_BASE}${path}`);
+    if (!res.ok) throw new Error(`OpenDota API ${res.status}: ${path}`);
+    // Log rate-limit headers when present
+    const remaining = res.headers.get('x-rate-limit-remaining')
+        || res.headers.get('x-ratelimit-remaining');
+    if (remaining != null) {
+        logger.info(`OpenDota rate limit remaining: ${remaining}`);
+    }
+    return res.json();
+}
+
+// ─── Database helpers for player stats ────────────────────────────────────
+function loadPlayerStatsFromDB() {
+    try {
+        const query = `
+            SELECT ps.account_id, ps.personaname, ps.wins, ps.losses, ps.kills,
+                   ps.deaths, ps.assists, ps.gold_per_minute, ps.total_gold,
+                   ps.wards_placed, ps.observer_kills, ps.obs_ward_time_total, ps.obs_ward_count,
+                   ps.matches, ps.last_updated,
+                   pa.avatar_url,
+                   COALESCE(mv.mvp_count, 0) AS mvp_count,
+                   COALESCE(sv.svp_count, 0) AS svp_count
+            FROM player_stats ps
+            LEFT JOIN player_avatars pa ON ps.account_id = pa.account_id
+            LEFT JOIN (SELECT account_id, COUNT(*) AS mvp_count FROM match_mvps WHERE award_type = 'mvp' AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY account_id) mv
+                ON ps.account_id = mv.account_id
+            LEFT JOIN (SELECT account_id, COUNT(*) AS svp_count FROM match_mvps WHERE award_type = 'svp' AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY account_id) sv
+                ON ps.account_id = sv.account_id
+            WHERE ps.season = ?
+        `;
+
+        // better-sqlite3 has synchronous methods — only load current season data
+        const rows = db.prepare(query).all(CURRENT_SEASON);
+
+        const players = rows.map(row => ({
+            accountId: row.account_id,
+            name: row.personaname,
+            avatar: row.avatar_url,
+            wins: row.wins,
+            losses: row.losses,
+            matches: row.matches,
+            winRate: row.matches > 0 ? (row.wins / row.matches) : 0,
+            kills: row.kills,
+            deaths: row.deaths,
+            assists: row.assists,
+            avgKills: row.matches > 0 ? (row.kills / row.matches) : 0,
+            avgDeaths: row.matches > 0 ? (row.deaths / row.matches) : 0,
+            avgAssists: row.matches > 0 ? (row.assists / row.matches) : 0,
+            kda: row.deaths > 0 ? ((row.kills + row.assists) / row.deaths) : (row.kills + row.assists),
+            gold_per_minute: row.gold_per_minute,
+            avgGPM: row.matches > 0 ? (row.gold_per_minute / row.matches) : 0,
+            total_gold: row.total_gold,
+            avgNetWorth: row.matches > 0 ? (row.total_gold / row.matches) : 0,
+            wards_placed: row.wards_placed,
+            avgWards: row.matches > 0 ? (row.wards_placed / row.matches) : 0,
+            observer_kills: row.observer_kills || 0,
+            avgDewards: row.matches > 0 ? ((row.observer_kills || 0) / row.matches) : 0,
+            avgObsWardDuration: (row.obs_ward_count || 0) > 0
+                ? (row.obs_ward_time_total / row.obs_ward_count)
+                : null,
+            mvpCount: row.mvp_count || 0,
+            svpCount: row.svp_count || 0,
+        }));
+
+        const oldestUpdate = rows.length > 0 ? Math.min(...rows.map(r => r.last_updated)) : 0;
+
+        logger.info(`Loaded ${players.length} player stats from database`);
+        return {
+            players,
+            lastFetched: oldestUpdate,
+        };
+    } catch (err) {
+        logger.error(`Failed to load player stats from DB: ${err.message}`);
+        return { players: [], lastFetched: 0 };
+    }
+}
+
+function savePlayerStatsToDB(playerMap) {
+    try {
+        const now = Date.now();
+        const insertStats = db.prepare(`
+            INSERT OR REPLACE INTO player_stats
+            (account_id, personaname, wins, losses, kills, deaths, assists, gold_per_minute, total_gold, wards_placed, observer_kills, obs_ward_time_total, obs_ward_count, matches, last_updated, season)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const [accountId, stats] of playerMap.entries()) {
+            insertStats.run(
+                accountId,
+                stats.name,
+                stats.wins,
+                stats.losses,
+                stats.kills,
+                stats.deaths,
+                stats.assists,
+                stats.gold_per_minute,
+                stats.total_gold,
+                stats.wards_placed,
+                stats.observer_kills || 0,
+                stats.obs_ward_time_total || 0,
+                stats.obs_ward_count || 0,
+                stats.matches,
+                now,
+                CURRENT_SEASON
+            );
+        }
+
+        logger.info(`Saved ${playerMap.size} player stats to database`);
+    } catch (err) {
+        logger.error(`Failed to save player stats to DB: ${err.message}`);
+    }
+}
+
+async function fetchAndSaveAvatars(accountIds) {
+    const insertAvatar = db.prepare(`
+        INSERT OR REPLACE INTO player_avatars (account_id, avatar_url, last_updated)
+        VALUES (?, ?, ?)
+    `);
+
+    const now = Date.now();
+    let fetchedCount = 0;
+
+    for (const accountId of accountIds) {
+        try {
+            // Check if we already have a recent avatar (within 7 days)
+            const existing = db.prepare(
+                'SELECT avatar_url, last_updated FROM player_avatars WHERE account_id = ?'
+            ).get(accountId);
+
+            if (existing && (now - existing.last_updated) < (7 * 24 * 60 * 60 * 1000)) {
+                continue; // Skip if avatar is less than 7 days old
+            }
+
+            // Fetch player profile for avatar
+            await new Promise(r => setTimeout(r, 2000)); // 2 second delay to avoid rate limits
+            const profile = await fetchOpenDota(`/players/${accountId}`);
+
+            if (profile && profile.profile) {
+                const avatarUrl = profile.profile.avatarfull || profile.profile.avatar;
+                if (avatarUrl) {
+                    insertAvatar.run(accountId, avatarUrl, now);
+                    fetchedCount++;
+                }
+            }
+        } catch (err) {
+            if (err.message.includes('429')) {
+                logger.warn(`Rate limited while fetching avatar for ${accountId}, stopping avatar fetch`);
+                break; // Stop fetching more avatars if rate limited
+            }
+            logger.error(`Failed to fetch avatar for ${accountId}: ${err.message}`);
+        }
+    }
+
+    if (fetchedCount > 0) {
+        logger.info(`Fetched and saved ${fetchedCount} new player avatars`);
+    }
+}
+
+// DPC-style fantasy score used for MVP/SVP awards. OpenDota does not score
+// fantasy points for our inhouse lobby matches — the `fantasy_points` field is
+// absent from every player even on fully parsed matches — so awards are decided
+// solely by this manual formula.
+function fantasyScore(p) {
+    return (p.kills || 0) * 0.5 +
+        (3 - (p.deaths || 0) * 0.3) +
+        (p.assists || 0) * 0.25 +
+        (p.last_hits || 0) * 0.004 +
+        (p.gold_per_min || 0) * 0.004 +
+        (p.hero_damage || 0) * 0.0002 +
+        (p.tower_damage || 0) * 0.0004 +
+        (p.hero_healing || 0) * 0.0002 +
+        (p.obs_placed || 0) * 0.5 +
+        (p.observer_kills || 0) * 0.5;
+}
+
+// Single-flight wrapper: concurrent callers (boot, interval, stale-cache API hits)
+// share one in-progress refresh instead of stacking duplicate OpenDota crawls.
+let matchCacheRefreshInFlight = null;
+export function refreshMatchCache() {
+    if (!matchCacheRefreshInFlight) {
+        matchCacheRefreshInFlight = doRefreshMatchCache().finally(() => {
+            matchCacheRefreshInFlight = null;
+        });
+    }
+    return matchCacheRefreshInFlight;
+}
+
+async function doRefreshMatchCache() {
+    try {
+        logger.info('Refreshing OpenDota match cache...');
+        if (dotaConstants.lastFetched === 0) await fetchDotaConstants();
+        // Use /matchIds endpoint - /matches excludes amateur leagues like ours
+        const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
+
+        // Take the 10 most recent match IDs (API returns newest first)
+        const recent = matchIds.slice(0, 10);
+
+        // Fetch detailed data for each match (players, scores, winner)
+        const detailed = [];
+        for (const matchId of recent) {
+            try {
+                // Small delay between requests to stay under 60/min rate limit
+                if (detailed.length > 0) await new Promise(r => setTimeout(r, 1100));
+                const detail = await fetchOpenDota(`/matches/${matchId}`);
+                // Load avatars from database for match players
+                const getAvatar = db.prepare('SELECT avatar_url FROM player_avatars WHERE account_id = ?');
+                const matchPlayers = (detail.players || []).map(p => {
+                    let avatar = null;
+                    if (p.account_id) {
+                        const avatarRow = getAvatar.get(p.account_id);
+                        avatar = avatarRow ? avatarRow.avatar_url : null;
+                    }
+
+                    const isRadiant = p.player_slot < 128;
+                    const mvpScore = fantasyScore(p);
+
+                    // Resolve hero portrait from cached constants
+                    const hero = dotaConstants.heroes[p.hero_id];
+
+                    return {
+                        account_id: p.account_id,
+                        personaname: p.personaname || 'Anonymous',
+                        player_slot: p.player_slot,
+                        isRadiant,
+                        kills: p.kills,
+                        deaths: p.deaths,
+                        assists: p.assists,
+                        avatar: avatar,
+                        hero_id: p.hero_id || null,
+                        heroName: hero?.name || null,
+                        heroImg: hero?.img || null,
+                        mvpScore,
+                    };
+                });
+
+                // MVP = highest score on winning team, SVP = highest score on losing team
+                const winningTeamRadiant = detail.radiant_win;
+                let mvpSlot = null;
+                let mvpBest = -Infinity;
+                let svpSlot = null;
+                let svpBest = -Infinity;
+                for (const p of matchPlayers) {
+                    if (p.isRadiant === winningTeamRadiant) {
+                        if (p.mvpScore > mvpBest) { mvpBest = p.mvpScore; mvpSlot = p.player_slot; }
+                    } else {
+                        if (p.mvpScore > svpBest) { svpBest = p.mvpScore; svpSlot = p.player_slot; }
+                    }
+                }
+                for (const p of matchPlayers) {
+                    p.isMVP = p.player_slot === mvpSlot;
+                    p.isSVP = p.player_slot === svpSlot;
+                }
+
+                detailed.push({
+                    match_id: detail.match_id,
+                    radiant_win: detail.radiant_win,
+                    radiant_score: detail.radiant_score,
+                    dire_score: detail.dire_score,
+                    duration: detail.duration,
+                    start_time: detail.start_time,
+                    game_mode: detail.game_mode,
+                    players: matchPlayers,
+                });
+            } catch (err) {
+                logger.error(`Failed to fetch match ${matchId}: ${err.message}`);
+            }
+        }
+
+        matchCache = { data: detailed, lastFetched: Date.now() };
+        logger.info(`Match cache refreshed: ${detailed.length} matches loaded`);
+    } catch (err) {
+        logger.error(`Failed to refresh match cache: ${err.message}`);
+    }
+}
+
+export async function refreshPlayerStats() {
+    // Prevent concurrent refreshes
+    if (refreshingStats) {
+        logger.info('Player stats refresh already in progress, skipping');
+        return;
+    }
+
+    refreshingStats = true;
+
+    try {
+        logger.info('Refreshing player statistics...');
+        const matchIds = await fetchOpenDota(`/leagues/${LEAGUE_ID}/matchIds`);
+        logger.info(`OpenDota returned ${matchIds.length} total match IDs for league ${LEAGUE_ID}`);
+
+        // Season 2 starts from this match onward (list is newest-first from OpenDota)
+        const season2StartIdx = matchIds.indexOf(SEASON_2_FIRST_MATCH);
+        const matchesToFetch = season2StartIdx >= 0
+            ? matchIds.slice(0, season2StartIdx + 1)
+            : matchIds.filter(id => Number(id) >= SEASON_2_FIRST_MATCH); // fallback: coerce to number
+        logger.info(`Fetching ${matchesToFetch.length} Season 2 matches`);
+
+        const playerMap = new Map(); // accountId -> { name, wins, losses, kills, deaths, assists, matches }
+
+        for (let i = 0; i < matchesToFetch.length; i++) {
+            const matchId = matchesToFetch[i];
+            try {
+                // Delay to respect OpenDota's 60/min rate limit (~55 calls/min)
+                if (i > 0) await new Promise(r => setTimeout(r, 1100));
+
+                const detail = await fetchOpenDota(`/matches/${matchId}`);
+
+                // Process each player in the match
+                for (const player of detail.players || []) {
+                    const accountId = player.account_id;
+                    if (!accountId) continue; // Skip anonymous players
+
+                    const isRadiant = player.player_slot < 128;
+                    const won = detail.radiant_win === isRadiant;
+
+                    if (!playerMap.has(accountId)) {
+                        playerMap.set(accountId, {
+                            name: player.personaname || 'Anonymous',
+                            wins: 0,
+                            losses: 0,
+                            kills: 0,
+                            deaths: 0,
+                            assists: 0,
+                            gold_per_minute: 0,
+                            total_gold: 0,
+                            wards_placed: 0,
+                            observer_kills: 0,
+                            obs_ward_time_total: 0,
+                            obs_ward_count: 0,
+                            matches: 0,
+                        });
+                    }
+
+                    const stats = playerMap.get(accountId);
+                    // Update name to most recent one (in case it changed)
+                    if (player.personaname) {
+                        stats.name = player.personaname;
+                    }
+                    stats.matches++;
+                    if (won) stats.wins++;
+                    else stats.losses++;
+                    stats.kills += player.kills || 0;
+                    stats.deaths += player.deaths || 0;
+                    stats.assists += player.assists || 0;
+                    stats.gold_per_minute += player.gold_per_min || 0;
+                    // Total gold is gold remaining + gold spent
+                    const totalGold = (player.gold || 0) + (player.gold_spent || 0);
+                    stats.total_gold += totalGold;
+                    // Wards placed (observer + sentry)
+                    const wardsPlaced = (player.obs_placed || 0) + (player.sen_placed || 0);
+                    stats.wards_placed += wardsPlaced;
+                    // Dewards (enemy observer wards destroyed)
+                    stats.observer_kills += player.observer_kills || 0;
+                    // Observer ward durations (from parsed replay logs)
+                    if (Array.isArray(player.obs_log) && Array.isArray(player.obs_left_log)) {
+                        const leftByHandle = new Map();
+                        for (const evt of player.obs_left_log) {
+                            if (evt.ehandle != null) leftByHandle.set(evt.ehandle, evt.time);
+                        }
+                        for (const evt of player.obs_log) {
+                            const leftTime = evt.ehandle != null ? leftByHandle.get(evt.ehandle) : undefined;
+                            if (leftTime != null && evt.time != null) {
+                                stats.obs_ward_time_total += (leftTime - evt.time);
+                                stats.obs_ward_count++;
+                            }
+                        }
+                    }
+                }
+
+                // Determine match MVP (winning team) and SVP (losing team).
+                const winningRadiant = detail.radiant_win;
+                let mvpId = null, mvpBest = -Infinity;
+                let svpId = null, svpBest = -Infinity;
+
+                for (const p of detail.players || []) {
+                    if (!p.account_id) continue;
+                    const pRadiant = p.player_slot < 128;
+                    const score = fantasyScore(p);
+
+                    if (pRadiant === winningRadiant) {
+                        if (score > mvpBest) { mvpBest = score; mvpId = p.account_id; }
+                    } else {
+                        if (score > svpBest) { svpBest = score; svpId = p.account_id; }
+                    }
+                }
+
+                const insertAward = db.prepare(
+                    'INSERT OR IGNORE INTO match_mvps (match_id, account_id, award_type, mvp_score, created_at) VALUES (?, ?, ?, ?, ?)'
+                );
+                const now = Date.now();
+                if (mvpId != null) {
+                    try { insertAward.run(matchId, mvpId, 'mvp', mvpBest, now); } catch (_) {}
+                }
+                if (svpId != null) {
+                    try { insertAward.run(matchId, svpId, 'svp', svpBest, now); } catch (_) {}
+                }
+
+                if ((i + 1) % 10 === 0) {
+                    logger.info(`Progress: ${i + 1}/${matchesToFetch.length} matches processed`);
+                }
+            } catch (err) {
+                if (err.message.includes('429')) {
+                    logger.error(`Rate limited at match ${i + 1}/${matchesToFetch.length}, stopping refresh`);
+                    break; // Stop if rate limited
+                }
+                logger.error(`Failed to fetch match ${matchId} for stats: ${err.message}`);
+            }
+        }
+
+        // Save to database
+        savePlayerStatsToDB(playerMap);
+
+        // Fetch avatars for players (with rate limiting and caching)
+        const accountIds = Array.from(playerMap.keys());
+        await fetchAndSaveAvatars(accountIds);
+
+        // Load avatars and MVP counts from DB — filter MVPs to only Season 2 matches
+        const avatarQuery = db.prepare('SELECT account_id, avatar_url FROM player_avatars');
+        const avatars = new Map(avatarQuery.all().map(row => [row.account_id, row.avatar_url]));
+        const matchIdPlaceholders = matchesToFetch.map(() => '?').join(',');
+        const mvpQuery = db.prepare(`SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'mvp' AND match_id IN (${matchIdPlaceholders}) GROUP BY account_id`);
+        const mvpCounts = new Map(mvpQuery.all(...matchesToFetch).map(row => [row.account_id, row.cnt]));
+        const svpQuery = db.prepare(`SELECT account_id, COUNT(*) AS cnt FROM match_mvps WHERE award_type = 'svp' AND match_id IN (${matchIdPlaceholders}) GROUP BY account_id`);
+        const svpCounts = new Map(svpQuery.all(...matchesToFetch).map(row => [row.account_id, row.cnt]));
+
+        // Convert to array and calculate derived stats
+        const players = Array.from(playerMap.entries()).map(([accountId, stats]) => ({
+            accountId,
+            name: stats.name,
+            avatar: avatars.get(accountId) || null,
+            wins: stats.wins,
+            losses: stats.losses,
+            matches: stats.matches,
+            winRate: stats.matches > 0 ? (stats.wins / stats.matches) : 0,
+            kills: stats.kills,
+            deaths: stats.deaths,
+            assists: stats.assists,
+            avgKills: stats.matches > 0 ? (stats.kills / stats.matches) : 0,
+            avgDeaths: stats.matches > 0 ? (stats.deaths / stats.matches) : 0,
+            avgAssists: stats.matches > 0 ? (stats.assists / stats.matches) : 0,
+            kda: stats.deaths > 0 ? ((stats.kills + stats.assists) / stats.deaths) : (stats.kills + stats.assists),
+            gold_per_minute: stats.gold_per_minute,
+            avgGPM: stats.matches > 0 ? (stats.gold_per_minute / stats.matches) : 0,
+            total_gold: stats.total_gold,
+            avgNetWorth: stats.matches > 0 ? (stats.total_gold / stats.matches) : 0,
+            wards_placed: stats.wards_placed,
+            avgWards: stats.matches > 0 ? (stats.wards_placed / stats.matches) : 0,
+            observer_kills: stats.observer_kills || 0,
+            avgDewards: stats.matches > 0 ? ((stats.observer_kills || 0) / stats.matches) : 0,
+            avgObsWardDuration: (stats.obs_ward_count || 0) > 0
+                ? (stats.obs_ward_time_total / stats.obs_ward_count)
+                : null,
+            mvpCount: mvpCounts.get(accountId) || 0,
+            svpCount: svpCounts.get(accountId) || 0,
+        }));
+
+        playerStatsCache = {
+            data: players,
+            lastFetched: Date.now(),
+            matchesAnalyzed: matchesToFetch.length,
+        };
+
+        logger.info(`Player stats refreshed: ${players.length} players tracked from ${matchesToFetch.length} matches`);
+    } catch (err) {
+        logger.error(`Failed to refresh player stats: ${err.message}`);
+    } finally {
+        refreshingStats = false;
+    }
+}
+
+// Startup loading + periodic refresh schedules. Runs in the background: awaiting
+// the initial crawl here would block server.listen for the whole ~15s OpenDota
+// crawl and the reverse proxy would answer 502 for that entire window.
+export function startOpenDotaBackgroundWork() {
+    fetchDotaConstants();
+    setInterval(fetchDotaConstants, CONSTANTS_TTL_MS);
+
+    refreshMatchCache();
+    setInterval(() => { refreshMatchCache(); }, CACHE_TTL_MS);
+
+    // Load Season 2 player stats from database on startup
+    const dbStats = loadPlayerStatsFromDB();
+    if (dbStats.players.length > 0) {
+        playerStatsCache = {
+            data: dbStats.players,
+            lastFetched: dbStats.lastFetched,
+            // Total season games ≈ the most games any single player has played, NOT the
+            // first player's count (rows have no ORDER BY, so players[0] was arbitrary —
+            // that bug let the qualification bar collapse to 1 game after a restart).
+            matchesAnalyzed: dbStats.players.reduce((max, p) => Math.max(max, p.matches), 0),
+        };
+        logger.info(`Loaded ${dbStats.players.length} Season 2 player stats from database, last updated ${new Date(dbStats.lastFetched).toISOString()}`);
+    }
+
+    // Refresh player stats if cache is stale (older than 12 hours) or empty
+    if (Date.now() - dbStats.lastFetched > PLAYER_STATS_TTL_MS || dbStats.players.length === 0) {
+        logger.info('Player stats cache is stale or empty, refreshing in background');
+        refreshPlayerStats(); // Don't await - run in background
+    } else {
+        logger.info('Player stats cache is fresh, skipping initial refresh');
+
+        // Check if we need to fetch missing avatars
+        const playersWithoutAvatars = dbStats.players.filter(p => !p.avatar);
+        if (playersWithoutAvatars.length > 0) {
+            logger.info(`Found ${playersWithoutAvatars.length} players without avatars, fetching in background`);
+            const accountIds = playersWithoutAvatars.map(p => p.accountId);
+            fetchAndSaveAvatars(accountIds).then(() => {
+                // Reload player stats after avatar fetch to update cache
+                const updatedStats = loadPlayerStatsFromDB();
+                if (updatedStats.players.length > 0) {
+                    playerStatsCache.data = updatedStats.players;
+                    logger.info('Player stats cache updated with new avatars');
+                }
+                return refreshMatchCache();
+            }).then(() => {
+                logger.info('Match cache refreshed with new avatars');
+            }).catch(err => {
+                logger.error(`Failed to fetch missing avatars: ${err.message}`);
+            });
+        }
+    }
+
+    setInterval(() => { refreshPlayerStats(); }, PLAYER_STATS_TTL_MS);
+}

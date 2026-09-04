@@ -1,4 +1,6 @@
 node_modules
+client/node_modules
+client/dist
 config.json
 .env
 .env.local
@@ -13,3 +15,4 @@ gargamel.exe
 go-dota2/
 go1.23.4.linux-amd64.tar.gz
 *.md
+!DEPLOYMENT.md
