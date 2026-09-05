@@ -460,3 +460,14 @@ a.player-name-cell:hover {
     height: 17px;
   }
 }
+
+.player-name-cell a {
+  color: #1a1a2e;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.player-name-cell a:hover {
+  color: #4e9fd1;
+  text-decoration: underline;
+}

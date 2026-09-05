@@ -1,0 +1,286 @@
+/* ── Minimap calibration mode (/livegame?calibrate=1) ─────── */
+.minimap.large {
+  max-width: 640px;
+}
+
+.minimap .tower.draggable,
+.minimap .barracks.draggable {
+  cursor: grab;
+  touch-action: none;
+}
+
+.minimap .tower.draggable:hover,
+.minimap .barracks.draggable:hover {
+  outline: 2px solid #fff;
+  z-index: 3;
+}
+
+.minimap .tower.draggable {
+  width: 14px;
+  height: 14px;
+}
+
+.minimap .barracks.draggable {
+  width: 10px;
+  height: 10px;
+}
+
+.extra-dot {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.extra-dot.test {
+  background: #facc15;
+  box-shadow: 0 0 10px #facc15;
+}
+
+.minimap-override-note {
+  text-align: center;
+  color: #b8860b;
+  font-size: 12px;
+  margin-top: 10px;
+}
+
+.calibrator {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.calib-intro h2 {
+  font-size: 1.3rem;
+  color: #1a1a2e;
+  margin-bottom: 8px;
+}
+
+.calib-intro p {
+  color: #555;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  max-width: 900px;
+}
+
+.calib-intro code {
+  background: #f1f3f6;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.calib-note {
+  margin-top: 10px;
+  background: rgba(184, 134, 11, 0.1);
+  border: 1px solid rgba(184, 134, 11, 0.35);
+  color: #8a6508;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.calib-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 640px) 1fr;
+  gap: 24px;
+  margin-top: 20px;
+  align-items: start;
+}
+
+.calib-map-col {
+  position: sticky;
+  top: 80px;
+}
+
+.calib-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.calib-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.calib-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
+}
+
+.calib-swatch.sw-tower.radiant { background: #4ade80; }
+.calib-swatch.sw-tower.dire { background: #ef4444; }
+.calib-swatch.sw-barracks { width: 9px; height: 9px; }
+.calib-swatch.sw-barracks.radiant { background: rgba(74, 222, 128, 0.7); }
+.calib-swatch.sw-barracks.dire { background: rgba(239, 68, 68, 0.7); }
+.calib-swatch.dot { border-radius: 50%; background: #4ade80; }
+.calib-swatch.test { border-radius: 50%; background: #facc15; }
+
+.calib-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.calib-panel section {
+  margin-bottom: 22px;
+}
+
+.calib-panel h3 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #4e9fd1;
+  margin-bottom: 8px;
+}
+
+.calib-bounds {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.calib-bounds label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #666;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.calib-bounds input,
+.calib-test input,
+.calib-struct-row input {
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.calib-test {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.calib-test input {
+  width: 100px;
+}
+
+.calib-muted {
+  color: #888;
+  font-size: 0.8rem;
+}
+
+.calib-live-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+}
+
+.calib-live {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.calib-live th,
+.calib-live td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #f0f0f0;
+  text-align: left;
+}
+
+.calib-live tr.radiant td:first-child { color: #1f8a52; font-weight: 600; }
+.calib-live tr.dire td:first-child { color: #c0392b; font-weight: 600; }
+
+.calib-struct-cols {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.calib-struct-cols .calib-structs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  column-gap: 16px;
+}
+
+.calib-struct-cols .calib-structs-title {
+  grid-column: 1 / -1;
+}
+
+.calib-structs-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #888;
+  margin: 8px 0 4px;
+}
+
+.calib-struct-row {
+  display: grid;
+  grid-template-columns: 12px minmax(110px, 1fr) 62px 62px;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+  font-size: 0.8rem;
+}
+
+.calib-struct-label {
+  color: #444;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.calib-source {
+  width: 100%;
+  font-family: 'Consolas', 'Menlo', monospace;
+  font-size: 0.72rem;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 8px;
+  background: #fbfcfd;
+  color: #333;
+}
+
+@media (max-width: 968px) {
+  .calib-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .calib-map-col {
+    position: static;
+  }
+
+  .calib-struct-cols {
+    grid-template-columns: 1fr;
+  }
+}

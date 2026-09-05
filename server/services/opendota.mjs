@@ -233,6 +233,34 @@ function fantasyScore(p) {
         (p.observer_kills || 0) * 0.5;
 }
 
+// Persist one row per (match, player) so profiles can show hero history and
+// recent results without any extra OpenDota calls. Called from both crawls.
+const upsertPlayerMatch = db.prepare(`INSERT OR REPLACE INTO player_matches
+    (match_id, account_id, hero_id, player_slot, won, kills, deaths, assists, gold_per_min, start_time, duration, game_mode, season)
+    VALUES (@matchId, @accountId, @heroId, @playerSlot, @won, @kills, @deaths, @assists, @gpm, @startTime, @duration, @gameMode, @season)`);
+const savePlayerMatches = db.transaction((detail, season) => {
+    for (const p of detail.players || []) {
+        if (!p.account_id) continue;
+        const isRadiant = p.player_slot < 128;
+        upsertPlayerMatch.run({
+            matchId: detail.match_id,
+            accountId: p.account_id,
+            heroId: p.hero_id || null,
+            playerSlot: p.player_slot,
+            won: detail.radiant_win === isRadiant ? 1 : 0,
+            kills: p.kills || 0,
+            deaths: p.deaths || 0,
+            assists: p.assists || 0,
+            gpm: p.gold_per_min || 0,
+            startTime: detail.start_time || null,
+            duration: detail.duration || null,
+            gameMode: detail.game_mode ?? null,
+            season,
+        });
+    }
+});
+export const playerMatchCount = () => db.prepare('SELECT COUNT(*) AS c FROM player_matches').get().c;
+
 // Single-flight wrapper: concurrent callers (boot, interval, stale-cache API hits)
 // share one in-progress refresh instead of stacking duplicate OpenDota crawls.
 let matchCacheRefreshInFlight = null;
@@ -262,6 +290,7 @@ async function doRefreshMatchCache() {
                 // Small delay between requests to stay under 60/min rate limit
                 if (detailed.length > 0) await new Promise(r => setTimeout(r, 1100));
                 const detail = await fetchOpenDota(`/matches/${matchId}`);
+                try { savePlayerMatches(detail, detail.match_id >= SEASON_2_FIRST_MATCH ? CURRENT_SEASON : 1); } catch (e) { logger.error(`Failed to save player matches for ${matchId}: ${e.message}`); }
                 // Load avatars from database for match players
                 const getAvatar = db.prepare('SELECT avatar_url FROM player_avatars WHERE account_id = ?');
                 const matchPlayers = (detail.players || []).map(p => {
@@ -363,6 +392,7 @@ export async function refreshPlayerStats() {
                 if (i > 0) await new Promise(r => setTimeout(r, 1100));
 
                 const detail = await fetchOpenDota(`/matches/${matchId}`);
+                try { savePlayerMatches(detail, CURRENT_SEASON); } catch (e) { logger.error(`Failed to save player matches for ${matchId}: ${e.message}`); }
 
                 // Process each player in the match
                 for (const player of detail.players || []) {
@@ -552,7 +582,9 @@ export function startOpenDotaBackgroundWork() {
     }
 
     // Refresh player stats if cache is stale (older than 12 hours) or empty
-    if (Date.now() - dbStats.lastFetched > PLAYER_STATS_TTL_MS || dbStats.players.length === 0) {
+    const noMatchHistory = playerMatchCount() === 0;
+    if (noMatchHistory) logger.info('player_matches is empty (first run with profiles) — forcing a season crawl');
+    if (Date.now() - dbStats.lastFetched > PLAYER_STATS_TTL_MS || dbStats.players.length === 0 || noMatchHistory) {
         logger.info('Player stats cache is stale or empty, refreshing in background');
         refreshPlayerStats(); // Don't await - run in background
     } else {

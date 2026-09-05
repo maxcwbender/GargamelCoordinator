@@ -1,4 +1,5 @@
 import { Router, useRouter } from './router.jsx';
+import { AuthProvider } from './auth.jsx';
 import NavBar from './components/NavBar.jsx';
 import LiveGameToast from './components/LiveGameToast.jsx';
 import Home from './pages/Home.jsx';
@@ -8,6 +9,7 @@ import Rankings from './pages/Rankings.jsx';
 import LiveGame from './pages/LiveGame.jsx';
 import Notifications from './pages/Notifications.jsx';
 import SummerPlanning from './pages/SummerPlanning.jsx';
+import Profile from './pages/Profile.jsx';
 
 const PAGES = {
     '/': Home,
@@ -33,11 +35,21 @@ function CurrentPage() {
         );
     }
 
-    const Page = PAGES[path] || Home; // unknown paths fall back to the home page
+    let page;
+    const playerMatch = path.match(/^\/players\/(\d+)\/?$/);
+    if (playerMatch) {
+        page = <Profile key={playerMatch[1]} accountId={Number(playerMatch[1])} />;
+    } else if (path === '/profile') {
+        page = <Profile key="me" accountId={null} />;
+    } else {
+        const Page = PAGES[path] || Home; // unknown paths fall back to the home page
+        page = <Page />;
+    }
+
     return (
         <>
             <NavBar />
-            <Page />
+            {page}
             <LiveGameToast />
         </>
     );
@@ -46,7 +58,9 @@ function CurrentPage() {
 export default function App() {
     return (
         <Router>
-            <CurrentPage />
+            <AuthProvider>
+                <CurrentPage />
+            </AuthProvider>
         </Router>
     );
 }

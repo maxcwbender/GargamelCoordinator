@@ -9,5 +9,7 @@ import './styles/rankings.css';
 import './styles/livegame.css';
 import './styles/notifications.css';
 import './styles/summer-planning.css';
+import './styles/profile.css';
+import './styles/minimap-calibrator.css';
 
 createRoot(document.getElementById('root')).render(<App />);

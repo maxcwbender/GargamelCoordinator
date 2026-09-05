@@ -1,4 +1,5 @@
 // Small shared UI pieces used across the data pages.
+import { Link } from '../router.jsx';
 
 export function Spinner({ label }) {
     return (
@@ -27,12 +28,23 @@ export function EmptyState({ title, children }) {
     );
 }
 
-// Player name linking to their OpenDota profile (plain text when anonymous).
-export function PlayerLink({ name, accountId }) {
+// Player name linking to their league profile, with a small separate arrow
+// that opens their OpenDota page. Plain text when the player is anonymous.
+export function PlayerLink({ name, accountId, opendota = true }) {
     if (!accountId) return <>{name}</>;
     return (
-        <a href={`https://www.opendota.com/players/${accountId}`} target="_blank" rel="noopener noreferrer">
-            {name}
-        </a>
+        <span className="player-link">
+            <Link to={`/players/${accountId}`} title="View league profile">{name}</Link>
+            {opendota && (
+                <a
+                    className="od-link"
+                    href={`https://www.opendota.com/players/${accountId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="View on OpenDota"
+                    onClick={e => e.stopPropagation()}
+                >↗</a>
+            )}
+        </span>
     );
 }

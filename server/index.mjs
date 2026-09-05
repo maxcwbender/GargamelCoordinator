@@ -5,6 +5,8 @@ import { startDiscordBackgroundWork } from './services/discord.mjs';
 import { mountLeagueRoutes } from './routes/league.mjs';
 import { mountRegisterRoutes } from './routes/register.mjs';
 import { mountPlanningRoutes } from './routes/planning.mjs';
+import { mountAuthRoutes } from './routes/auth.mjs';
+import { mountProfileRoutes } from './routes/profile.mjs';
 import { mountStatic } from './static.mjs';
 
 const server = express();
@@ -23,6 +25,8 @@ server.use((req, res, next) => {
 mountLeagueRoutes(server);
 mountRegisterRoutes(server);
 mountPlanningRoutes(server);
+mountAuthRoutes(server);
+mountProfileRoutes(server);
 mountStatic(server);
 
 // Background caches (OpenDota crawl, Discord members) start after the routes are

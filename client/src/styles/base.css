@@ -314,3 +314,132 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
+
+/* ── Navbar account area (login / profile / logout) ───────── */
+.navbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.nav-login {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #5865f2;
+  color: #fff;
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.2s ease;
+}
+
+.nav-login:hover {
+  background: #4752c4;
+}
+
+.nav-discord-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.nav-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.nav-account-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+
+.nav-account-link:hover,
+.nav-account-link.active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.nav-account-link img,
+.nav-avatar-fallback {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #2f3350;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+}
+
+.nav-account-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-logout {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #b0b8c8;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.nav-logout:hover {
+  color: #fff;
+  border-color: #fff;
+}
+
+/* Player name -> league profile, with a separate OpenDota arrow */
+.player-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.od-link {
+  font-size: 0.75em;
+  opacity: 0.55;
+  text-decoration: none !important;
+  color: inherit !important;
+  transition: opacity 0.15s ease;
+}
+
+.od-link:hover {
+  opacity: 1;
+  color: #4e9fd1 !important;
+}
+
+@media (max-width: 900px) {
+  .nav-account-name,
+  .nav-login span {
+    display: none;
+  }
+
+  .nav-login {
+    padding: 8px 10px;
+  }
+
+  .nav-logout {
+    padding: 6px 8px;
+  }
+}

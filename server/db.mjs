@@ -97,3 +97,50 @@ db.exec(`CREATE TABLE IF NOT EXISTS trip_allergies (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (trip_id, name_key)
 )`);
+
+// ─── User accounts (website login, profiles, preferences) ────────────────────
+// profiles is keyed by Discord id and is owned by the website; the bot's
+// `users` table (steam link, rating) is never altered by account features.
+// Discord/Steam ids exceed JS's safe-integer range — always read them back
+// with CAST(... AS TEXT) and never do arithmetic on them as Numbers.
+db.exec(`CREATE TABLE IF NOT EXISTS profiles (
+    discord_id TEXT PRIMARY KEY,
+    username TEXT,
+    global_name TEXT,
+    avatar TEXT,
+    fav_heroes TEXT NOT NULL DEFAULT '[]',
+    fav_position TEXT,
+    veto_mode INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+)`);
+
+// Login sessions: the cookie holds a random token, the table holds its sha256.
+db.exec(`CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    discord_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_discord ON sessions(discord_id)');
+
+// Per-player, per-match rows (hero, result, KDA) written during the season
+// crawl. Powers "top heroes" and "recent matches" on profiles with no extra
+// OpenDota calls.
+db.exec(`CREATE TABLE IF NOT EXISTS player_matches (
+    match_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    hero_id INTEGER,
+    player_slot INTEGER,
+    won INTEGER NOT NULL DEFAULT 0,
+    kills INTEGER DEFAULT 0,
+    deaths INTEGER DEFAULT 0,
+    assists INTEGER DEFAULT 0,
+    gold_per_min INTEGER DEFAULT 0,
+    start_time INTEGER,
+    duration INTEGER,
+    game_mode INTEGER,
+    season INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (match_id, account_id)
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_player_matches_account ON player_matches(account_id, start_time)');

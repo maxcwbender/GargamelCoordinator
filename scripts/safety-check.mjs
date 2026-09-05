@@ -90,6 +90,34 @@ for (const path of PROBES) {
     }
 }
 
+// Auth gates: endpoints that read or write a player's own data must reject
+// anonymous requests (no session cookie) — a misplaced middleware here would
+// expose or let anyone edit profiles.
+const AUTH_GATES = [
+    { path: '/api/profile/me', method: 'GET' },
+    { path: '/api/auth/link-steam?rank=Legend', method: 'GET' },
+    { path: '/api/profile/prefs', method: 'PUT', body: '{"favHeroes":[]}' },
+];
+for (const gate of AUTH_GATES) {
+    try {
+        const res = await fetch(BASE + gate.path, {
+            method: gate.method,
+            redirect: 'manual',
+            headers: gate.body ? { 'Content-Type': 'application/json' } : {},
+            body: gate.body,
+        });
+        checked++;
+        if (res.status === 401) {
+            console.log(`OK    ${gate.method} ${gate.path} -> 401 (login required)`);
+        } else {
+            failures++;
+            console.error(`FAIL  ${gate.method} ${gate.path} -> ${res.status} — expected 401 for an anonymous request`);
+        }
+    } catch (err) {
+        console.log(`SKIP  ${gate.method} ${gate.path} — request failed (${err.message})`);
+    }
+}
+
 // Sanity: the SPA itself must actually be up, otherwise the 404s above prove nothing.
 try {
     const res = await fetch(BASE + '/');

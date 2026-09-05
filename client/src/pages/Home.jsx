@@ -1,18 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import RegistrationFields from '../components/RegistrationFields.jsx';
 
 const OAUTH_URL = 'https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2Fwww.gargamel-league.com%2F&scope=identify+connections+guilds.join';
-
-const RANKS = [
-    ['Rusty', "I'm rusty or don't know my rank"],
-    ['Herald', 'Herald'],
-    ['Guardian', 'Guardian'],
-    ['Crusader', 'Crusader'],
-    ['Archon', 'Archon'],
-    ['Legend', 'Legend'],
-    ['Ancient', 'Ancient'],
-    ['Divine', 'Divine'],
-    ['Immortal', 'Immortal'],
-];
 
 // Registration page. Two phases:
 //   1. No OAuth token in the URL fragment -> show the rank/referral form; the
@@ -24,9 +13,7 @@ export default function Home() {
     const [errorMessage, setErrorMessage] = useState('There was a problem linking your accounts. Please try again.');
     const [rank, setRank] = useState('');
     const [rankInvalid, setRankInvalid] = useState(false);
-    const [members, setMembers] = useState([]);
-    const [referralText, setReferralText] = useState('');
-    const [dropdownOpen, setDropdownOpen] = useState(false);
+    const [authError] = useState(() => new URLSearchParams(window.location.search).get('authError'));
     const confirmedReferral = useRef(null);
 
     useEffect(() => {
@@ -36,10 +23,6 @@ export default function Home() {
 
         if (!accessToken) {
             setState('auth');
-            fetch('/api/discord-members')
-                .then(r => r.json())
-                .then(list => setMembers(Array.isArray(list) ? list : []))
-                .catch(() => {});
             return;
         }
 
@@ -72,24 +55,6 @@ export default function Home() {
         });
     }, []);
 
-    const query = referralText.trim().toLowerCase();
-    const matches = query.length >= 2
-        ? members.filter(m => m.name.toLowerCase().includes(query)).slice(0, 20)
-        : [];
-
-    const pickReferral = (name) => {
-        confirmedReferral.current = name;
-        setReferralText(name);
-        setDropdownOpen(false);
-    };
-
-    const onReferralBlur = () => {
-        setTimeout(() => {
-            setDropdownOpen(false);
-            if (!confirmedReferral.current) setReferralText('');
-        }, 150);
-    };
-
     const onRegisterClick = (e) => {
         if (!rank) {
             e.preventDefault();
@@ -110,6 +75,8 @@ export default function Home() {
                     <img className="logo-image" src="/GargamelPuppets.png" alt="Gargamel League Logo" />
                 </div>
 
+                {authError && <div className="auth-warning">Login problem: {authError}</div>}
+
                 {state === 'auth' && (
                     <div>
                         <div className="auth-title">Account Link Required</div>
@@ -120,44 +87,12 @@ export default function Home() {
                         <div className="auth-warning">
                             Warning: Before clicking the link, please ensure your Discord User Settings have your Steam Account added under Connections
                         </div>
-                        <div className="form-field">
-                            <label htmlFor="rank-select">Your Current Dota 2 Rank *</label>
-                            <select
-                                id="rank-select"
-                                className={'rank-select' + (rankInvalid ? ' invalid' : '')}
-                                value={rank}
-                                onChange={e => { setRank(e.target.value); setRankInvalid(false); }}
-                            >
-                                <option value="">-- Select Your Rank --</option>
-                                {RANKS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                            </select>
-                        </div>
-                        <div className="form-field referral-wrap">
-                            <label htmlFor="referral-input">Referred By (optional)</label>
-                            <input
-                                id="referral-input"
-                                type="text"
-                                autoComplete="off"
-                                placeholder="Start typing a Discord name..."
-                                value={referralText}
-                                onChange={e => { confirmedReferral.current = null; setReferralText(e.target.value); setDropdownOpen(true); }}
-                                onBlur={onReferralBlur}
-                            />
-                            {dropdownOpen && matches.length > 0 && (
-                                <div className="referral-dropdown">
-                                    {matches.map(m => (
-                                        <div
-                                            key={m.name}
-                                            className="referral-option"
-                                            onMouseDown={e => { e.preventDefault(); pickReferral(m.name); }}
-                                        >
-                                            {m.avatar && <img src={m.avatar} alt="" onError={e => { e.target.style.display = 'none'; }} />}
-                                            <span>{m.name}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
+                        <RegistrationFields
+                            rank={rank}
+                            onRankChange={v => { setRank(v); setRankInvalid(false); }}
+                            rankInvalid={rankInvalid}
+                            onReferralChange={name => { confirmedReferral.current = name; }}
+                        />
                         <a className="authenticate-button" href={OAUTH_URL} onClick={onRegisterClick}>
                             Register for the Gargamel League
                         </a>
