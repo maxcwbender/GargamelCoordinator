@@ -28,6 +28,10 @@ const namesStmt = db.prepare(`SELECT ps.account_id, ps.personaname, pa.avatar_ur
 const mvpStmt = db.prepare(`SELECT account_id, COUNT(*) AS c FROM match_mvps WHERE award_type = 'mvp' AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY account_id`);
 const resultsStmt = db.prepare(`SELECT account_id, won FROM player_matches WHERE season = ? ORDER BY account_id, start_time, match_id`);
 const seasonMatchesStmt = db.prepare('SELECT COUNT(DISTINCT match_id) AS c, MAX(start_time) AS latest FROM player_matches WHERE season = ?');
+// How the core/support split was decided, per match: 'lane' (OpenDota parsed
+// lane data) vs 'heuristic' (wards/GPM fallback when a match wasn't parsed).
+const roleSourceStmt = db.prepare(`SELECT role_source AS source, COUNT(DISTINCT match_id) AS c
+    FROM player_matches WHERE season = ? AND role IS NOT NULL GROUP BY role_source`);
 const mmrStmt = db.prepare(`
     SELECT mp.match_id, CAST(mp.discord_id AS TEXT) AS discord_id, mp.mmr, m.date_created,
            CAST(u.steam_id AS TEXT) AS steam_id, u.rating
@@ -189,6 +193,7 @@ function compute() {
         minMatches,
         minRoleMatches,
         rolesAvailable: core.length > 0,
+        roleSource: Object.fromEntries(roleSourceStmt.all(CURRENT_SEASON).map(r => [r.source || 'unknown', r.c])),
         tabs: {
             overview: { label: 'Overview', categories: overview },
             core: { label: 'Core', categories: coreCats },

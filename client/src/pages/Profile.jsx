@@ -414,16 +414,19 @@ export default function Profile({ accountId }) {
                 <div className="profile-card">
                     <h2>Top Heroes{season ? ` · Season ${season.number}` : ''}</h2>
                     {p.topHeroes.length ? (
-                        <div className="top-heroes">
-                            {p.topHeroes.map((h, i) => (
-                                <div key={h.id} className="top-hero">
-                                    <div className="top-hero-rank">#{i + 1}</div>
-                                    <HeroImg hero={h} className="top-hero-img" />
-                                    <div className="top-hero-name">{h.name}</div>
-                                    <div className="top-hero-stats">{h.games} game{h.games === 1 ? '' : 's'} · {pct(h.wins, h.games)} win rate</div>
-                                </div>
-                            ))}
-                        </div>
+                        <>
+                            <p className="pref-help">Ranked by wins this season.</p>
+                            <div className="top-heroes">
+                                {p.topHeroes.map((h, i) => (
+                                    <div key={h.id} className="top-hero">
+                                        <div className="top-hero-rank">#{i + 1}</div>
+                                        <HeroImg hero={h} className="top-hero-img" />
+                                        <div className="top-hero-name">{h.name}</div>
+                                        <div className="top-hero-stats">{h.wins}–{h.losses ?? (h.games - h.wins)} · {pct(h.wins, h.games)} win rate</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </>
                     ) : <p className="pref-empty">No hero history yet — it fills in after the next season crawl.</p>}
                 </div>
 
@@ -465,12 +468,12 @@ export default function Profile({ accountId }) {
                 </div>
 
                 <div className="profile-card">
-                    <h2>Recent Allies</h2>
-                    {p.recentAllies && p.recentAllies.length ? (
+                    <h2>Best Allies{season ? ` · Season ${season.number}` : ''}</h2>
+                    {p.bestAllies && p.bestAllies.length ? (
                         <>
-                            <p className="pref-help">Teammates with the best results alongside {p.isOwner ? 'you' : p.displayName} over the last {p.allyWindow || 30} games.</p>
+                            <p className="pref-help">Teammates with the most wins alongside {p.isOwner ? 'you' : p.displayName} this season.</p>
                             <ul className="allies">
-                                {p.recentAllies.map(a => {
+                                {p.bestAllies.map(a => {
                                     const rate = a.games > 0 ? Math.round((a.wins / a.games) * 100) : 0;
                                     return (
                                         <li key={a.accountId}>

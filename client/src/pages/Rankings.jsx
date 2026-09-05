@@ -188,6 +188,18 @@ export default function Rankings() {
                 </EmptyState>
             ) : (
                 <div className="rank-layout">
+                    {tab !== 'overview' && data.roleSource && (() => {
+                        const lane = data.roleSource.lane || 0;
+                        const total = Object.values(data.roleSource).reduce((a, b) => a + b, 0);
+                        if (!total) return null;
+                        const pct = Math.round((lane / total) * 100);
+                        return (
+                            <div className={'role-source-note' + (pct < 80 ? ' warn' : '')}>
+                                Core/support roles come from OpenDota lane data for {pct}% of games ({lane} of {total});
+                                the rest use a wards/GPM estimate{pct < 80 ? ' — treat these boards as approximate until more matches are parsed' : ''}.
+                            </div>
+                        );
+                    })()}
                     <nav className="rank-rail" aria-label="Superlatives">
                         {cats.map(c => (
                             <button key={c.key} type="button"

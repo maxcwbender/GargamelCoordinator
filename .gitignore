@@ -15,4 +15,7 @@ gargamel.exe
 go-dota2/
 go1.23.4.linux-amd64.tar.gz
 *.md
-!DEPLOYMENT.md
+# local test code / harnesses
+tests/
+test_*.py
+_od_match.json

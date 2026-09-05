@@ -54,12 +54,22 @@ body {
 
 .navbar-links {
   display: flex;
+  align-items: center;
   gap: 8px;
   list-style: none;
   min-width: 0;
+  /* Horizontal swipe only: overflow-x alone would also make this a vertical
+     scroll container, letting a swipe push the links up out of view. */
   overflow-x: auto;
+  overflow-y: hidden;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+}
+
+.navbar-links li {
+  flex-shrink: 0;
 }
 
 .navbar-links::-webkit-scrollbar {
@@ -67,6 +77,7 @@ body {
 }
 
 .navbar-links a {
+  display: inline-block;
   white-space: nowrap;
   color: #b0b8c8;
   text-decoration: none;

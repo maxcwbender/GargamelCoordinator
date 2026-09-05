@@ -238,17 +238,17 @@ function fantasyScore(p) {
 const upsertPlayerMatch = db.prepare(`INSERT OR REPLACE INTO player_matches
     (match_id, account_id, hero_id, player_slot, won, kills, deaths, assists, gold_per_min, start_time, duration, game_mode, season,
      last_hits, denies, hero_damage, tower_damage, hero_healing, obs_placed, sen_placed, observer_kills, camps_stacked, stuns,
-     rune_pickups, xp_per_min, level, net_worth, teamfight_participation, lane_role, role)
+     rune_pickups, xp_per_min, level, net_worth, teamfight_participation, lane_role, role, role_source)
     VALUES (@matchId, @accountId, @heroId, @playerSlot, @won, @kills, @deaths, @assists, @gpm, @startTime, @duration, @gameMode, @season,
      @lastHits, @denies, @heroDamage, @towerDamage, @heroHealing, @obsPlaced, @senPlaced, @observerKills, @campsStacked, @stuns,
-     @runePickups, @xpm, @level, @netWorth, @teamfight, @laneRole, @role)`);
+     @runePickups, @xpm, @level, @netWorth, @teamfight, @laneRole, @role, @roleSource)`);
 
 // Core vs support, per team. OpenDota's parsed data gives each player a lane
 // (1 safe, 2 mid, 3 off, 4 jungle): mid is a core; in the safe and off lanes the
 // lane-mate with the most last hits is the core and the rest are supports. The
 // result is then squeezed to the Dota norm of exactly 3 cores + 2 supports using
 // GPM as the tiebreak. Unparsed matches (no lane_role) fall back to a ward/GPM
-// score. Returns a Map player_slot -> 'core' | 'support'.
+// score. Returns { roles: Map player_slot -> 'core' | 'support', source: 'lane' | 'heuristic' }.
 export function classifyRoles(teamPlayers) {
     const roles = new Map();
     const parsed = teamPlayers.length > 0 && teamPlayers.every(p => p.lane_role != null);
@@ -286,17 +286,18 @@ export function classifyRoles(teamPlayers) {
             supports.push(cores[0]);
         }
     }
-    return roles;
+    return { roles, source: parsed ? 'lane' : 'heuristic' };
 }
 
 // Persist one row per (match, player) so profiles and role-split rankings can be
 // computed from SQL without extra OpenDota calls. Called from both crawls.
 const savePlayerMatches = db.transaction((detail, season) => {
     const players = detail.players || [];
-    const roles = new Map([
-        ...classifyRoles(players.filter(p => p.player_slot < 128)),
-        ...classifyRoles(players.filter(p => p.player_slot >= 128)),
-    ]);
+    const radiant = classifyRoles(players.filter(p => p.player_slot < 128));
+    const dire = classifyRoles(players.filter(p => p.player_slot >= 128));
+    const roles = new Map([...radiant.roles, ...dire.roles]);
+    // 'lane' only when both teams were classified from parsed lane data
+    const roleSource = radiant.source === 'lane' && dire.source === 'lane' ? 'lane' : 'heuristic';
     for (const p of players) {
         if (!p.account_id) continue;
         const isRadiant = p.player_slot < 128;
@@ -331,6 +332,7 @@ const savePlayerMatches = db.transaction((detail, season) => {
             teamfight: p.teamfight_participation ?? null,
             laneRole: p.lane_role ?? null,
             role: roles.get(p.player_slot) || null,
+            roleSource,
         });
     }
 });

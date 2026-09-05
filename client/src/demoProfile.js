@@ -63,18 +63,17 @@ export function buildDemoProfile(opts = DEMO_DEFAULT_OPTIONS, prefs = null) {
             number: 2, wins: 18, losses: 9, matches: 27, kda: 3.42, avgGPM: 486, mvpCount: 3, svpCount: 1,
         } : null,
         topHeroes: stats ? [
-            { ...heroById(14), games: 9, wins: 6 },
-            { ...heroById(74), games: 6, wins: 4 },
-            { ...heroById(1), games: 4, wins: 1 },
+            { ...heroById(14), games: 9, wins: 6, losses: 3 },
+            { ...heroById(74), games: 6, wins: 4, losses: 2 },
+            { ...heroById(1), games: 4, wins: 1, losses: 3 },
         ] : [],
-        recentAllies: stats ? [
+        bestAllies: stats ? [
             { accountId: 1001, name: 'WardGoblin', avatar: null, games: 9, wins: 7, losses: 2 },
             { accountId: 1002, name: 'MidOrFeed', avatar: null, games: 6, wins: 5, losses: 1 },
             { accountId: 1003, name: 'CarryPotential', avatar: null, games: 8, wins: 5, losses: 3 },
             { accountId: 1004, name: 'JungleLifestyle', avatar: null, games: 5, wins: 3, losses: 2 },
             { accountId: 1005, name: 'TiltedTed', avatar: null, games: 4, wins: 2, losses: 2 },
         ] : [],
-        allyWindow: 30,
         recentMatches: stats ? [14, 74, 1, 5, 8, 26, 11, 2, 14, 74].map((heroId, n) => ({
             matchId: 8800000000 + n,
             hero: heroById(heroId),

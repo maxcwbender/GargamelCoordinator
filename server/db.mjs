@@ -164,6 +164,10 @@ for (const sql of [
     'ALTER TABLE player_matches ADD COLUMN teamfight_participation REAL',
     'ALTER TABLE player_matches ADD COLUMN lane_role INTEGER',
     'ALTER TABLE player_matches ADD COLUMN role TEXT',
+    // 'lane' when OpenDota's parsed lane_role decided the role, 'heuristic'
+    // when the wards/GPM fallback did — lets the rankings page report how
+    // trustworthy the core/support split is.
+    'ALTER TABLE player_matches ADD COLUMN role_source TEXT',
 ]) {
     try { db.exec(sql); } catch (_) { /* already exists */ }
 }

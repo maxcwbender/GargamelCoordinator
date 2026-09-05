@@ -485,3 +485,20 @@
     font-size: 1.4rem;
   }
 }
+
+/* Role-source validity note (Core / Support tabs) */
+.role-source-note {
+  grid-column: 1 / -1;
+  font-size: 0.8rem;
+  color: #666;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.role-source-note.warn {
+  color: #8a6508;
+  background: rgba(184, 134, 11, 0.08);
+  border-color: rgba(184, 134, 11, 0.35);
+}

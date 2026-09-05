@@ -50,14 +50,17 @@ const profileByDiscord = db.prepare('SELECT * FROM profiles WHERE discord_id = ?
 const statsByAccount = db.prepare('SELECT personaname, wins, losses, matches, kills, deaths, assists, gold_per_minute FROM player_stats WHERE account_id = ? AND season = ?');
 const avatarByAccount = db.prepare('SELECT avatar_url FROM player_avatars WHERE account_id = ?');
 const awardCounts = db.prepare(`SELECT award_type, COUNT(*) AS c FROM match_mvps WHERE account_id = ? AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY award_type`);
+// "Top" heroes = the ones the player wins with: most wins this season, then
+// win rate, then games (a 0-2 hero never outranks a 1-0 one).
 const topHeroesStmt = db.prepare(`SELECT hero_id, COUNT(*) AS games, SUM(won) AS wins FROM player_matches
-    WHERE account_id = ? AND season = ? AND hero_id IS NOT NULL GROUP BY hero_id ORDER BY games DESC, wins DESC LIMIT 3`);
+    WHERE account_id = ? AND season = ? AND hero_id IS NOT NULL GROUP BY hero_id
+    ORDER BY wins DESC, (SUM(won) * 1.0 / COUNT(*)) DESC, games DESC, hero_id LIMIT 3`);
 const recentMatchesStmt = db.prepare(`SELECT match_id, hero_id, won, kills, deaths, assists, gold_per_min, start_time, duration, game_mode
     FROM player_matches WHERE account_id = ? ORDER BY start_time DESC, match_id DESC LIMIT 10`);
-// Teammates (same match, same side) across the player's last N games, ranked by
-// wins together. Names/avatars come from the season stats + avatar cache.
-const ALLY_WINDOW = 30;
-const recentAlliesStmt = db.prepare(`
+// Best allies: teammates (same match, same side) across the whole season,
+// ranked by wins together, then win rate. Names/avatars from the season stats
+// + avatar cache.
+const bestAlliesStmt = db.prepare(`
     SELECT a.account_id, COUNT(*) AS games, SUM(a.won) AS wins,
            ps.personaname, pa.avatar_url
     FROM player_matches me
@@ -66,11 +69,10 @@ const recentAlliesStmt = db.prepare(`
      AND ((a.player_slot < 128) = (me.player_slot < 128))
     LEFT JOIN player_stats ps ON ps.account_id = a.account_id AND ps.season = @season
     LEFT JOIN player_avatars pa ON pa.account_id = a.account_id
-    WHERE me.account_id = @accountId
-      AND me.match_id IN (SELECT match_id FROM player_matches WHERE account_id = @accountId ORDER BY start_time DESC, match_id DESC LIMIT ${ALLY_WINDOW})
+    WHERE me.account_id = @accountId AND me.season = @season
     GROUP BY a.account_id
     HAVING games >= 2
-    ORDER BY wins DESC, games DESC, a.account_id
+    ORDER BY wins DESC, (SUM(a.won) * 1.0 / COUNT(*)) DESC, games DESC, a.account_id
     LIMIT 5`);
 const upsertPrefs = db.prepare(`INSERT INTO profiles (discord_id, fav_heroes, fav_position, veto_mode, created_at, updated_at)
     VALUES (@id, @favHeroes, @favPosition, @vetoMode, @now, @now)
@@ -137,7 +139,7 @@ export function buildProfile({ accountId = null, discordId = null }, viewerDisco
             svpCount: awards.svp || 0,
         } : null,
         topHeroes: accountId != null
-            ? topHeroesStmt.all(accountId, CURRENT_SEASON).map(r => ({ ...hero(r.hero_id), games: r.games, wins: r.wins }))
+            ? topHeroesStmt.all(accountId, CURRENT_SEASON).map(r => ({ ...hero(r.hero_id), games: r.games, wins: r.wins, losses: r.games - r.wins }))
             : [],
         recentMatches: accountId != null
             ? recentMatchesStmt.all(accountId).map(r => ({
@@ -151,8 +153,8 @@ export function buildProfile({ accountId = null, discordId = null }, viewerDisco
                 gameMode: r.game_mode,
             }))
             : [],
-        recentAllies: accountId != null
-            ? recentAlliesStmt.all({ accountId, season: CURRENT_SEASON }).map(r => ({
+        bestAllies: accountId != null
+            ? bestAlliesStmt.all({ accountId, season: CURRENT_SEASON }).map(r => ({
                 accountId: r.account_id,
                 name: r.personaname || 'Anonymous',
                 avatar: r.avatar_url || null,
@@ -161,7 +163,6 @@ export function buildProfile({ accountId = null, discordId = null }, viewerDisco
                 losses: r.games - r.wins,
             }))
             : [],
-        allyWindow: ALLY_WINDOW,
         prefs: {
             favHeroes: parseFavHeroes(prof?.fav_heroes).map(hero),
             favPosition: POSITION_KEYS.has(prof?.fav_position) ? prof.fav_position : null,
