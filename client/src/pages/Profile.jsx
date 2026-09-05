@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth, loginUrl } from '../auth.jsx';
-import { Spinner, ErrorBox } from '../components/shared.jsx';
+import { Spinner, ErrorBox, PlayerLink } from '../components/shared.jsx';
 import RegistrationFields from '../components/RegistrationFields.jsx';
 import { formatDuration, formatMatchDate, GAME_MODES } from '../format.js';
 import ProfileDemoControls from '../components/ProfileDemoControls.jsx';
@@ -410,6 +410,7 @@ export default function Profile({ accountId }) {
             </div>
 
             <div className="profile-grid">
+              <div className="profile-col">
                 <div className="profile-card">
                     <h2>Top Heroes{season ? ` · Season ${season.number}` : ''}</h2>
                     {p.topHeroes.length ? (
@@ -426,6 +427,17 @@ export default function Profile({ accountId }) {
                     ) : <p className="pref-empty">No hero history yet — it fills in after the next season crawl.</p>}
                 </div>
 
+                <PreferencesCard
+                    key={demo ? JSON.stringify(demoOptions) : 'live'}
+                    profile={p}
+                    onSaved={demo ? () => {} : setProfile}
+                    saveHandler={demo ? demoSave : null}
+                    fallbackHeroes={demo ? DEMO_HEROES : null}
+                    fallbackVetoModes={demo ? DEMO_VETO_MODES : null}
+                />
+              </div>
+
+              <div className="profile-col">
                 <div className="profile-card">
                     <h2>Recent Matches</h2>
                     {p.recentMatches.length ? (
@@ -452,15 +464,37 @@ export default function Profile({ accountId }) {
                     ) : <p className="pref-empty">No matches on record yet.</p>}
                 </div>
 
-                <PreferencesCard
-                    key={demo ? JSON.stringify(demoOptions) : 'live'}
-                    profile={p}
-                    onSaved={demo ? () => {} : setProfile}
-                    saveHandler={demo ? demoSave : null}
-                    fallbackHeroes={demo ? DEMO_HEROES : null}
-                    fallbackVetoModes={demo ? DEMO_VETO_MODES : null}
-                />
+                <div className="profile-card">
+                    <h2>Recent Allies</h2>
+                    {p.recentAllies && p.recentAllies.length ? (
+                        <>
+                            <p className="pref-help">Teammates with the best results alongside {p.isOwner ? 'you' : p.displayName} over the last {p.allyWindow || 30} games.</p>
+                            <ul className="allies">
+                                {p.recentAllies.map(a => {
+                                    const rate = a.games > 0 ? Math.round((a.wins / a.games) * 100) : 0;
+                                    return (
+                                        <li key={a.accountId}>
+                                            {a.avatar
+                                                ? <img className="ally-avatar" src={a.avatar} alt="" />
+                                                : <div className="ally-avatar hero-img-placeholder" />}
+                                            <div className="ally-main">
+                                                <div className="ally-name"><PlayerLink name={a.name} accountId={a.accountId} /></div>
+                                                <div className="ally-bar"><div className="ally-fill" style={{ width: rate + '%' }} /></div>
+                                            </div>
+                                            <div className="ally-record">
+                                                <strong>{a.wins}–{a.losses}</strong>
+                                                <span>{rate}% · {a.games} game{a.games === 1 ? '' : 's'}</span>
+                                            </div>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        </>
+                    ) : <p className="pref-empty">Not enough games together yet — allies appear after two or more shared wins or losses.</p>}
+                </div>
+
                 <SteamCard profile={p} flags={flags} onDemoLink={demo ? demoLink : null} />
+              </div>
             </div>
 
             {demo && <ProfileDemoControls options={demoOptions} onChange={demoChange} onReset={demoReset} log={demoLog} />}

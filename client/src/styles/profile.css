@@ -115,11 +115,98 @@
 }
 
 /* Grid of cards */
+/* Two independent columns so a short card never leaves a hole beside a tall one */
 .profile-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 24px;
   align-items: start;
+}
+
+.profile-col {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+
+/* Recent allies */
+.allies {
+  list-style: none;
+}
+
+.allies li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 6px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.allies li:last-child {
+  border-bottom: none;
+}
+
+.ally-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #e0e0e0;
+  flex-shrink: 0;
+}
+
+.ally-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.ally-name {
+  font-weight: 600;
+  color: #2c3e50;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ally-name a {
+  color: #2c3e50;
+  text-decoration: none;
+}
+
+.ally-name a:hover {
+  color: #4e9fd1;
+  text-decoration: underline;
+}
+
+.ally-bar {
+  height: 4px;
+  background: #e0e0e0;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 5px;
+}
+
+.ally-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #27ae60 0%, #2ecc71 100%);
+}
+
+.ally-record {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.ally-record strong {
+  display: block;
+  color: #27ae60;
+  font-size: 0.95rem;
+}
+
+.ally-record span {
+  font-size: 0.72rem;
+  color: #999;
 }
 
 .profile-card {
