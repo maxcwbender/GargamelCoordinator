@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Spinner, ErrorBox, EmptyState, PlayerLink } from '../components/shared.jsx';
-import MmrChart from '../components/MmrChart.jsx';
+import MmrChart, { seriesStyle } from '../components/MmrChart.jsx';
 import { timeAgo } from '../format.js';
 
 // Season rankings: one leaderboard on screen at a time. Tabs split the
@@ -98,9 +98,30 @@ function MmrPanel({ mmr }) {
         <div className="board mmr-panel">
             <div className="board-head">
                 <h2>Biggest MMR Climb</h2>
-                <p>Garg MMR at the start of each game since {mmr.since ? new Date(mmr.since * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'the season start'} — hover a player to trace their line. {mmr.minGames}+ games to qualify.</p>
+                <p>Garg MMR change since each player's first game of the season ({mmr.since ? 'from ' + new Date(mmr.since * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'season start'}) — hover a name to trace their line, click to pin. {mmr.minGames}+ games to qualify.</p>
             </div>
-            <MmrChart players={players} highlighted={highlighted} onHighlight={onHighlight} />
+            <div className="mmr-figure">
+                <ul className="mmr-legend" aria-label="Players">
+                    {players.map((p, i) => {
+                        const st = seriesStyle(i);
+                        return (
+                            <li key={p.accountId}
+                                className={(p.accountId === highlighted ? 'active' : '') + (p.accountId === pinned ? ' pinned' : '')}
+                                tabIndex={0}
+                                onMouseEnter={() => setHover(p.accountId)}
+                                onMouseLeave={() => setHover(null)}
+                                onFocus={() => setHover(p.accountId)}
+                                onBlur={() => setHover(null)}
+                                onClick={() => setPinned(pinned === p.accountId ? null : p.accountId)}>
+                                <span className="mmr-key" style={{ borderTopColor: st.color, borderTopStyle: st.dash ? 'dashed' : 'solid' }} />
+                                <span className="mmr-legend-name">{p.name}</span>
+                                <span className="mmr-legend-gain">{formatValue(p.gain, 'signed')}</span>
+                            </li>
+                        );
+                    })}
+                </ul>
+                <MmrChart players={players} highlighted={highlighted} onHighlight={onHighlight} />
+            </div>
             <table className="board-table mmr-table">
                 <thead>
                     <tr><th>#</th><th>Player</th><th className="hide-mobile">Games</th><th className="hide-mobile">Start</th><th>Now</th><th>Gain</th></tr>
@@ -118,7 +139,6 @@ function MmrPanel({ mmr }) {
                             <td className={'rank-number' + (i < 3 ? ' top-3' : '')}>{i + 1}</td>
                             <td>
                                 <div className="player-cell">
-                                    <span className="mmr-key" />
                                     <Avatar src={p.avatar} className="player-avatar" />
                                     <span className="player-name"><PlayerLink name={p.name} accountId={p.accountId} /></span>
                                 </div>

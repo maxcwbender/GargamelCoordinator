@@ -311,40 +311,96 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Chart + name legend side by side */
+.mmr-figure {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  gap: 8px;
+  align-items: start;
+  background: #fcfcfb;
+}
+
+.mmr-legend {
+  list-style: none;
+  padding: 16px 0 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mmr-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: #52514e;
+  transition: background 0.12s ease, opacity 0.15s ease;
+}
+
+.mmr-legend li:hover,
+.mmr-legend li.active {
+  background: rgba(11, 11, 11, 0.05);
+  color: #0b0b0b;
+}
+
+.mmr-legend li.pinned {
+  box-shadow: inset 2px 0 0 #0b0b0b;
+}
+
+.mmr-legend li:focus {
+  outline: 2px solid #2a78d6;
+  outline-offset: -2px;
+}
+
+.mmr-legend-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.mmr-legend-gain {
+  font-variant-numeric: tabular-nums;
+  color: #898781;
+  font-size: 0.75rem;
+}
+
 .mmr-line {
   fill: none;
-  stroke: #c3c2b7;
   stroke-width: 2;
   stroke-linejoin: round;
   stroke-linecap: round;
-  opacity: 0.75;
-  transition: opacity 0.15s ease, stroke 0.15s ease;
+  opacity: 0.9;
+  transition: opacity 0.15s ease, stroke-width 0.15s ease;
+}
+
+.mmr-line.faded {
+  opacity: 0.18;
 }
 
 .mmr-line.active {
-  stroke: #2a78d6;
   opacity: 1;
-  stroke-width: 2.5;
+  stroke-width: 3;
+}
+
+.mmr-grid.zero {
+  stroke: #c3c2b7;
 }
 
 .mmr-end circle {
-  fill: #898781;
   stroke: #fcfcfb;
   stroke-width: 2;
 }
 
-.mmr-end.active circle {
-  fill: #2a78d6;
-}
-
 .mmr-end text {
-  fill: #52514e;
+  fill: #0b0b0b;
   font-size: 12px;
   font-weight: 600;
-}
-
-.mmr-end.active text {
-  fill: #0b0b0b;
 }
 
 .mmr-crosshair {
@@ -354,14 +410,9 @@
 }
 
 .mmr-dot {
-  fill: #c3c2b7;
   stroke: #fcfcfb;
   stroke-width: 2;
   pointer-events: none;
-}
-
-.mmr-dot.active {
-  fill: #2a78d6;
 }
 
 .mmr-chart-empty {
@@ -419,10 +470,6 @@
   flex-shrink: 0;
 }
 
-.mmr-tooltip-row.active .mmr-key,
-.mmr-table tr.active .mmr-key {
-  border-top-color: #2a78d6;
-}
 
 .mmr-table tbody tr {
   cursor: pointer;
@@ -483,6 +530,25 @@
 
   .board-top-value {
     font-size: 1.4rem;
+  }
+
+  .mmr-figure {
+    grid-template-columns: 1fr;
+  }
+
+  .mmr-legend {
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 12px 12px 0;
+    gap: 4px;
+  }
+
+  .mmr-legend li {
+    padding: 4px 8px;
+  }
+
+  .mmr-legend-gain {
+    display: none;
   }
 }
 
