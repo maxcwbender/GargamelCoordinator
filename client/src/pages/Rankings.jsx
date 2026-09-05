@@ -98,7 +98,12 @@ function MmrPanel({ mmr }) {
         <div className="board mmr-panel">
             <div className="board-head">
                 <h2>Biggest MMR Climb</h2>
-                <p>Garg MMR change since each player's first game of the season ({mmr.since ? 'from ' + new Date(mmr.since * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'season start'}) — hover a name to trace their line, click to pin. {mmr.minGames}+ games to qualify.</p>
+                <p>
+                    Garg MMR climbed from game results since each player's first game of the season
+                    ({mmr.since ? 'from ' + new Date(mmr.since * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'season start'}).
+                    Rating changes bigger than one game can produce ({mmr.maxGameStep ? `over ±${mmr.maxGameStep}` : 'manual adjustments'}) are
+                    excluded and marked with a hollow ring. Hover a name to trace their line, click to pin. {mmr.minGames}+ games to qualify.
+                </p>
             </div>
             <div className="mmr-figure">
                 <ul className="mmr-legend" aria-label="Players">
@@ -124,7 +129,7 @@ function MmrPanel({ mmr }) {
             </div>
             <table className="board-table mmr-table">
                 <thead>
-                    <tr><th>#</th><th>Player</th><th className="hide-mobile">Games</th><th className="hide-mobile">Start</th><th>Now</th><th>Gain</th></tr>
+                    <tr><th>#</th><th>Player</th><th>W–L</th><th>Win %</th><th className="hide-mobile">Start</th><th className="hide-mobile">Now</th><th className="hide-mobile" title="Manual rating adjustments, excluded from the climb">Adjusted</th><th>Climb</th></tr>
                 </thead>
                 <tbody>
                     {players.map((p, i) => (
@@ -143,9 +148,11 @@ function MmrPanel({ mmr }) {
                                     <span className="player-name"><PlayerLink name={p.name} accountId={p.accountId} /></span>
                                 </div>
                             </td>
-                            <td className="stat-secondary hide-mobile">{p.games}</td>
+                            <td className="stat-secondary">{p.wins != null ? `${p.wins}–${p.losses}` : p.games}</td>
+                            <td className="stat-secondary">{p.wins != null && p.games ? Math.round((p.wins / p.games) * 100) + '%' : '–'}</td>
                             <td className="stat-secondary hide-mobile">{p.startMmr.toLocaleString()}</td>
-                            <td className="stat-secondary">{p.currentMmr.toLocaleString()}</td>
+                            <td className="stat-secondary hide-mobile">{p.currentMmr.toLocaleString()}</td>
+                            <td className={'stat-secondary hide-mobile' + (p.adjusted ? ' adjusted' : '')}>{p.adjusted ? formatValue(p.adjusted, 'signed') : '–'}</td>
                             <td className={'stat-value' + (p.gain < 0 ? ' negative' : '')}>{formatValue(p.gain, 'signed')}</td>
                         </tr>
                     ))}

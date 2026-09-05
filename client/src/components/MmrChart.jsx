@@ -38,10 +38,14 @@ function niceTicks(min, max, count = 5) {
     return ticks;
 }
 
-// Delta at time t: last snapshot at or before t, relative to the start MMR.
+// Point value: the server's normalized climb (game results only) when present,
+// otherwise the raw change from the start MMR.
+const pointDelta = (p, pt) => (pt.delta != null ? pt.delta : pt.mmr - p.startMmr);
+
+// Delta at time t: last snapshot at or before t.
 function deltaAt(p, t) {
     let v = null;
-    for (const pt of p.points) { if (pt.t <= t) v = pt.mmr - p.startMmr; else break; }
+    for (const pt of p.points) { if (pt.t <= t) v = pointDelta(p, pt); else break; }
     return v;
 }
 
@@ -51,7 +55,7 @@ export default function MmrChart({ players, highlighted, onHighlight }) {
     const svgRef = useRef(null);
 
     const model = useMemo(() => {
-        const deltas = players.flatMap(p => p.points.map(pt => ({ t: pt.t, d: pt.mmr - p.startMmr })));
+        const deltas = players.flatMap(p => p.points.map(pt => ({ t: pt.t, d: pointDelta(p, pt) })));
         if (!deltas.length) return null;
         const tMin = Math.min(...deltas.map(p => p.t));
         const tMax = Math.max(...deltas.map(p => p.t));
@@ -75,7 +79,7 @@ export default function MmrChart({ players, highlighted, onHighlight }) {
     const series = players.map((p, i) => ({
         p,
         ...seriesStyle(i),
-        d: p.points.map((pt, k) => `${k ? 'L' : 'M'}${x(pt.t).toFixed(1)},${y(pt.mmr - p.startMmr).toFixed(1)}`).join(' '),
+        d: p.points.map((pt, k) => `${k ? 'L' : 'M'}${x(pt.t).toFixed(1)},${y(pointDelta(p, pt)).toFixed(1)}`).join(' '),
     }));
 
     const onMove = (e) => {
@@ -144,10 +148,23 @@ export default function MmrChart({ players, highlighted, onHighlight }) {
                         style={{ stroke: series[activeIdx].color, strokeDasharray: series[activeIdx].dash || undefined }} />
                 )}
 
+                {/* excluded rating adjustments, marked where they happened */}
+                {series.map(s => (s.p.adjustments || []).map((a, k) => {
+                    const v = deltaAt(s.p, a.t);
+                    if (v == null) return null;
+                    const dim = fading && s.p.accountId !== highlighted;
+                    return (
+                        <g key={s.p.accountId + '-adj' + k} className={'mmr-adj' + (dim ? ' faded' : '')} style={{ stroke: s.color }}>
+                            <circle cx={x(a.t)} cy={y(v)} r={5} />
+                            <title>{s.p.name}: {fmtDelta(a.amount)} rating adjustment (excluded from climb)</title>
+                        </g>
+                    );
+                }))}
+
                 <g className="mmr-end">
-                    <circle cx={x(labeledEnd.t)} cy={y(labeledEnd.mmr - labeled.p.startMmr)} r={4} style={{ fill: labeled.color }} />
-                    <text x={x(labeledEnd.t) + 10} y={y(labeledEnd.mmr - labeled.p.startMmr) + 4}>
-                        {fmtDelta(labeledEnd.mmr - labeled.p.startMmr)} · {labeled.p.name}
+                    <circle cx={x(labeledEnd.t)} cy={y(pointDelta(labeled.p, labeledEnd))} r={4} style={{ fill: labeled.color }} />
+                    <text x={x(labeledEnd.t) + 10} y={y(pointDelta(labeled.p, labeledEnd)) + 4}>
+                        {fmtDelta(pointDelta(labeled.p, labeledEnd))} · {labeled.p.name}
                     </text>
                 </g>
 

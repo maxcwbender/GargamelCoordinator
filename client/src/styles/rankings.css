@@ -415,6 +415,21 @@
   pointer-events: none;
 }
 
+.mmr-adj circle {
+  fill: #fcfcfb;
+  stroke-width: 2;
+  pointer-events: auto;
+}
+
+.mmr-adj.faded {
+  opacity: 0.25;
+}
+
+.mmr-table td.adjusted {
+  color: #b8860b;
+  font-weight: 600;
+}
+
 .mmr-chart-empty {
   padding: 40px;
   text-align: center;

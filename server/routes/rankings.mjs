@@ -1,6 +1,6 @@
 import { db } from '../db.mjs';
 import { logger } from '../logger.mjs';
-import { CURRENT_SEASON, SEASON_2_FIRST_MATCH, PLAYER_STATS_TTL_MS } from '../config.mjs';
+import { config, CURRENT_SEASON, SEASON_2_FIRST_MATCH, PLAYER_STATS_TTL_MS } from '../config.mjs';
 import { playerStatsCache } from '../services/opendota.mjs';
 import { accountIdFromSteam64 } from './profile.mjs';
 
@@ -33,7 +33,7 @@ const seasonMatchesStmt = db.prepare('SELECT COUNT(DISTINCT match_id) AS c, MAX(
 const roleSourceStmt = db.prepare(`SELECT role_source AS source, COUNT(DISTINCT match_id) AS c
     FROM player_matches WHERE season = ? AND role IS NOT NULL GROUP BY role_source`);
 const mmrStmt = db.prepare(`
-    SELECT mp.match_id, CAST(mp.discord_id AS TEXT) AS discord_id, mp.mmr, m.date_created,
+    SELECT mp.match_id, CAST(mp.discord_id AS TEXT) AS discord_id, mp.mmr, mp.team, m.winning_team, m.date_created,
            CAST(u.steam_id AS TEXT) AS steam_id, u.rating
     FROM match_players mp
     JOIN matches m ON m.match_id = mp.match_id
@@ -70,37 +70,68 @@ function longestWinStreaks() {
     return streaks;
 }
 
+// A single game moves a rating by at most ELO_K (K × (score − expected)), so a
+// bigger step between two consecutive snapshots can only be a manual rating
+// adjustment. Those steps are excluded from the climb and reported separately.
+const ELO_K = Number(config.ELO_K) || 40;
+const MAX_GAME_STEP = Math.ceil(ELO_K * 1.5);
+
 function buildMmr(names, minGames) {
     const byDiscord = new Map();
     for (const r of mmrStmt.all()) {
         if (!byDiscord.has(r.discord_id)) {
-            byDiscord.set(r.discord_id, { steamId: r.steam_id, rating: r.rating, points: [] });
+            byDiscord.set(r.discord_id, { steamId: r.steam_id, rating: r.rating, rows: [] });
         }
         const t = Math.floor(new Date(r.date_created.replace(' ', 'T') + 'Z').getTime() / 1000);
-        byDiscord.get(r.discord_id).points.push({ t, mmr: r.mmr });
+        // team 0 = Radiant, 1 = Dire; winning_team 2 = Radiant, 3 = Dire
+        const won = (r.team === 0 && r.winning_team === 2) || (r.team === 1 && r.winning_team === 3);
+        byDiscord.get(r.discord_id).rows.push({ t, mmr: r.mmr, won });
     }
     const now = Math.floor(Date.now() / 1000);
     const players = [];
     for (const entry of byDiscord.values()) {
-        if (!entry.steamId || entry.rating == null || entry.points.length < minGames) continue;
+        if (!entry.steamId || entry.rating == null || entry.rows.length < minGames) continue;
         const accountId = accountIdFromSteam64(entry.steamId);
         if (accountId == null) continue;
-        const startMmr = entry.points[0].mmr;
-        const points = [...entry.points, { t: now, mmr: entry.rating }];
+
+        const rows = entry.rows;
+        const startMmr = rows[0].mmr;
+        let climb = 0;               // cumulative change from game results only
+        let adjusted = 0;            // cumulative change attributed to manual adjustments
+        const adjustments = [];
+        const points = [{ t: rows[0].t, mmr: rows[0].mmr, delta: 0 }];
+        const step = (prev, next, t) => {
+            const d = next - prev;
+            if (Math.abs(d) > MAX_GAME_STEP) { adjusted += d; adjustments.push({ t, amount: d }); }
+            else climb += d;
+        };
+        for (let i = 1; i < rows.length; i++) {
+            step(rows[i - 1].mmr, rows[i].mmr, rows[i].t);
+            points.push({ t: rows[i].t, mmr: rows[i].mmr, delta: climb });
+        }
+        step(rows[rows.length - 1].mmr, entry.rating, now);
+        points.push({ t: now, mmr: entry.rating, delta: climb });
+
+        const wins = rows.filter(r => r.won).length;
         players.push({
             accountId,
             name: names.get(accountId)?.name || 'Anonymous',
             avatar: names.get(accountId)?.avatar || null,
             startMmr,
             currentMmr: entry.rating,
-            gain: entry.rating - startMmr,
-            games: entry.points.length,
+            gain: climb,                       // game-only climb (what the chart plots)
+            rawGain: entry.rating - startMmr,  // including adjustments
+            adjusted,
+            adjustments,
+            games: rows.length,
+            wins,
+            losses: rows.length - wins,
             points,
         });
     }
     players.sort((a, b) => b.gain - a.gain);
-    const since = byDiscord.size ? Math.min(...[...byDiscord.values()].map(e => e.points[0].t)) : null;
-    return { since, minGames, players: players.slice(0, 10), tracked: players.length };
+    const since = byDiscord.size ? Math.min(...[...byDiscord.values()].map(e => e.rows[0].t)) : null;
+    return { since, minGames, maxGameStep: MAX_GAME_STEP, players: players.slice(0, 10), tracked: players.length };
 }
 
 function compute() {
@@ -181,7 +212,7 @@ function compute() {
     // The overview "Biggest MMR Climb" card mirrors the MMR tab's top 10.
     overview[1].rows = mmr.players.map(p => ({
         accountId: p.accountId, name: p.name, avatar: p.avatar, games: p.games,
-        value: p.gain, detail: `${p.startMmr.toLocaleString()} → ${p.currentMmr.toLocaleString()}`,
+        value: p.gain, detail: `${p.wins}–${p.losses}${p.adjusted ? ` · ${p.adjusted > 0 ? '+' : ''}${p.adjusted} adjusted` : ''}`,
     }));
 
     return {
