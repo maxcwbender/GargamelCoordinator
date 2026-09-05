@@ -12,7 +12,7 @@ import { toMapPercent, usesWorldCoords } from '../minimap.js';
 //   draggable   when set, structures can be dragged; onMove(team, kind, index, x, y)
 export default function Minimap({
     structures, bounds, radiant, dire, extraDots = [], draggable = false, onMove,
-    className = '', showEmptyNotice = true,
+    className = '', showEmptyNotice = true, backgroundUrl = null,
 }) {
     const mapRef = useRef(null);
     const allPlayers = [...(radiant?.players || []), ...(dire?.players || [])];
@@ -88,7 +88,11 @@ export default function Minimap({
         });
 
     return (
-        <div ref={mapRef} className={`minimap ${className}`.trim()}>
+        <div
+            ref={mapRef}
+            className={`minimap ${className}`.trim()}
+            style={backgroundUrl ? { backgroundImage: `url("${backgroundUrl}")` } : undefined}
+        >
             <div className="minimap-grid" />
             {renderStructures('radiant', radiant)}
             {renderStructures('dire', dire)}

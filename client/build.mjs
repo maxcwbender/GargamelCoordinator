@@ -41,4 +41,10 @@ if (existsSync(PUBLIC)) {
     cpSync(PUBLIC, DIST, { recursive: true });
 }
 
+// The live minimap overlays structures on this image; without it the map is
+// a black square. It must live in client/public so every build ships it.
+if (!existsSync(join(PUBLIC, 'minimap_background.png'))) {
+    console.warn('WARNING: client/public/minimap_background.png is missing — the live minimap will have no background.');
+}
+
 console.log('Build complete: client/dist');

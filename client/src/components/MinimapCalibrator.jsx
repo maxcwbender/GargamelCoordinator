@@ -18,8 +18,27 @@ export default function MinimapCalibrator({ liveGames = [] }) {
     const [showLive, setShowLive] = useState(true);
     const [copied, setCopied] = useState(false);
     const [selectedGame, setSelectedGame] = useState(0);
+    // Preview an alternative background (local file) without deploying it.
+    const [previewBackground, setPreviewBackground] = useState(null);
+    const [backgroundMissing, setBackgroundMissing] = useState(false);
 
     useEffect(() => { setCopied(false); }, [structures, bounds]);
+
+    // Detect a missing/broken deployed background so the page says so instead
+    // of silently showing a black square.
+    useEffect(() => {
+        const img = new Image();
+        img.onload = () => setBackgroundMissing(false);
+        img.onerror = () => setBackgroundMissing(true);
+        img.src = '/minimap_background.png';
+    }, []);
+
+    const onPickBackground = (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        if (previewBackground) URL.revokeObjectURL(previewBackground);
+        setPreviewBackground(URL.createObjectURL(file));
+    };
 
     const moveStructure = (team, kind, index, x, y) => {
         setStructures(prev => {
@@ -87,6 +106,12 @@ export default function MinimapCalibrator({ liveGames = [] }) {
                     <code> client/src/minimap.js</code>, or apply them on this browser to check the live page immediately.
                 </p>
                 {overridden && <div className="calib-note">A calibration override is active on this browser (the live page is using it).</div>}
+                {backgroundMissing && !previewBackground && (
+                    <div className="calib-note warn">
+                        No background image is deployed at <code>/minimap_background.png</code> — put the map image in
+                        <code> client/public/minimap_background.png</code> and rebuild. You can preview a candidate below first.
+                    </div>
+                )}
             </div>
 
             <div className="calib-layout">
@@ -101,7 +126,23 @@ export default function MinimapCalibrator({ liveGames = [] }) {
                         draggable
                         onMove={moveStructure}
                         showEmptyNotice={false}
+                        backgroundUrl={previewBackground}
                     />
+                    <div className="calib-background">
+                        <label className="btn btn-sm btn-ghost calib-file">
+                            {previewBackground ? 'Preview a different background…' : 'Preview a background image…'}
+                            <input type="file" accept="image/*" onChange={onPickBackground} />
+                        </label>
+                        {previewBackground && (
+                            <button type="button" className="link-btn" onClick={() => { URL.revokeObjectURL(previewBackground); setPreviewBackground(null); }}>
+                                back to deployed background
+                            </button>
+                        )}
+                        <span className="calib-muted">
+                            Use a clean, square, full-map render (no markers). To make it permanent, save it as
+                            <code> client/public/minimap_background.png</code>, commit, and rebuild.
+                        </span>
+                    </div>
                     <div className="calib-legend">
                         <span><i className="calib-swatch sw-tower radiant" /> Radiant tower</span>
                         <span><i className="calib-swatch sw-tower dire" /> Dire tower</span>

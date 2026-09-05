@@ -284,3 +284,39 @@
     grid-template-columns: 1fr;
   }
 }
+
+.calib-note.warn {
+  background: rgba(192, 57, 43, 0.08);
+  border-color: rgba(192, 57, 43, 0.3);
+  color: #a93226;
+}
+
+.calib-note code,
+.calib-background code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.calib-background {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.calib-file {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  display: inline-block;
+}
+
+.calib-file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
