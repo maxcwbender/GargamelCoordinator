@@ -18,13 +18,22 @@ export function AuthProvider({ children }) {
 
     useEffect(() => { refresh(); }, [refresh]);
 
+    // Demo pages (/profile?demo=1) can present a fake logged-in user so the
+    // navbar account menu can be exercised without a real session.
+    const [demoUser, setDemoUser] = useState(null);
+
     const logout = useCallback(async () => {
+        if (demoUser) { setDemoUser(null); return; }
         try { await fetch('/api/auth/logout', { method: 'POST' }); } catch { /* cookie may already be gone */ }
         setState(s => ({ ...s, user: null }));
-    }, []);
+    }, [demoUser]);
+
+    const value = demoUser
+        ? { ...state, loading: false, enabled: true, user: demoUser, refresh, logout, setDemoUser }
+        : { ...state, refresh, logout, setDemoUser };
 
     return (
-        <AuthContext.Provider value={{ ...state, refresh, logout }}>
+        <AuthContext.Provider value={value}>
             {children}
         </AuthContext.Provider>
     );

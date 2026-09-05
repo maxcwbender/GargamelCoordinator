@@ -3,6 +3,8 @@ import { useAuth, loginUrl } from '../auth.jsx';
 import { Spinner, ErrorBox } from '../components/shared.jsx';
 import RegistrationFields from '../components/RegistrationFields.jsx';
 import { formatDuration, formatMatchDate, GAME_MODES } from '../format.js';
+import ProfileDemoControls from '../components/ProfileDemoControls.jsx';
+import { buildDemoProfile, DEMO_DEFAULT_OPTIONS, DEMO_HEROES, DEMO_VETO_MODES, DEMO_ACCOUNT_ID, heroById } from '../demoProfile.js';
 
 // Player profile. accountId === null means "the logged-in user's own profile"
 // (/profile); otherwise it's the public page for that OpenDota account id
@@ -34,7 +36,9 @@ function takeUrlFlags() {
 }
 
 // ── Preferences (favorite heroes, position, veto) ─────────────────────────
-function PreferencesCard({ profile, onSaved }) {
+// saveHandler (demo mode) replaces the PUT with a local function returning the
+// updated profile; fallback lists cover the case where the API isn't reachable.
+function PreferencesCard({ profile, onSaved, saveHandler = null, fallbackHeroes = null, fallbackVetoModes = null }) {
     const [heroes, setHeroes] = useState([]);
     const [options, setOptions] = useState({ positions: [], vetoModes: [] });
     const [favHeroes, setFavHeroes] = useState(profile.prefs.favHeroes.map(h => h.id));
@@ -45,10 +49,13 @@ function PreferencesCard({ profile, onSaved }) {
 
     useEffect(() => {
         if (!profile.isOwner) return;
-        fetch('/api/heroes').then(r => r.json()).then(list => setHeroes(Array.isArray(list) ? list : [])).catch(() => {});
+        fetch('/api/heroes').then(r => r.json())
+            .then(list => setHeroes(Array.isArray(list) && list.length ? list : (fallbackHeroes || [])))
+            .catch(() => { if (fallbackHeroes) setHeroes(fallbackHeroes); });
         fetch('/api/profile-options').then(r => r.json()).then(o => setOptions({
-            positions: o.positions || [], vetoModes: o.vetoModes || [],
-        })).catch(() => {});
+            positions: o.positions || [],
+            vetoModes: (o.vetoModes && o.vetoModes.length) ? o.vetoModes : (fallbackVetoModes || []),
+        })).catch(() => { if (fallbackVetoModes) setOptions(op => ({ ...op, vetoModes: fallbackVetoModes })); });
     }, [profile.isOwner]);
 
     const setHeroAt = (idx, value) => {
@@ -64,17 +71,19 @@ function PreferencesCard({ profile, onSaved }) {
         setSaving(true);
         setMessage(null);
         try {
-            const res = await fetch('/api/profile/prefs', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    favHeroes,
-                    favPosition: favPosition || null,
-                    vetoMode: vetoMode ? Number(vetoMode) : null,
-                }),
-            });
-            const body = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(body.error || `Save failed (${res.status})`);
+            const payload = { favHeroes, favPosition: favPosition || null, vetoMode: vetoMode ? Number(vetoMode) : null };
+            let body;
+            if (saveHandler) {
+                body = await saveHandler(payload, { heroes, vetoModes: options.vetoModes });
+            } else {
+                const res = await fetch('/api/profile/prefs', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                body = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(body.error || `Save failed (${res.status})`);
+            }
             onSaved(body);
             setMessage({ text: 'Preferences saved.', error: false });
         } catch (err) {
@@ -176,7 +185,7 @@ function PreferencesCard({ profile, onSaved }) {
 }
 
 // ── Steam link panel ──────────────────────────────────────────────────────
-function SteamCard({ profile, flags }) {
+function SteamCard({ profile, flags, onDemoLink = null }) {
     const [rank, setRank] = useState('');
     const [rankInvalid, setRankInvalid] = useState(false);
     const referral = useRef(null);
@@ -210,6 +219,7 @@ function SteamCard({ profile, flags }) {
     const startLink = (e) => {
         e.preventDefault();
         if (!rank) { setRankInvalid(true); return; }
+        if (onDemoLink) { onDemoLink(rank, referral.current || ''); return; }
         const params = new URLSearchParams({ rank, referredBy: referral.current || '' });
         window.location.href = '/api/auth/link-steam?' + params.toString();
     };
@@ -242,9 +252,60 @@ export default function Profile({ accountId }) {
     const [profile, setProfile] = useState(null);
     const [status, setStatus] = useState('loading'); // loading | ok | notfound | unauth | error
     const [error, setError] = useState(null);
-    const [flags] = useState(takeUrlFlags);
+    const [flags, setFlags] = useState(takeUrlFlags);
+
+    // ── Demo mode (/profile?demo=1): synthetic profile + control panel, no server writes
+    const [demo] = useState(() => isMe && new URLSearchParams(window.location.search).get('demo') === '1');
+    const [demoOptions, setDemoOptions] = useState(DEMO_DEFAULT_OPTIONS);
+    const [demoPrefs, setDemoPrefs] = useState(null); // prefs after a simulated save
+    const [demoLog, setDemoLog] = useState([]);
+    const demoLogAdd = (line) => setDemoLog(l => [...l.slice(-7), line]);
+
+    // The demo profile is derived during render (see `p` below) so cards that
+    // remount on a toggle initialize from the new state, not the previous one.
+    useEffect(() => {
+        if (!demo) return;
+        setStatus('ok');
+        // The navbar shows the fake user when viewing as the owner
+        auth.setDemoUser?.(demoOptions.viewer === 'owner' ? {
+            displayName: 'DemoPlayer',
+            avatarUrl: 'https://cdn.discordapp.com/embed/avatars/3.png',
+            accountId: demoOptions.linked ? DEMO_ACCOUNT_ID : null,
+            linked: !!demoOptions.linked,
+        } : null);
+    }, [demo, demoOptions, demoPrefs]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    useEffect(() => () => { if (demo) auth.setDemoUser?.(null); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const demoSave = async (payload, { heroes, vetoModes }) => {
+        demoLogAdd(`PUT /api/profile/prefs ${JSON.stringify(payload)}`);
+        const list = heroes && heroes.length ? heroes : DEMO_HEROES;
+        const modes = vetoModes && vetoModes.length ? vetoModes : DEMO_VETO_MODES;
+        const prefs = {
+            favHeroes: payload.favHeroes.map(id => heroById(id, list)),
+            favPosition: payload.favPosition,
+            vetoMode: payload.vetoMode != null ? (modes.find(m => m.id === payload.vetoMode) || null) : null,
+        };
+        setDemoPrefs(prefs);
+        return buildDemoProfile(demoOptions, prefs);
+    };
+
+    const demoLink = (rank, referredBy) => {
+        demoLogAdd(`GET /api/auth/link-steam?rank=${rank}&referredBy=${encodeURIComponent(referredBy)} -> Discord consent -> /api/auth/callback`);
+        setDemoOptions(o => ({ ...o, linked: true }));
+        setFlags({ linked: true, linkError: null, authError: null });
+    };
+
+    const demoChange = (next) => {
+        setDemoOptions(next);
+        setDemoPrefs(null);
+        setFlags({ linked: false, linkError: null, authError: null });
+    };
+
+    const demoReset = () => { demoChange(DEMO_DEFAULT_OPTIONS); setDemoLog([]); };
 
     const load = useCallback(() => {
+        if (demo) return;
         setStatus('loading');
         setError(null);
         const url = isMe ? '/api/profile/me' : `/api/players/${accountId}/profile`;
@@ -257,14 +318,15 @@ export default function Profile({ accountId }) {
                 setStatus('ok');
             })
             .catch(err => { setError(err.message); setStatus('error'); });
-    }, [isMe, accountId]);
+    }, [isMe, accountId, demo]);
 
     useEffect(() => { load(); }, [load]);
 
     // If the session changes (logout) while on /profile, re-evaluate
     useEffect(() => {
+        if (demo) return;
         if (isMe && !auth.loading && !auth.user) setStatus('unauth');
-    }, [isMe, auth.loading, auth.user]);
+    }, [isMe, auth.loading, auth.user, demo]);
 
     if (status === 'loading') return <div className="page-content pc-profile"><Spinner label="Loading profile..." /></div>;
 
@@ -298,11 +360,16 @@ export default function Profile({ accountId }) {
         return <div className="page-content pc-profile"><ErrorBox message={`Failed to load profile: ${error}`} onRetry={load} /></div>;
     }
 
-    const p = profile;
+    const p = demo ? buildDemoProfile(demoOptions, demoPrefs) : profile;
     const season = p.season;
 
     return (
         <div className="page-content pc-profile">
+            {demo && (
+                <div className="demo-banner">
+                    Demo mode — this is a synthetic profile. Use the panel to switch states; saves and the Steam link are simulated and nothing is written to the server.
+                </div>
+            )}
             {flags.linked && <div className="profile-banner ok">Steam linked — you're registered for the Gargamel League. Check Discord!</div>}
 
             <div className="profile-header">
@@ -385,9 +452,18 @@ export default function Profile({ accountId }) {
                     ) : <p className="pref-empty">No matches on record yet.</p>}
                 </div>
 
-                <PreferencesCard profile={p} onSaved={setProfile} />
-                <SteamCard profile={p} flags={flags} />
+                <PreferencesCard
+                    key={demo ? JSON.stringify(demoOptions) : 'live'}
+                    profile={p}
+                    onSaved={demo ? () => {} : setProfile}
+                    saveHandler={demo ? demoSave : null}
+                    fallbackHeroes={demo ? DEMO_HEROES : null}
+                    fallbackVetoModes={demo ? DEMO_VETO_MODES : null}
+                />
+                <SteamCard profile={p} flags={flags} onDemoLink={demo ? demoLink : null} />
             </div>
+
+            {demo && <ProfileDemoControls options={demoOptions} onChange={demoChange} onReset={demoReset} log={demoLog} />}
         </div>
     );
 }

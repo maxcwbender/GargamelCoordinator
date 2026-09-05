@@ -21,7 +21,7 @@ export const DEFAULT_BOUNDS = { minX: -8288, maxX: 8288, minY: -8288, maxY: 8288
 // each side. The map area inside the border is stretched to fill the box, so
 // structure/dot percentages always refer to the playable map, not the file.
 // Calibration mode can auto-detect a black border.
-export const DEFAULT_INSET = { top: 0, right: 0, bottom: 0, left: 0 };
+export const DEFAULT_INSET = { top: 6.5, right: 5.8, bottom: 8.3, left: 5.8 };
 
 // CSS to show only the map area (inside the inset) stretched edge to edge.
 export function backgroundStyleForInset(inset) {
@@ -41,12 +41,7 @@ export function backgroundStyleForInset(inset) {
 // 4 mid T2, 5 mid T3, 6 bot T1, 7 bot T2, 8 bot T3, 9 ancient top, 10 ancient bot.
 // Barracks bits: 0 top melee, 1 top ranged, 2 mid melee, 3 mid ranged,
 // 4 bot melee, 5 bot ranged.
-// Positions below were read off a reference minimap (Radiant bottom-left,
-// Dire top-right) — calibrate against the real background before trusting.
-export const DEFAULT_BOUNDS = { minX: -8288, maxX: 8288, minY: -8288, maxY: 8288 };
-
-export const DEFAULT_INSET = { top: 6.5, right: 5.8, bottom: 8.3, left: 5.8 };
-
+// Positions calibrated against the deployed background via /livegame?calibrate=1
 export const DEFAULT_STRUCTURES = {
     radiant: {
         towers: [
