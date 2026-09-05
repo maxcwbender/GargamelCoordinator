@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import Minimap from './Minimap.jsx';
 import {
-    DEFAULT_BOUNDS, DEFAULT_STRUCTURES, cloneStructures, getMinimapConfig,
+    DEFAULT_BOUNDS, DEFAULT_STRUCTURES, DEFAULT_INSET, cloneStructures, getMinimapConfig,
     saveCalibration, clearCalibration, formatCalibrationSource, toMapPercent, usesWorldCoords,
 } from '../minimap.js';
 
@@ -13,6 +13,8 @@ export default function MinimapCalibrator({ liveGames = [] }) {
     const initial = getMinimapConfig();
     const [structures, setStructures] = useState(() => cloneStructures(initial.structures));
     const [bounds, setBounds] = useState({ ...initial.bounds });
+    const [inset, setInset] = useState({ ...initial.inset });
+    const [detectNote, setDetectNote] = useState('');
     const [overridden, setOverridden] = useState(initial.overridden);
     const [testPoint, setTestPoint] = useState({ x: '-6800', y: '-6400' });
     const [showLive, setShowLive] = useState(true);
@@ -22,7 +24,7 @@ export default function MinimapCalibrator({ liveGames = [] }) {
     const [previewBackground, setPreviewBackground] = useState(null);
     const [backgroundMissing, setBackgroundMissing] = useState(false);
 
-    useEffect(() => { setCopied(false); }, [structures, bounds]);
+    useEffect(() => { setCopied(false); }, [structures, bounds, inset]);
 
     // Detect a missing/broken deployed background so the page says so instead
     // of silently showing a black square.
@@ -61,15 +63,54 @@ export default function MinimapCalibrator({ liveGames = [] }) {
         if (Number.isFinite(n)) setBounds(b => ({ ...b, [key]: n }));
     };
 
-    const source = formatCalibrationSource({ structures, bounds });
+    const setInsetSide = (side, value) => {
+        const n = Number(value);
+        if (Number.isFinite(n)) setInset(i => ({ ...i, [side]: Math.max(0, Math.min(40, n)) }));
+    };
+
+    // Scan the background for a dark border: walk in from each edge while the
+    // whole row/column is near-black, and turn that into percent insets.
+    const detectBorder = () => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const W = canvas.width, H = canvas.height, DARK = 40;
+                const lum = (x, y) => { const i = (y * W + x) * 4; return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]; };
+                // A line counts as border when at least 97% of its pixels are dark.
+                const rowDark = (y) => { let d = 0; for (let x = 0; x < W; x++) if (lum(x, y) < DARK) d++; return d / W > 0.97; };
+                const colDark = (x) => { let d = 0; for (let y = 0; y < H; y++) if (lum(x, y) < DARK) d++; return d / H > 0.97; };
+                let top = 0, bottom = 0, left = 0, right = 0;
+                while (top < H * 0.4 && rowDark(top)) top++;
+                while (bottom < H * 0.4 && rowDark(H - 1 - bottom)) bottom++;
+                while (left < W * 0.4 && colDark(left)) left++;
+                while (right < W * 0.4 && colDark(W - 1 - right)) right++;
+                const r1 = (n, total) => Math.round((n / total) * 1000) / 10;
+                const found = { top: r1(top, H), right: r1(right, W), bottom: r1(bottom, H), left: r1(left, W) };
+                setInset(found);
+                setDetectNote(`Detected border: top ${found.top}%, right ${found.right}%, bottom ${found.bottom}%, left ${found.left}% (${W}x${H}px image)`);
+            } catch (err) {
+                setDetectNote('Could not read the image pixels (' + err.message + ') - set the insets by hand.');
+            }
+        };
+        img.onerror = () => setDetectNote('Background image failed to load.');
+        img.src = previewBackground || '/minimap_background.png';
+    };
+
+    const source = formatCalibrationSource({ structures, bounds, inset });
 
     const copy = async () => {
         try { await navigator.clipboard.writeText(source); setCopied(true); } catch { setCopied(false); }
     };
 
-    const apply = () => { saveCalibration({ structures, bounds }); setOverridden(true); };
+    const apply = () => { saveCalibration({ structures, bounds, inset }); setOverridden(true); };
     const clear = () => { clearCalibration(); setOverridden(false); };
-    const resetDefaults = () => { setStructures(cloneStructures(DEFAULT_STRUCTURES)); setBounds({ ...DEFAULT_BOUNDS }); };
+    const resetDefaults = () => { setStructures(cloneStructures(DEFAULT_STRUCTURES)); setBounds({ ...DEFAULT_BOUNDS }); setInset({ ...DEFAULT_INSET }); setDetectNote(''); };
 
     const game = showLive ? liveGames[selectedGame] : null;
     const tx = Number(testPoint.x), ty = Number(testPoint.y);
@@ -127,6 +168,7 @@ export default function MinimapCalibrator({ liveGames = [] }) {
                         onMove={moveStructure}
                         showEmptyNotice={false}
                         backgroundUrl={previewBackground}
+                        inset={inset}
                     />
                     <div className="calib-background">
                         <label className="btn btn-sm btn-ghost calib-file">
@@ -158,6 +200,24 @@ export default function MinimapCalibrator({ liveGames = [] }) {
                 </div>
 
                 <div className="calib-panel">
+                    <section>
+                        <h3>Image border → map fill</h3>
+                        <p className="calib-muted">
+                            If the image has a border around the playable map, set how much to trim from each edge (percent of the
+                            image). The map inside is stretched to fill the square, so positions refer to the map, not the file.
+                        </p>
+                        <div className="calib-bounds">
+                            {['top', 'right', 'bottom', 'left'].map(k => (
+                                <label key={k}>{k} %<input type="number" step="0.1" min="0" max="40" value={inset[k]} onChange={e => setInsetSide(k, e.target.value)} /></label>
+                            ))}
+                        </div>
+                        <div className="calib-actions">
+                            <button type="button" className="btn btn-sm btn-ghost" onClick={detectBorder}>Auto-detect black border</button>
+                            <button type="button" className="link-btn" onClick={() => { setInset({ ...DEFAULT_INSET }); setDetectNote(''); }}>no border</button>
+                        </div>
+                        {detectNote && <p className="calib-muted">{detectNote}</p>}
+                    </section>
+
                     <section>
                         <h3>World bounds → player dots</h3>
                         <div className="calib-bounds">

@@ -17,6 +17,26 @@
 
 export const DEFAULT_BOUNDS = { minX: -8288, maxX: 8288, minY: -8288, maxY: 8288 };
 
+// Border baked into the background image, as a percentage of the image on
+// each side. The map area inside the border is stretched to fill the box, so
+// structure/dot percentages always refer to the playable map, not the file.
+// Calibration mode can auto-detect a black border.
+export const DEFAULT_INSET = { top: 0, right: 0, bottom: 0, left: 0 };
+
+// CSS to show only the map area (inside the inset) stretched edge to edge.
+export function backgroundStyleForInset(inset) {
+    const t = (inset?.top || 0) / 100, r = (inset?.right || 0) / 100, b = (inset?.bottom || 0) / 100, l = (inset?.left || 0) / 100;
+    const w = 1 - l - r, h = 1 - t - b;
+    if (w <= 0.1 || h <= 0.1) return {};
+    const px = (l + r) > 0 ? (l / (l + r)) * 100 : 0;
+    const py = (t + b) > 0 ? (t / (t + b)) * 100 : 0;
+    return {
+        backgroundSize: `${(100 / w).toFixed(3)}% ${(100 / h).toFixed(3)}%`,
+        backgroundPosition: `${px.toFixed(3)}% ${py.toFixed(3)}%`,
+        backgroundRepeat: 'no-repeat',
+    };
+}
+
 // Tower bits (Valve tower_state): 0 top T1, 1 top T2, 2 top T3, 3 mid T1,
 // 4 mid T2, 5 mid T3, 6 bot T1, 7 bot T2, 8 bot T3, 9 ancient top, 10 ancient bot.
 // Barracks bits: 0 top melee, 1 top ranged, 2 mid melee, 3 mid ranged,
@@ -87,7 +107,7 @@ export function loadCalibration() {
 }
 
 export function saveCalibration(config) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ structures: config.structures, bounds: config.bounds })); } catch { /* ignore */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ structures: config.structures, bounds: config.bounds, inset: config.inset || DEFAULT_INSET })); } catch { /* ignore */ }
 }
 
 export function clearCalibration() {
@@ -99,6 +119,7 @@ export function getMinimapConfig() {
     return {
         structures: saved?.structures || DEFAULT_STRUCTURES,
         bounds: saved?.bounds || DEFAULT_BOUNDS,
+        inset: saved?.inset || DEFAULT_INSET,
         overridden: !!saved,
     };
 }
@@ -128,10 +149,11 @@ export function toMapPercent(posX, posY, bounds, worldMode) {
 }
 
 // JS source for pasting the calibrated values back into this file.
-export function formatCalibrationSource({ structures, bounds }) {
+export function formatCalibrationSource({ structures, bounds, inset = DEFAULT_INSET }) {
     const fmt = (n) => Number(n).toFixed(1);
     const list = (arr) => arr.map(s => `            { bit: ${s.bit}, label: ${JSON.stringify(s.label)}, x: ${fmt(s.x)}, y: ${fmt(s.y)} },`).join('\n');
     const team = (t) => `    ${t}: {\n        towers: [\n${list(structures[t].towers)}\n        ],\n        barracks: [\n${list(structures[t].barracks)}\n        ],\n    },`;
     return `export const DEFAULT_BOUNDS = { minX: ${bounds.minX}, maxX: ${bounds.maxX}, minY: ${bounds.minY}, maxY: ${bounds.maxY} };\n\n`
+        + `export const DEFAULT_INSET = { top: ${fmt(inset.top)}, right: ${fmt(inset.right)}, bottom: ${fmt(inset.bottom)}, left: ${fmt(inset.left)} };\n\n`
         + `export const DEFAULT_STRUCTURES = {\n${team('radiant')}\n${team('dire')}\n};\n`;
 }

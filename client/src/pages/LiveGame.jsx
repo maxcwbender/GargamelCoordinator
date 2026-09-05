@@ -88,6 +88,7 @@ function GameContent({ game, minimapConfig }) {
                 <Minimap
                     structures={minimapConfig.structures}
                     bounds={minimapConfig.bounds}
+                    inset={minimapConfig.inset}
                     radiant={game.radiant}
                     dire={game.dire}
                 />

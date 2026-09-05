@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { toMapPercent, usesWorldCoords } from '../minimap.js';
+import { toMapPercent, usesWorldCoords, backgroundStyleForInset } from '../minimap.js';
 
 // The square minimap: background image + structures (towers/barracks from the
 // Valve bitmasks) + player dots. Used by the live game page and, in draggable
@@ -12,7 +12,7 @@ import { toMapPercent, usesWorldCoords } from '../minimap.js';
 //   draggable   when set, structures can be dragged; onMove(team, kind, index, x, y)
 export default function Minimap({
     structures, bounds, radiant, dire, extraDots = [], draggable = false, onMove,
-    className = '', showEmptyNotice = true, backgroundUrl = null,
+    className = '', showEmptyNotice = true, backgroundUrl = null, inset = null,
 }) {
     const mapRef = useRef(null);
     const allPlayers = [...(radiant?.players || []), ...(dire?.players || [])];
@@ -91,7 +91,10 @@ export default function Minimap({
         <div
             ref={mapRef}
             className={`minimap ${className}`.trim()}
-            style={backgroundUrl ? { backgroundImage: `url("${backgroundUrl}")` } : undefined}
+            style={{
+                ...(backgroundUrl ? { backgroundImage: `url("${backgroundUrl}")` } : {}),
+                ...backgroundStyleForInset(inset),
+            }}
         >
             <div className="minimap-grid" />
             {renderStructures('radiant', radiant)}
