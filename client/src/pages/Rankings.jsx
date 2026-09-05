@@ -257,7 +257,7 @@ export default function Rankings() {
                     <div className="cache-info">
                         Data refreshed {timeAgo(data.lastUpdated)}
                         {' · '}based on {data.matchesAnalyzed || 0} Season {data.season} matches
-                        {data.minMatches ? ` · min ${data.minMatches} games to qualify (${data.minRoleMatches} per role)` : ''}
+                        {data.minMatches ? ` · min ${data.minMatches} games to qualify (per role on Core/Support)` : ''}
                     </div>
                 ) : null}
             </div>

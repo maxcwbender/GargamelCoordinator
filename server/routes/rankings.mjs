@@ -141,12 +141,11 @@ function compute() {
     const core = aggStmt.all({ season: CURRENT_SEASON, role: 'core' });
     const support = aggStmt.all({ season: CURRENT_SEASON, role: 'support' });
 
-    // Same rolling qualification bar as the classic leaderboard (sqrt of season
-    // games, at least 2); role boards use half of it since a player splits
-    // games between roles.
+    // Rolling qualification bar (sqrt of season games, at least 2). Role boards
+    // use the same bar, counted in games played in that role.
     const totalSeasonMatches = Math.max(seasonInfo.c || 0, all.reduce((m, r) => Math.max(m, r.games), 0));
     const minMatches = Math.max(2, Math.ceil(Math.sqrt(totalSeasonMatches)));
-    const minRoleMatches = Math.max(2, Math.ceil(minMatches / 2));
+    const minRoleMatches = minMatches;
     const mvps = new Map(mvpStmt.all().map(r => [r.account_id, r.c]));
     const streaks = longestWinStreaks();
 
