@@ -236,10 +236,68 @@ function fantasyScore(p) {
 // Persist one row per (match, player) so profiles can show hero history and
 // recent results without any extra OpenDota calls. Called from both crawls.
 const upsertPlayerMatch = db.prepare(`INSERT OR REPLACE INTO player_matches
-    (match_id, account_id, hero_id, player_slot, won, kills, deaths, assists, gold_per_min, start_time, duration, game_mode, season)
-    VALUES (@matchId, @accountId, @heroId, @playerSlot, @won, @kills, @deaths, @assists, @gpm, @startTime, @duration, @gameMode, @season)`);
+    (match_id, account_id, hero_id, player_slot, won, kills, deaths, assists, gold_per_min, start_time, duration, game_mode, season,
+     last_hits, denies, hero_damage, tower_damage, hero_healing, obs_placed, sen_placed, observer_kills, camps_stacked, stuns,
+     rune_pickups, xp_per_min, level, net_worth, teamfight_participation, lane_role, role)
+    VALUES (@matchId, @accountId, @heroId, @playerSlot, @won, @kills, @deaths, @assists, @gpm, @startTime, @duration, @gameMode, @season,
+     @lastHits, @denies, @heroDamage, @towerDamage, @heroHealing, @obsPlaced, @senPlaced, @observerKills, @campsStacked, @stuns,
+     @runePickups, @xpm, @level, @netWorth, @teamfight, @laneRole, @role)`);
+
+// Core vs support, per team. OpenDota's parsed data gives each player a lane
+// (1 safe, 2 mid, 3 off, 4 jungle): mid is a core; in the safe and off lanes the
+// lane-mate with the most last hits is the core and the rest are supports. The
+// result is then squeezed to the Dota norm of exactly 3 cores + 2 supports using
+// GPM as the tiebreak. Unparsed matches (no lane_role) fall back to a ward/GPM
+// score. Returns a Map player_slot -> 'core' | 'support'.
+export function classifyRoles(teamPlayers) {
+    const roles = new Map();
+    const parsed = teamPlayers.length > 0 && teamPlayers.every(p => p.lane_role != null);
+    if (parsed) {
+        const byLane = new Map();
+        for (const p of teamPlayers) {
+            if (p.is_roaming) { roles.set(p.player_slot, 'support'); continue; }
+            if (p.lane_role === 2 || p.lane_role === 4) { roles.set(p.player_slot, 'core'); continue; }
+            if (!byLane.has(p.lane_role)) byLane.set(p.lane_role, []);
+            byLane.get(p.lane_role).push(p);
+        }
+        for (const group of byLane.values()) {
+            group.sort((a, b) => (b.last_hits || 0) - (a.last_hits || 0) || (b.gold_per_min || 0) - (a.gold_per_min || 0));
+            group.forEach((p, idx) => roles.set(p.player_slot, idx === 0 ? 'core' : 'support'));
+        }
+    } else {
+        // Fallback: supports place wards and farm less.
+        const scored = teamPlayers.map(p => ({ p, score: ((p.obs_placed || 0) + (p.sen_placed || 0)) - (p.gold_per_min || 0) / 150 }))
+            .sort((a, b) => b.score - a.score);
+        scored.forEach((e, idx) => roles.set(e.p.player_slot, idx < 2 ? 'support' : 'core'));
+    }
+    // Normalize to 3 cores / 2 supports (5-player teams only).
+    if (teamPlayers.length === 5) {
+        const gpm = (p) => p.gold_per_min || 0;
+        let supports = teamPlayers.filter(p => roles.get(p.player_slot) === 'support');
+        while (supports.length > 2) {
+            supports.sort((a, b) => gpm(b) - gpm(a));
+            roles.set(supports[0].player_slot, 'core');
+            supports = supports.slice(1);
+        }
+        while (supports.length < 2) {
+            const cores = teamPlayers.filter(p => roles.get(p.player_slot) === 'core' && p.lane_role !== 2).sort((a, b) => gpm(a) - gpm(b));
+            if (!cores.length) break;
+            roles.set(cores[0].player_slot, 'support');
+            supports.push(cores[0]);
+        }
+    }
+    return roles;
+}
+
+// Persist one row per (match, player) so profiles and role-split rankings can be
+// computed from SQL without extra OpenDota calls. Called from both crawls.
 const savePlayerMatches = db.transaction((detail, season) => {
-    for (const p of detail.players || []) {
+    const players = detail.players || [];
+    const roles = new Map([
+        ...classifyRoles(players.filter(p => p.player_slot < 128)),
+        ...classifyRoles(players.filter(p => p.player_slot >= 128)),
+    ]);
+    for (const p of players) {
         if (!p.account_id) continue;
         const isRadiant = p.player_slot < 128;
         upsertPlayerMatch.run({
@@ -256,10 +314,30 @@ const savePlayerMatches = db.transaction((detail, season) => {
             duration: detail.duration || null,
             gameMode: detail.game_mode ?? null,
             season,
+            lastHits: p.last_hits || 0,
+            denies: p.denies || 0,
+            heroDamage: p.hero_damage || 0,
+            towerDamage: p.tower_damage || 0,
+            heroHealing: p.hero_healing || 0,
+            obsPlaced: p.obs_placed || 0,
+            senPlaced: p.sen_placed || 0,
+            observerKills: p.observer_kills || 0,
+            campsStacked: p.camps_stacked || 0,
+            stuns: p.stuns || 0,
+            runePickups: p.rune_pickups || 0,
+            xpm: p.xp_per_min || 0,
+            level: p.level || 0,
+            netWorth: p.net_worth || ((p.gold || 0) + (p.gold_spent || 0)),
+            teamfight: p.teamfight_participation ?? null,
+            laneRole: p.lane_role ?? null,
+            role: roles.get(p.player_slot) || null,
         });
     }
 });
 export const playerMatchCount = () => db.prepare('SELECT COUNT(*) AS c FROM player_matches').get().c;
+// Rows written before the role/detail columns existed have role NULL; a crawl
+// re-upserts every season match and fills them in.
+export const playerMatchesMissingRoles = () => db.prepare('SELECT COUNT(*) AS c FROM player_matches WHERE role IS NULL AND season = ?').get(CURRENT_SEASON).c;
 
 // Single-flight wrapper: concurrent callers (boot, interval, stale-cache API hits)
 // share one in-progress refresh instead of stacking duplicate OpenDota crawls.
@@ -582,8 +660,8 @@ export function startOpenDotaBackgroundWork() {
     }
 
     // Refresh player stats if cache is stale (older than 12 hours) or empty
-    const noMatchHistory = playerMatchCount() === 0;
-    if (noMatchHistory) logger.info('player_matches is empty (first run with profiles) — forcing a season crawl');
+    const noMatchHistory = playerMatchCount() === 0 || playerMatchesMissingRoles() > 0;
+    if (noMatchHistory) logger.info('player_matches is empty or missing role data — forcing a season crawl');
     if (Date.now() - dbStats.lastFetched > PLAYER_STATS_TTL_MS || dbStats.players.length === 0 || noMatchHistory) {
         logger.info('Player stats cache is stale or empty, refreshing in background');
         refreshPlayerStats(); // Don't await - run in background

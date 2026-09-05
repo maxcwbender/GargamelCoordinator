@@ -144,3 +144,26 @@ db.exec(`CREATE TABLE IF NOT EXISTS player_matches (
     PRIMARY KEY (match_id, account_id)
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_player_matches_account ON player_matches(account_id, start_time)');
+// Per-match detail for role-split rankings (all from OpenDota's parsed match
+// data). role is 'core' | 'support', derived at crawl time (see opendota.mjs).
+for (const sql of [
+    'ALTER TABLE player_matches ADD COLUMN last_hits INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN denies INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN hero_damage INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN tower_damage INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN hero_healing INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN obs_placed INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN sen_placed INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN observer_kills INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN camps_stacked INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN stuns REAL DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN rune_pickups INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN xp_per_min INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN level INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN net_worth INTEGER DEFAULT 0',
+    'ALTER TABLE player_matches ADD COLUMN teamfight_participation REAL',
+    'ALTER TABLE player_matches ADD COLUMN lane_role INTEGER',
+    'ALTER TABLE player_matches ADD COLUMN role TEXT',
+]) {
+    try { db.exec(sql); } catch (_) { /* already exists */ }
+}

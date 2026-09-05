@@ -7,6 +7,7 @@ import { mountRegisterRoutes } from './routes/register.mjs';
 import { mountPlanningRoutes } from './routes/planning.mjs';
 import { mountAuthRoutes } from './routes/auth.mjs';
 import { mountProfileRoutes } from './routes/profile.mjs';
+import { mountRankingsRoutes } from './routes/rankings.mjs';
 import { mountStatic } from './static.mjs';
 
 const server = express();
@@ -27,6 +28,7 @@ mountRegisterRoutes(server);
 mountPlanningRoutes(server);
 mountAuthRoutes(server);
 mountProfileRoutes(server);
+mountRankingsRoutes(server);
 mountStatic(server);
 
 // Background caches (OpenDota crawl, Discord members) start after the routes are
