@@ -43,54 +43,59 @@ export function backgroundStyleForInset(inset) {
 // 4 bot melee, 5 bot ranged.
 // Positions below were read off a reference minimap (Radiant bottom-left,
 // Dire top-right) — calibrate against the real background before trusting.
+export const DEFAULT_BOUNDS = { minX: -8288, maxX: 8288, minY: -8288, maxY: 8288 };
+
+export const DEFAULT_INSET = { top: 6.5, right: 5.8, bottom: 8.3, left: 5.8 };
+
 export const DEFAULT_STRUCTURES = {
     radiant: {
         towers: [
-            { bit: 0, label: 'Top T1', x: 15.2, y: 38.7 },
-            { bit: 1, label: 'Top T2', x: 14.8, y: 56.2 },
-            { bit: 2, label: 'Top T3', x: 11.6, y: 72.6 },
-            { bit: 3, label: 'Mid T1', x: 43.5, y: 59.7 },
-            { bit: 4, label: 'Mid T2', x: 31.2, y: 69.2 },
-            { bit: 5, label: 'Mid T3', x: 23.1, y: 77.5 },
-            { bit: 6, label: 'Bot T1', x: 83.0, y: 90.6 },
-            { bit: 7, label: 'Bot T2', x: 49.0, y: 90.8 },
-            { bit: 8, label: 'Bot T3', x: 29.5, y: 90.8 },
-            { bit: 9, label: 'Ancient T4 (top)', x: 16.8, y: 82.6 },
-            { bit: 10, label: 'Ancient T4 (bot)', x: 19.5, y: 85.0 },
+            { bit: 0, label: "Top T1", x: 15.2, y: 38.7 },
+            { bit: 1, label: "Top T2", x: 14.8, y: 56.2 },
+            { bit: 2, label: "Top T3", x: 14.7, y: 68.1 },
+            { bit: 3, label: "Mid T1", x: 42.3, y: 57.2 },
+            { bit: 4, label: "Mid T2", x: 33.0, y: 65.9 },
+            { bit: 5, label: "Mid T3", x: 25.7, y: 73.3 },
+            { bit: 6, label: "Bot T1", x: 76.5, y: 84.6 },
+            { bit: 7, label: "Bot T2", x: 48.9, y: 85.0 },
+            { bit: 8, label: "Bot T3", x: 30.2, y: 83.9 },
+            { bit: 9, label: "Ancient T4 (top)", x: 17.7, y: 77.7 },
+            { bit: 10, label: "Ancient T4 (bot)", x: 19.9, y: 80.6 },
         ],
         barracks: [
-            { bit: 0, label: 'Top Melee', x: 13.3, y: 74.8 },
-            { bit: 1, label: 'Top Ranged', x: 11.0, y: 76.5 },
-            { bit: 2, label: 'Mid Melee', x: 25.5, y: 79.6 },
-            { bit: 3, label: 'Mid Ranged', x: 23.6, y: 81.2 },
-            { bit: 4, label: 'Bot Melee', x: 31.5, y: 93.0 },
-            { bit: 5, label: 'Bot Ranged', x: 28.5, y: 93.0 },
+            { bit: 0, label: "Top Melee", x: 17.0, y: 71.1 },
+            { bit: 1, label: "Top Ranged", x: 12.8, y: 71.1 },
+            { bit: 2, label: "Mid Melee", x: 25.7, y: 76.3 },
+            { bit: 3, label: "Mid Ranged", x: 22.9, y: 73.7 },
+            { bit: 4, label: "Bot Melee", x: 27.2, y: 85.3 },
+            { bit: 5, label: "Bot Ranged", x: 27.4, y: 82.2 },
         ],
     },
     dire: {
         towers: [
-            { bit: 0, label: 'Top T1', x: 23.8, y: 11.8 },
-            { bit: 1, label: 'Top T2', x: 52.8, y: 11.8 },
-            { bit: 2, label: 'Top T3', x: 74.5, y: 13.0 },
-            { bit: 3, label: 'Mid T1', x: 58.9, y: 48.6 },
-            { bit: 4, label: 'Mid T2', x: 67.5, y: 37.1 },
-            { bit: 5, label: 'Mid T3', x: 77.0, y: 24.0 },
-            { bit: 6, label: 'Bot T1', x: 90.2, y: 61.8 },
-            { bit: 7, label: 'Bot T2', x: 91.1, y: 49.1 },
-            { bit: 8, label: 'Bot T3', x: 91.1, y: 30.7 },
-            { bit: 9, label: 'Ancient T4 (top)', x: 82.0, y: 16.5 },
-            { bit: 10, label: 'Ancient T4 (bot)', x: 84.5, y: 19.0 },
+            { bit: 0, label: "Top T1", x: 23.1, y: 17.6 },
+            { bit: 1, label: "Top T2", x: 48.6, y: 16.6 },
+            { bit: 2, label: "Top T3", x: 68.0, y: 18.1 },
+            { bit: 3, label: "Mid T1", x: 54.0, y: 45.7 },
+            { bit: 4, label: "Mid T2", x: 64.7, y: 37.6 },
+            { bit: 5, label: "Mid T3", x: 73.4, y: 30.1 },
+            { bit: 6, label: "Bot T1", x: 83.0, y: 65.2 },
+            { bit: 7, label: "Bot T2", x: 84.4, y: 48.7 },
+            { bit: 8, label: "Bot T3", x: 85.1, y: 34.3 },
+            { bit: 9, label: "Ancient T4 (top)", x: 77.6, y: 21.6 },
+            { bit: 10, label: "Ancient T4 (bot)", x: 80.4, y: 24.5 },
         ],
         barracks: [
-            { bit: 0, label: 'Top Melee', x: 76.5, y: 14.5 },
-            { bit: 1, label: 'Top Ranged', x: 78.5, y: 16.5 },
-            { bit: 2, label: 'Mid Melee', x: 78.5, y: 22.0 },
-            { bit: 3, label: 'Mid Ranged', x: 80.5, y: 23.5 },
-            { bit: 4, label: 'Bot Melee', x: 88.5, y: 28.0 },
-            { bit: 5, label: 'Bot Ranged', x: 88.5, y: 31.5 },
+            { bit: 0, label: "Top Melee", x: 70.1, y: 16.7 },
+            { bit: 1, label: "Top Ranged", x: 69.8, y: 19.7 },
+            { bit: 2, label: "Mid Melee", x: 73.9, y: 27.5 },
+            { bit: 3, label: "Mid Ranged", x: 76.0, y: 30.1 },
+            { bit: 4, label: "Bot Melee", x: 86.6, y: 32.4 },
+            { bit: 5, label: "Bot Ranged", x: 83.0, y: 32.9 },
         ],
     },
 };
+
 
 // ─── Per-browser calibration override ────────────────────────────────────────
 // The calibrator can store a draft here so the live page uses it immediately,
