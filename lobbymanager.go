@@ -69,7 +69,22 @@ type GameConfig struct {
 	PollCallbackURL string   `json:"poll_callback_url,omitempty"` // Optional: URL to notify when polling should be triggered
 	LobbyReadyURL   string   `json:"lobby_ready_url,omitempty"`   // Optional: URL to notify when lobby is established
 	GameStartedURL  string   `json:"game_started_url,omitempty"`  // Optional: URL to notify when game starts (match_id available)
+	AbandonURL      string   `json:"abandon_url,omitempty"`       // Optional: URL to notify when a player types !abandon in lobby chat
 	LeagueID        uint32   `json:"league_id"`                   // League ID from config.json
+	// TestMode turns the lobby into a solo/small-group test harness: the poll fires as soon
+	// as every configured player is in the lobby (so a single tester can drive the flow),
+	// one side may be empty, the league id is forced to 0, and the launch is suppressed
+	// unless TestAutoLaunch is set.
+	TestMode       bool `json:"test_mode,omitempty"`
+	TestAutoLaunch bool `json:"test_auto_launch,omitempty"`
+}
+
+// MemberStatus is one lobby member as reported by GET /game/{id}
+type MemberStatus struct {
+	SteamID uint64 `json:"steam_id"`
+	Team    int32  `json:"team"`
+	Name    string `json:"name,omitempty"`
+	IsBot   bool   `json:"is_bot,omitempty"`
 }
 
 // GameStatus represents the current status of a game
@@ -88,6 +103,15 @@ type GameStatus struct {
 	PollingDone   bool     `json:"polling_done"`
 	PassKey       string   `json:"pass_key,omitempty"`
 	Error         string   `json:"error,omitempty"`
+	// Diagnostics for the lobby test harness / lobby_status command
+	Members          []MemberStatus `json:"members"`
+	PlayersPresent   int            `json:"players_present"`    // configured players currently in the lobby
+	PollThreshold    int            `json:"poll_threshold"`     // players_present needed to auto-trigger the poll
+	PollCallbackSent bool           `json:"poll_callback_sent"` // poll trigger has been sent to Master_Bot
+	GameLaunched     bool           `json:"game_launched"`
+	TestMode         bool           `json:"test_mode"`
+	TestAutoLaunch   bool           `json:"test_auto_launch"`
+	LobbyChatJoined  bool           `json:"lobby_chat_joined"`
 }
 
 // GameResult holds the final game result information
@@ -124,6 +148,9 @@ type CreateGameRequest struct {
 	PollCallbackURL string   `json:"poll_callback_url,omitempty"` // Optional: URL to notify when polling should be triggered
 	LobbyReadyURL   string   `json:"lobby_ready_url,omitempty"`   // Optional: URL to notify when lobby is established
 	GameStartedURL  string   `json:"game_started_url,omitempty"`  // Optional: URL to notify when game starts (match_id available)
+	AbandonURL      string   `json:"abandon_url,omitempty"`       // Optional: URL to notify when a player types !abandon in lobby chat
+	TestMode        bool     `json:"test_mode,omitempty"`         // Optional: solo test harness mode (see GameConfig.TestMode)
+	TestAutoLaunch  bool     `json:"test_auto_launch,omitempty"`  // Optional: actually launch the test lobby when seated
 }
 
 // UpdateLobbySettingsRequest represents a request to update lobby settings
@@ -271,7 +298,7 @@ type gcHandler struct {
 	keepaliveMutex       sync.Mutex
 	pollingActive        bool
 	pollingDone          bool
-	pollCallbackSent     bool   // True once we've notified Master_Bot to start the poll (prevents duplicate callbacks)
+	pollCallbackSent     bool // True once we've notified Master_Bot to start the poll (prevents duplicate callbacks)
 	pollingMutex         sync.Mutex
 	pollingMessageSent   bool   // Track if we've sent the "polling active" message to avoid duplicates
 	pollEndedMessageSent bool   // Track if we've sent the "polling ended but not seated" message to avoid duplicates
@@ -289,6 +316,26 @@ type gcHandler struct {
 	resultSent           bool // Track if result has been sent to prevent duplicates
 	resultSentMutex      sync.Mutex
 	accountIndex         int // Index of the account assigned to this game (-1 if not allocated)
+
+	// Poll trigger bookkeeping (guarded by pollingMutex). The callback to Master_Bot is
+	// re-sent if the poll never became active — a lost/failed callback used to silently
+	// disable the auto-poll for the whole game.
+	pollCallbackSentAt  time.Time
+	pollCallbackRetries int
+	pollThreshold       int // last computed number of players needed to trigger the poll
+	playersPresent      int // last observed number of configured players in the lobby
+
+	// Lobby chat: we stay joined to the lobby channel so we can both post messages and
+	// receive commands such as "!abandon" typed by players.
+	lobbyChatChannelID uint64
+	lobbyChatMutex     sync.Mutex
+	abandonURL         string // URL to notify Master_Bot that a player abandoned via lobby chat
+
+	// Watchdog that re-evaluates the poll trigger / seating even when no lobby update arrives
+	lobbyWatchRunning bool
+	lobbyWatchMutex   sync.Mutex
+
+	testLaunchNoticeSent bool // test mode: "would launch now" chat message already sent
 }
 
 // GameManager manages multiple concurrent games
@@ -661,6 +708,13 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.TestMode {
+		// Never attach a test lobby to the real league: a solo tester launching it would
+		// otherwise create a junk league match.
+		leagueID = 0
+		log.Printf("[Game %s] TEST MODE lobby: league_id forced to 0, auto_launch=%v", req.GameID, req.TestAutoLaunch)
+	}
+
 	config := &GameConfig{
 		GameID:          req.GameID,
 		Username:        accountInfo.Username, // Use allocated account
@@ -678,7 +732,10 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		PollCallbackURL: req.PollCallbackURL,
 		LobbyReadyURL:   req.LobbyReadyURL,
 		GameStartedURL:  req.GameStartedURL,
+		AbandonURL:      req.AbandonURL,
 		LeagueID:        leagueID,
+		TestMode:        req.TestMode,
+		TestAutoLaunch:  req.TestAutoLaunch,
 	}
 
 	// Create handler and start game
@@ -699,6 +756,7 @@ func handleCreateGame(w http.ResponseWriter, r *http.Request) {
 		lobbyReadyNotified:  false,
 		gameStartedURL:      req.GameStartedURL,
 		gameStartedNotified: false,
+		abandonURL:          req.AbandonURL,
 		playersInvited:      make(map[uint64]bool),
 	}
 
@@ -794,37 +852,64 @@ func handleGameOperations(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGetGameStatus(w http.ResponseWriter, r *http.Request, handler *gcHandler) {
+	var botSteamID uint64
+	if handler.client != nil {
+		botSteamID = handler.client.SteamId().ToUint64()
+	}
+
 	handler.membersMutex.Lock()
 	radiantCount := 0
 	direCount := 0
+	members := make([]MemberStatus, 0, len(handler.lobbyMembers))
 	for _, member := range handler.lobbyMembers {
 		if member.Team == DOTA_GC_TEAM_GOOD_GUYS {
 			radiantCount++
 		} else if member.Team == DOTA_GC_TEAM_BAD_GUYS {
 			direCount++
 		}
+		members = append(members, MemberStatus{
+			SteamID: member.SteamID,
+			Team:    member.Team,
+			Name:    member.Name,
+			IsBot:   botSteamID != 0 && member.SteamID == botSteamID,
+		})
 	}
 	handler.membersMutex.Unlock()
 
 	handler.pollingMutex.Lock()
 	pollingActive := handler.pollingActive
 	pollingDone := handler.pollingDone
+	pollCallbackSent := handler.pollCallbackSent
+	pollThreshold := handler.pollThreshold
+	playersPresent := handler.playersPresent
 	handler.pollingMutex.Unlock()
 
+	handler.lobbyChatMutex.Lock()
+	chatJoined := handler.lobbyChatChannelID != 0
+	handler.lobbyChatMutex.Unlock()
+
 	status := GameStatus{
-		GameID:        handler.gameID,
-		State:         handler.getState(),
-		LobbyID:       handler.currentLobbyID,
-		GameMode:      handler.gameConfig.GameMode,
-		ServerRegion:  handler.gameConfig.ServerRegion,
-		AllowCheats:   handler.gameConfig.AllowCheats,
-		RadiantCount:  radiantCount,
-		DireCount:     direCount,
-		RadiantTeam:   handler.gameConfig.RadiantTeam,
-		DireTeam:      handler.gameConfig.DireTeam,
-		PollingActive: pollingActive,
-		PollingDone:   pollingDone,
-		PassKey:       handler.gameConfig.PassKey,
+		GameID:           handler.gameID,
+		State:            handler.getState(),
+		LobbyID:          handler.currentLobbyID,
+		GameMode:         handler.gameConfig.GameMode,
+		ServerRegion:     handler.gameConfig.ServerRegion,
+		AllowCheats:      handler.gameConfig.AllowCheats,
+		RadiantCount:     radiantCount,
+		DireCount:        direCount,
+		RadiantTeam:      handler.gameConfig.RadiantTeam,
+		DireTeam:         handler.gameConfig.DireTeam,
+		PollingActive:    pollingActive,
+		PollingDone:      pollingDone,
+		PassKey:          handler.gameConfig.PassKey,
+		Members:          members,
+		PlayersPresent:   playersPresent,
+		PollThreshold:    pollThreshold,
+		PollCallbackSent: pollCallbackSent,
+		GameLaunched:     handler.gameLaunched,
+		TestMode:         handler.gameConfig.TestMode,
+		TestAutoLaunch:   handler.gameConfig.TestAutoLaunch,
+		LobbyChatJoined:  chatJoined,
 	}
 
 	if err := handler.getError(); err != "" {
@@ -916,47 +1001,10 @@ func handlePollOperations(w http.ResponseWriter, r *http.Request) {
 		handler.pollingMutex.Unlock()
 		log.Printf("[Game %s] Polling marked as active", gameID)
 
-		// Send chat notification
-		// Join lobby channel first, then send message (like DotaTalker.py does)
+		// Send chat notification (sendLobbyChat joins the lobby channel if needed)
 		go func() {
-			time.Sleep(1 * time.Second) // Reduced wait - give lobby a moment to be ready
-			if handler.dota != nil && handler.currentLobbyID != 0 {
-				// Join the lobby chat channel first (required before sending messages)
-				channelName := fmt.Sprintf("Lobby_%d", handler.currentLobbyID)
-				channelType := protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby
-
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-
-				joinResp, err := handler.dota.JoinChatChannel(ctx, channelName, channelType, false)
-				if err != nil {
-					log.Printf("[Game %s] Failed to join lobby channel: %v", gameID, err)
-					// Try sending anyway - might work without joining
-					handler.dota.SendChannelMessage(handler.currentLobbyID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
-					log.Printf("[Game %s] Sent polling start message to lobby (without channel join)", gameID)
-					return
-				}
-
-				if joinResp != nil && joinResp.GetResult() == protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
-					// Use the channel ID from the join response
-					channelID := joinResp.GetChannelId()
-					if channelID != 0 {
-						handler.dota.SendChannelMessage(channelID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
-						log.Printf("[Game %s] Sent polling start message to lobby channel (channelID=%d)", gameID, channelID)
-					} else {
-						// Fallback to using lobby ID
-						handler.dota.SendChannelMessage(handler.currentLobbyID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
-						log.Printf("[Game %s] Sent polling start message to lobby (using lobbyID as fallback)", gameID)
-					}
-				} else {
-					log.Printf("[Game %s] Failed to join lobby channel: result=%v", gameID, joinResp.GetResult())
-					// Try sending anyway
-					handler.dota.SendChannelMessage(handler.currentLobbyID, "Game Polling has Started! Check #match-listings on Discord to Vote!!")
-					log.Printf("[Game %s] Sent polling start message to lobby (join failed but sent anyway)", gameID)
-				}
-			} else {
-				log.Printf("[Game %s] Could not send polling message - dota=%v, lobbyID=%d", gameID, handler.dota != nil, handler.currentLobbyID)
-			}
+			time.Sleep(1 * time.Second) // give the lobby a moment to be ready
+			handler.sendLobbyChat("Game Polling has Started! Check #match-listings on Discord to Vote!!")
 		}()
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1328,11 +1376,13 @@ func handleSendChatMessage(w http.ResponseWriter, r *http.Request, handler *gcHa
 		return
 	}
 
-	// Send message to lobby chat
-	// Lobby channel ID is typically the lobby ID
-	handler.dota.SendChannelMessage(handler.currentLobbyID, req.Message)
-
-	log.Printf("[Game %s] Sent chat message: %s", gameID, req.Message)
+	// Send message to lobby chat (joins the lobby chat channel first if we aren't in it yet;
+	// the lobby chat channel id is NOT the lobby id, so sending to the lobby id silently
+	// dropped messages).
+	if !handler.sendLobbyChat(req.Message) {
+		http.Error(w, "Failed to join lobby chat channel", http.StatusServiceUnavailable)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
@@ -1425,6 +1475,18 @@ func handleListGames(w http.ResponseWriter, r *http.Request) {
 }
 
 // notifyPollingStarted notifies Master_Bot that polling should be triggered
+// callbackHTTPClient is used for every callback into Master_Bot. The default http.Client has
+// no timeout, so a stuck callback used to hang the goroutine (and the poll trigger) forever.
+var callbackHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
+// Poll-trigger retry policy: if Master_Bot never confirms the poll (via POST /poll/{id}
+// action=start) within pollRetryAfter of the callback, the callback is sent again, up to
+// pollMaxRetries times. Master_Bot de-duplicates in-flight triggers on its side.
+const (
+	pollRetryAfter = 45 * time.Second
+	pollMaxRetries = 5
+)
+
 func (h *gcHandler) notifyPollingStarted() {
 	if h.pollCallbackURL == "" {
 		return
@@ -1441,16 +1503,307 @@ func (h *gcHandler) notifyPollingStarted() {
 		return
 	}
 
-	resp, err := http.Post(h.pollCallbackURL, "application/json", bytes.NewBuffer(jsonData))
+	resp, err := callbackHTTPClient.Post(h.pollCallbackURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("[Game %s] Failed to notify polling start: %v", h.gameID, err)
+		log.Printf("[Game %s] Failed to notify polling start (will retry on next lobby update): %v", h.gameID, err)
+		h.pollingMutex.Lock()
+		h.pollCallbackSent = false // let evaluatePollTrigger fire again immediately
+		h.pollingMutex.Unlock()
 		return
 	}
 	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		log.Printf("[Game %s] Polling notification returned status: %d", h.gameID, resp.StatusCode)
+		log.Printf("[Game %s] Polling notification returned status %d (body: %s) — will retry", h.gameID, resp.StatusCode, string(body))
+		h.pollingMutex.Lock()
+		h.pollCallbackSent = false
+		h.pollingMutex.Unlock()
+		return
 	}
+	log.Printf("[Game %s] Poll trigger delivered to Master_Bot", h.gameID)
+}
+
+// pollTriggerThreshold returns how many of the configured players must be present in the
+// lobby before the game-mode poll is auto-triggered.
+//   - normal:  all but 3 of the configured players (7 of 10), minimum 1
+//   - debug:   2 players (or fewer if the game is smaller)
+//   - test:    every configured player (so a single tester triggers it alone)
+func (h *gcHandler) pollTriggerThreshold() int {
+	total := len(h.gameConfig.RadiantTeam) + len(h.gameConfig.DireTeam)
+	if total <= 0 {
+		return 1
+	}
+	if h.gameConfig.TestMode {
+		return total
+	}
+	if h.gameConfig.DebugMode && total < 10 {
+		if total < 2 {
+			return total
+		}
+		return 2
+	}
+	threshold := total - 3
+	if threshold < 1 {
+		threshold = 1
+	}
+	return threshold
+}
+
+// evaluatePollTrigger decides whether to (re)send the "start poll" callback to Master_Bot.
+// presentPlayers is the number of configured players currently in the lobby and lobbyState
+// the raw CSODOTALobby state (0 = UI). Safe to call from any goroutine.
+func (h *gcHandler) evaluatePollTrigger(presentPlayers int, lobbyState uint32) {
+	if h.gameConfig == nil || h.gameLaunched || h.gameInProgress {
+		return
+	}
+	threshold := h.pollTriggerThreshold()
+
+	h.pollingMutex.Lock()
+	h.pollThreshold = threshold
+	h.playersPresent = presentPlayers
+	if h.pollingDone || h.pollingActive || h.pollCallbackURL == "" || lobbyState != 0 || presentPlayers < threshold {
+		h.pollingMutex.Unlock()
+		return
+	}
+	if h.pollCallbackSent {
+		// Already asked Master_Bot. If it never confirmed the poll, ask again.
+		if time.Since(h.pollCallbackSentAt) < pollRetryAfter || h.pollCallbackRetries >= pollMaxRetries {
+			h.pollingMutex.Unlock()
+			return
+		}
+		h.pollCallbackRetries++
+		h.pollCallbackSentAt = time.Now()
+		retries := h.pollCallbackRetries
+		h.pollingMutex.Unlock()
+		log.Printf("[Game %s] Poll never became active after trigger — re-sending poll callback (retry %d/%d)",
+			h.gameID, retries, pollMaxRetries)
+		go h.notifyPollingStarted()
+		return
+	}
+	h.pollCallbackSent = true
+	h.pollCallbackSentAt = time.Now()
+	h.pollingMutex.Unlock()
+
+	log.Printf("[Game %s] %d/%d configured players in lobby (threshold=%d, debug=%v, test=%v) — triggering game mode poll",
+		h.gameID, presentPlayers, len(h.gameConfig.RadiantTeam)+len(h.gameConfig.DireTeam), threshold,
+		h.gameConfig.DebugMode, h.gameConfig.TestMode)
+	go h.notifyPollingStarted()
+}
+
+// countPresentPlayers counts configured players currently tracked in the lobby.
+func (h *gcHandler) countPresentPlayers() int {
+	expected := make(map[uint64]bool, len(h.gameConfig.RadiantTeam)+len(h.gameConfig.DireTeam))
+	for _, sid := range h.gameConfig.RadiantTeam {
+		expected[sid] = true
+	}
+	for _, sid := range h.gameConfig.DireTeam {
+		expected[sid] = true
+	}
+	h.membersMutex.Lock()
+	defer h.membersMutex.Unlock()
+	n := 0
+	for sid := range h.lobbyMembers {
+		if expected[sid] {
+			n++
+		}
+	}
+	return n
+}
+
+// startLobbyWatch runs a watchdog for the life of the lobby. Lobby updates only arrive when
+// something changes in the lobby, so a poll callback that failed (or a lobby update dropped
+// by the cache event buffer) would otherwise never be re-evaluated. Every 5s it re-checks the
+// poll trigger and the seating/launch condition from the last known member list.
+func (h *gcHandler) startLobbyWatch() {
+	h.lobbyWatchMutex.Lock()
+	if h.lobbyWatchRunning {
+		h.lobbyWatchMutex.Unlock()
+		return
+	}
+	h.lobbyWatchRunning = true
+	h.lobbyWatchMutex.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		log.Printf("[Game %s] Lobby watchdog started", h.gameID)
+		for {
+			select {
+			case <-h.ctx.Done():
+				h.lobbyWatchMutex.Lock()
+				h.lobbyWatchRunning = false
+				h.lobbyWatchMutex.Unlock()
+				return
+			case <-ticker.C:
+				if h.currentLobbyID == 0 || h.gameLaunched || h.gameInProgress {
+					continue
+				}
+				h.evaluatePollTrigger(h.countPresentPlayers(), h.lastKnownState)
+				h.checkTeamAssignmentsAndLaunch()
+			}
+		}
+	}()
+}
+
+// joinLobbyChat joins the current lobby's chat channel (idempotent) and returns the channel
+// id, or 0 on failure. Being joined is required both to post messages and to receive the
+// ChatMessage events that drive the "!abandon" command.
+func (h *gcHandler) joinLobbyChat() uint64 {
+	if h.dota == nil || h.currentLobbyID == 0 {
+		return 0
+	}
+	h.lobbyChatMutex.Lock()
+	defer h.lobbyChatMutex.Unlock()
+	if h.lobbyChatChannelID != 0 {
+		return h.lobbyChatChannelID
+	}
+
+	channelName := fmt.Sprintf("Lobby_%d", h.currentLobbyID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	joinResp, err := h.dota.JoinChatChannel(ctx, channelName, protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby, false)
+	if err != nil {
+		log.Printf("[Game %s] Failed to join lobby chat channel %s: %v", h.gameID, channelName, err)
+		return 0
+	}
+	if joinResp == nil || joinResp.GetResult() != protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS || joinResp.GetChannelId() == 0 {
+		log.Printf("[Game %s] Lobby chat join rejected: result=%v", h.gameID, joinResp.GetResult())
+		return 0
+	}
+	h.lobbyChatChannelID = joinResp.GetChannelId()
+	log.Printf("[Game %s] Joined lobby chat channel %s (channelID=%d)", h.gameID, channelName, h.lobbyChatChannelID)
+	return h.lobbyChatChannelID
+}
+
+// resetLobbyChat forgets the joined chat channel (call when the lobby changes or is destroyed).
+func (h *gcHandler) resetLobbyChat() {
+	h.lobbyChatMutex.Lock()
+	h.lobbyChatChannelID = 0
+	h.lobbyChatMutex.Unlock()
+}
+
+// sendLobbyChat posts a message to the lobby chat, joining the channel first if necessary.
+// Returns false if the message could not be sent.
+func (h *gcHandler) sendLobbyChat(message string) bool {
+	if h.dota == nil || h.currentLobbyID == 0 {
+		log.Printf("[Game %s] Cannot send lobby chat (dota=%v, lobbyID=%d): %s", h.gameID, h.dota != nil, h.currentLobbyID, message)
+		return false
+	}
+	channelID := h.joinLobbyChat()
+	if channelID == 0 {
+		// Last resort — behaves like the old code path, which sometimes worked.
+		h.dota.SendChannelMessage(h.currentLobbyID, message)
+		log.Printf("[Game %s] Sent lobby chat via lobby id fallback (chat join failed): %s", h.gameID, message)
+		return false
+	}
+	h.dota.SendChannelMessage(channelID, message)
+	log.Printf("[Game %s] Sent lobby chat: %s", h.gameID, message)
+	return true
+}
+
+// handleChatMessage processes a chat message observed by the bot account. Only messages in
+// this game's lobby channel are considered. Supported commands:
+//
+//	!abandon  — the sender leaves the game; Master_Bot starts the 5-minute replacement window
+func (h *gcHandler) handleChatMessage(msg *devents.ChatMessage) {
+	if msg == nil {
+		return
+	}
+	h.lobbyChatMutex.Lock()
+	channelID := h.lobbyChatChannelID
+	h.lobbyChatMutex.Unlock()
+	if channelID == 0 || msg.GetChannelId() != channelID {
+		return
+	}
+
+	text := strings.TrimSpace(msg.GetText())
+	if text == "" || !strings.HasPrefix(text, "!") {
+		return
+	}
+	accountID := msg.GetAccountId()
+	if accountID == 0 {
+		return
+	}
+	steamID64 := steamid.NewIdAdv(accountID, 1, int32(steamlang.EUniverse_Public), steamlang.EAccountType_Individual).ToUint64()
+	if h.client != nil && steamID64 == h.client.SteamId().ToUint64() {
+		return // our own message
+	}
+	persona := msg.GetPersonaName()
+	log.Printf("[Game %s] Lobby chat command from %s (%d): %s", h.gameID, persona, steamID64, text)
+
+	switch strings.ToLower(strings.Fields(text)[0]) {
+	case "!abandon":
+		inGame := false
+		for _, sid := range h.gameConfig.RadiantTeam {
+			if sid == steamID64 {
+				inGame = true
+			}
+		}
+		for _, sid := range h.gameConfig.DireTeam {
+			if sid == steamID64 {
+				inGame = true
+			}
+		}
+		if !inGame {
+			h.sendLobbyChat(fmt.Sprintf("%s: only players in this game can use !abandon.", persona))
+			return
+		}
+		if h.gameLaunched || h.gameInProgress {
+			h.sendLobbyChat(fmt.Sprintf("%s: the game has already launched — !abandon only works while in the lobby.", persona))
+			return
+		}
+		go h.notifyPlayerAbandon(steamID64, persona)
+	case "!status":
+		h.sendLobbyChat(fmt.Sprintf("%s | state=%s | players in lobby: %d/%d | poll: active=%v done=%v",
+			h.gameConfig.GameName, h.getState(), h.countPresentPlayers(),
+			len(h.gameConfig.RadiantTeam)+len(h.gameConfig.DireTeam), h.pollingActive, h.pollingDone))
+	}
+}
+
+// notifyPlayerAbandon tells Master_Bot that a player abandoned from lobby chat. Master_Bot owns
+// the abandon logic (Discord announcement, 5-minute countdown, cancellation) and posts the
+// confirmation into lobby chat itself via POST /game/{id}/chat. If Master_Bot rejects the
+// request, its message is relayed to the player in lobby chat.
+func (h *gcHandler) notifyPlayerAbandon(steamID uint64, persona string) {
+	if h.abandonURL == "" {
+		log.Printf("[Game %s] !abandon from %d ignored — no abandon_url configured for this game", h.gameID, steamID)
+		h.sendLobbyChat("Abandon is not available for this lobby. Use /abandon on Discord instead.")
+		return
+	}
+	reqBody := map[string]interface{}{
+		"game_id":      h.gameID,
+		"steam_id":     steamID,
+		"persona_name": persona,
+		"source":       "lobby_chat",
+	}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		log.Printf("[Game %s] Failed to marshal abandon notification: %v", h.gameID, err)
+		return
+	}
+	resp, err := callbackHTTPClient.Post(h.abandonURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("[Game %s] Failed to notify abandon: %v", h.gameID, err)
+		h.sendLobbyChat("Could not reach the Gargamel Coordinator to process !abandon — try /abandon on Discord.")
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var parsed struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(body, &parsed)
+	if resp.StatusCode != http.StatusOK || parsed.Status != "ok" {
+		log.Printf("[Game %s] Abandon rejected by Master_Bot (status %d): %s", h.gameID, resp.StatusCode, string(body))
+		if parsed.Message != "" {
+			h.sendLobbyChat(fmt.Sprintf("%s: %s", persona, parsed.Message))
+		}
+		return
+	}
+	log.Printf("[Game %s] Abandon by %s (%d) accepted by Master_Bot", h.gameID, persona, steamID)
 }
 
 // notifyLobbyReady notifies Master_Bot that the lobby has been established
@@ -1680,6 +2033,7 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 				h.playersInvitedMutex.Lock()
 				h.playersInvited = make(map[uint64]bool) // Clear invited players for new lobby
 				h.playersInvitedMutex.Unlock()
+				h.resetLobbyChat()
 			}
 
 			h.currentLobbyID = lobbyID
@@ -1716,6 +2070,11 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 						// Notify Master_Bot that lobby is ready AFTER invites are sent
 						// This triggers Discord channel creation and player moves
 						h.notifyLobbyReady()
+
+						// Stay in the lobby chat so we can post messages and hear "!abandon",
+						// and start the watchdog that re-checks the poll trigger / seating.
+						h.joinLobbyChat()
+						h.startLobbyWatch()
 					}()
 				}
 			}
@@ -1822,47 +2181,33 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 	memberCount := len(members)
 
 	if memberCount != h.lastKnownMemberCount {
+		log.Printf("[Game %s] Lobby member count changed: %d -> %d", h.gameID, h.lastKnownMemberCount, memberCount)
 		h.lastKnownMemberCount = memberCount
-	}
-
-	// Auto-trigger polling when enough human players join.
-	// Normal mode: 7 players + bot = 8 total members
-	// Debug mode: 2 human players + bot = 3 total members (lower threshold for testing)
-	// NOTE: This check runs on every lobby update (not just count changes) because
-	// the lobby state may not be 0 (UI) at the exact moment the player count threshold
-	// is reached — if it were gated on count changes, the trigger could be permanently missed.
-	totalExpectedPlayers := len(h.gameConfig.RadiantTeam) + len(h.gameConfig.DireTeam)
-	autoPollSize := 8
-	if h.gameConfig.DebugMode && totalExpectedPlayers < 10 {
-		autoPollSize = 3 // 2 human players + bot
-	}
-
-	if memberCount >= autoPollSize && state == 0 { // UI state
-		h.pollingMutex.Lock()
-		if !h.pollingDone && !h.pollCallbackSent && h.pollCallbackURL != "" {
-			h.pollCallbackSent = true
-			h.pollingMutex.Unlock()
-
-			// Notify Master_Bot to start polling.
-			// pollingActive will be set when Master_Bot confirms via /poll/{id} with action "start".
-			go h.notifyPollingStarted()
-			log.Printf("[Game %s] Lobby has %d members (threshold=%d, debug=%v) — triggering game mode poll",
-				h.gameID, memberCount, autoPollSize, h.gameConfig.DebugMode)
-		} else {
-			h.pollingMutex.Unlock()
-		}
 	}
 
 	if memberCount == 0 {
 		return
 	}
 
-	h.membersMutex.Lock()
 	var botSteamID uint64
 	if h.client != nil {
 		botSteamID = h.client.SteamId().ToUint64()
 	}
 
+	expectedPlayers := make(map[uint64]bool, len(h.gameConfig.RadiantTeam)+len(h.gameConfig.DireTeam))
+	for _, sid := range h.gameConfig.RadiantTeam {
+		expectedPlayers[sid] = true
+	}
+	for _, sid := range h.gameConfig.DireTeam {
+		expectedPlayers[sid] = true
+	}
+
+	// Rebuild the member map from this snapshot. The old code only ever ADDED members, so a
+	// player who left the lobby stayed "seated" forever — the seating check could pass and
+	// launch with a player missing, and GET /game/{id} reported stale counts.
+	presentPlayers := 0
+	h.membersMutex.Lock()
+	fresh := make(map[uint64]*LobbyMember, memberCount)
 	for _, member := range members {
 		steamID := member.GetId()
 		if steamID == 0 {
@@ -1870,12 +2215,18 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 		}
 
 		team := int32(member.GetTeam())
-		lobbyMember := &LobbyMember{
+		name := ""
+		if old, ok := h.lobbyMembers[steamID]; ok {
+			name = old.Name // keep the persona name learned from PersonaStateEvent
+		}
+		fresh[steamID] = &LobbyMember{
 			SteamID: steamID,
 			Team:    team,
-			Name:    "",
+			Name:    name,
 		}
-		h.lobbyMembers[steamID] = lobbyMember
+		if expectedPlayers[steamID] {
+			presentPlayers++
+		}
 
 		if botSteamID != 0 && steamID == botSteamID {
 			if team == DOTA_GC_TEAM_GOOD_GUYS || team == DOTA_GC_TEAM_BAD_GUYS {
@@ -1887,7 +2238,14 @@ func (h *gcHandler) parseCSODOTALobbyFromObjectData(objectData []byte, isNewLobb
 			}
 		}
 	}
+	h.lobbyMembers = fresh
 	h.membersMutex.Unlock()
+
+	// Auto-trigger the game mode poll once enough of the configured players are in the lobby
+	// (see pollTriggerThreshold). Counting only configured players — instead of raw lobby
+	// members — means spectators/randoms can neither trigger the poll early nor be relied on
+	// to reach the threshold. The callback is retried if the poll never becomes active.
+	h.evaluatePollTrigger(presentPlayers, stateValue)
 
 	if !h.botMovedToUnassigned && lobbyID != 0 && h.client != nil {
 		go func() {
@@ -2044,26 +2402,7 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 		h.pollingMutex.Unlock()
 
 		if !pollEndedMsgSent && h.dota != nil && h.currentLobbyID != 0 {
-			go func() {
-				channelName := fmt.Sprintf("Lobby_%d", h.currentLobbyID)
-				channelType := protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby
-
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-
-				joinResp, err := h.dota.JoinChatChannel(ctx, channelName, channelType, false)
-				if err == nil && joinResp != nil && joinResp.GetResult() == protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
-					channelID := joinResp.GetChannelId()
-					if channelID != 0 {
-						h.dota.SendChannelMessage(channelID, "Game polling finished, but not all players are seated. Game will launch once all players are on their assigned teams.")
-					} else {
-						h.dota.SendChannelMessage(h.currentLobbyID, "Game polling finished, but not all players are seated. Game will launch once all players are on their assigned teams.")
-					}
-				} else {
-					h.dota.SendChannelMessage(h.currentLobbyID, "Game polling finished, but not all players are seated. Game will launch once all players are on their assigned teams.")
-				}
-			}()
-			log.Printf("[Game %s] Sent poll-ended-not-seated message to lobby", h.gameID)
+			go h.sendLobbyChat("Game polling finished, but not all players are seated. Game will launch once all players are on their assigned teams.")
 		}
 	}
 
@@ -2085,28 +2424,32 @@ func (h *gcHandler) processTeamAssignments(lobby *protocol.CMsgPracticeLobbySetD
 
 				log.Printf("[Game %s] All players ready but polling is active — delaying launch", h.gameID)
 				if h.dota != nil && h.currentLobbyID != 0 {
-					go func() {
-						channelName := fmt.Sprintf("Lobby_%d", h.currentLobbyID)
-						channelType := protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby
-
-						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-						defer cancel()
-
-						joinResp, err := h.dota.JoinChatChannel(ctx, channelName, channelType, false)
-						if err == nil && joinResp != nil && joinResp.GetResult() == protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
-							channelID := joinResp.GetChannelId()
-							if channelID != 0 {
-								h.dota.SendChannelMessage(channelID, "All players are ready but game mode poll is still active.  Will start game upon completion.")
-							} else {
-								h.dota.SendChannelMessage(h.currentLobbyID, "All players are ready but game mode poll is still active.  Will start game upon completion.")
-							}
-						} else {
-							h.dota.SendChannelMessage(h.currentLobbyID, "All players are ready but game mode poll is still active.  Will start game upon completion.")
-						}
-					}()
+					go h.sendLobbyChat("All players are ready but game mode poll is still active.  Will start game upon completion.")
 				}
 			}
 			return // Don't launch yet — poll still running
+		}
+
+		if h.gameConfig.TestMode {
+			// Test harness: one side may be empty, and the launch is suppressed unless the
+			// tester explicitly asked for it. Announce once so the tester sees the seating
+			// check passed.
+			if expectedRadiantCount+expectedDireCount == 0 {
+				return
+			}
+			if !h.gameConfig.TestAutoLaunch {
+				if !h.testLaunchNoticeSent {
+					h.testLaunchNoticeSent = true
+					log.Printf("[Game %s] TEST MODE: all players seated (%d Radiant, %d Dire) — launch suppressed (test_auto_launch=false)",
+						h.gameID, expectedRadiantCount, expectedDireCount)
+					go h.sendLobbyChat("TEST MODE: all players are seated and the game would launch now. Launch is suppressed (test_auto_launch=false).")
+				}
+				return
+			}
+			log.Printf("[Game %s] TEST MODE: all players seated (%d Radiant, %d Dire) - launching (test_auto_launch=true)",
+				h.gameID, expectedRadiantCount, expectedDireCount)
+			h.launchGame()
+			return
 		}
 
 		// Launch when all expected players are seated (works for any team size)
@@ -2247,7 +2590,7 @@ func (h *gcHandler) sendInvitesToPlayers() {
 		if h.client != nil {
 			// Add as friend and send message (in background, don't block)
 			go func(sid steamid.SteamId, sid64 uint64) {
-				message := fmt.Sprintf("Invited to 'Gargamel League Game %s'. Password: %s", h.gameID, passKey)
+				message := fmt.Sprintf("Invited to '%s'. Password: %s", h.gameConfig.GameName, passKey)
 
 				// Add as friend first (idempotent - safe to call even if already a friend)
 				// This ensures they're added if they weren't already, and won't cause issues if they were
@@ -2665,13 +3008,14 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 												handler.invitesMutex.Lock()
 												handler.invitesSent = false
 												handler.invitesMutex.Unlock()
+												handler.resetLobbyChat()
 											}
 											continue
 										}
 
 										// Filter: Only process lobbies that match this game's name
 										// This prevents processing old lobbies from previous games
-										expectedGameName := fmt.Sprintf("Gargamel League Game %s", config.GameID)
+										expectedGameName := config.GameName
 										lobbyGameName := lobby.GetGameName()
 										if lobbyGameName != expectedGameName {
 											log.Printf("[Game %s] Ignoring lobby %d - game name mismatch: expected '%s', got '%s'",
@@ -2766,6 +3110,12 @@ func createDotaLobby(ctx context.Context, handler *gcHandler, config *GameConfig
 				case *devents.GCConnectionStatusChanged:
 					if handler != nil {
 						handler.handleConnectionStatusChange(e)
+					}
+
+				case *devents.ChatMessage:
+					// Lobby chat commands (e.g. "!abandon") — only messages in our lobby channel are used
+					if handler != nil {
+						handler.handleChatMessage(e)
 					}
 
 				case *devents.ClientWelcomed:
@@ -2900,6 +3250,7 @@ func (h *gcHandler) handleConnectionStatusChange(event *devents.GCConnectionStat
 		h.currentLobbyID = 0
 		h.botMovedToUnassigned = false
 		h.gameLaunched = false
+		h.resetLobbyChat()
 
 		// Start GC keepalive when session is established
 		h.startGCKeepalive()

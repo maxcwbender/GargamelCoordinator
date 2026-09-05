@@ -13,6 +13,7 @@ import random
 import signal
 import csv
 import re
+import time
 from pathlib import Path
 import aiohttp
 from urllib.parse import urljoin
@@ -81,14 +82,22 @@ class RESTAPIClient:
         debug_steam_id: int = 0,
         lobby_ready_url: str = "",
         game_started_url: str = "",
+        abandon_url: str = "",
+        test_mode: bool = False,
+        test_auto_launch: bool = False,
     ) -> str:
         """
         Create a new game via REST API.
         Returns the lobby password on success, "-1" on failure.
+
+        abandon_url: callback the lobbymanager POSTs to when a player types !abandon in lobby chat.
+        test_mode: solo test-harness lobby (poll fires when every configured player is present,
+                   one side may be empty, league id forced to 0, launch suppressed unless
+                   test_auto_launch).
         """
         if game_name == "":
             game_name = f"Gargamel League Game {game_id}"
-        
+
         payload = {
             "game_id": str(game_id),
             "username": username,
@@ -99,13 +108,17 @@ class RESTAPIClient:
             "poll_callback_url": poll_callback_url,
             "lobby_ready_url": lobby_ready_url,
             "game_started_url": game_started_url,
+            "abandon_url": abandon_url,
             "server_region": server_region,
             "game_mode": game_mode,
             "allow_cheats": allow_cheats,
             "game_name": game_name,
             "pass_key": pass_key,
         }
-        
+        if test_mode:
+            payload["test_mode"] = True
+            payload["test_auto_launch"] = bool(test_auto_launch)
+
         if debug_steam_id != 0:
             payload["debug_steam_id"] = debug_steam_id
         
@@ -370,6 +383,18 @@ class Master_Bot(commands.Bot):
         self.ready_check_lock = asyncio.Lock()
         self.ready_check_status = False
 
+        # Poll triggers currently being processed (the lobbymanager re-sends the trigger if the
+        # poll never becomes active, so duplicates must be ignored while one is in flight).
+        self._poll_triggers_inflight: set[int] = set()
+        # game_id -> unix time until which the queue card shows "a game is starting shortly"
+        self.launching_games: dict[int, float] = {}
+        # Abandon countdowns: game_id -> {"players": set[discord_id], "deadline": float, "task": Task}
+        self.abandon_state: dict[int, dict] = {}
+        self.abandon_timeout = int(self.config.get("ABANDON_TIMEOUT_SECONDS", 300))
+        # Games created by /test_lobby (solo lobby test harness): no ratings / match rows are written.
+        self.test_games: set[int] = set()
+        self._test_game_seq = 900000
+
         self.deadleague_channel_id = int(self.config.get("GENERAL_CHANNEL_ID", 0))
         self.deadleague_cooldown = int(self.config.get("DEAD_LEAGUE_COOLDOWN", 7200))  # 2 hours default
         self.deadleague_csv_path = self.config.get("DEAD_LEAGUE_CSV_PATH", "dead_league_responses.csv")
@@ -409,8 +434,34 @@ class Master_Bot(commands.Bot):
         async def leave(interaction: discord.Interaction):
             await self.leave_queue(interaction)
 
+        # /abandon — any player may use it, but it only does something for a player who is in
+        # an active game that is still in the lobby (see abandon_game).
+        @app_commands.command(
+            name="abandon",
+            description="Abandon your current game while it is still in the lobby (starts a 5-minute replacement window)",
+        )
+        async def abandon(interaction: discord.Interaction):
+            try:
+                await interaction.response.defer(thinking=True, ephemeral=True)
+            except discord.NotFound:
+                return
+            result = await self.abandon_game(interaction.user.id, source="/abandon")
+            await interaction.followup.send(result["message"], ephemeral=True)
+
+        # "!abandon" typed in Discord chat does the same thing (the Dota lobby chat "!abandon"
+        # arrives through the lobbymanager's /player_abandon callback instead).
+        @commands.command(name="abandon", help="Abandon your current game while it is still in the lobby")
+        async def abandon_prefix(ctx: commands.Context):
+            result = await self.abandon_game(ctx.author.id, source="!abandon")
+            try:
+                await ctx.reply(result["message"], mention_author=False)
+            except discord.HTTPException as e:
+                logger.warning(f"[abandon] Could not reply to !abandon from {ctx.author.id}: {e}")
+
         self.tree.add_command(queue)
         self.tree.add_command(leave)
+        self.tree.add_command(abandon)
+        self.add_command(abandon_prefix)
 
         # Global Sync is slow, TODO: consider conditionally doing this.
         # TODO: Sync is happening on on_ready right now, once we pull them out add it here and remove it from there.
@@ -1268,14 +1319,30 @@ class Master_Bot(commands.Bot):
                 pass
 
     async def trigger_gamemode_poll(self, game_id: int):
-        """Automatically create and start a game mode poll for a lobby."""
+        """
+        Automatically create and start a game mode poll for a lobby.
+
+        The lobbymanager re-sends the trigger if the poll never becomes active, so a
+        trigger that is still being processed (e.g. waiting for the lobby message) must
+        swallow duplicates instead of starting a second poll.
+        """
+        if game_id in self._poll_triggers_inflight:
+            logger.info(f"[Game {game_id}] Poll trigger already in flight — ignoring duplicate callback.")
+            return
+        self._poll_triggers_inflight.add(game_id)
         try:
-            # The lobbymanager fires this callback exactly once, the moment the
-            # lobby fills (7 players + bot). When players are already waiting
-            # from a previous game, that beats setup_discord_for_game() posting
-            # the lobby message (games 595/596 on 2026-07-16). A missing
-            # message here means "not posted yet", not "never" — wait for it
-            # instead of dropping the one-shot trigger.
+            await self._trigger_gamemode_poll(game_id)
+        finally:
+            self._poll_triggers_inflight.discard(game_id)
+
+    async def _trigger_gamemode_poll(self, game_id: int):
+        try:
+            # The lobbymanager fires this callback the moment the lobby fills
+            # (7 players + bot). When players are already waiting from a
+            # previous game, that beats setup_discord_for_game() posting the
+            # lobby message (games 595/596 on 2026-07-16). A missing message
+            # here means "not posted yet", not "never" — wait for it instead of
+            # dropping the trigger.
             message = self.lobby_messages.get(game_id)
             if not message:
                 logger.info(
@@ -1312,6 +1379,9 @@ class Master_Bot(commands.Bot):
                     return
                 if status.get("polling_active", False):
                     logger.info(f"[Game {game_id}] Poll already active, skipping duplicate trigger.")
+                    return
+                if status.get("game_launched") or status.get("state") in self.LAUNCHED_STATES:
+                    logger.info(f"[Game {game_id}] Game already launched (state={status.get('state')}), not starting a poll.")
                     return
 
             # Note: start_polling is called inside view.start_poll() below,
@@ -1498,11 +1568,41 @@ class Master_Bot(commands.Bot):
                 logger.exception(f"Error handling game started callback: {e}")
                 return web.json_response({"error": str(e)}, status=500)
         
+        async def handle_player_abandon(request):
+            """
+            Handle "!abandon" typed in the Dota lobby chat (relayed by the lobbymanager).
+            Responds with {"status": "ok"|"rejected", "message": <chat-safe text>}; the
+            lobbymanager posts a rejection message back into lobby chat.
+            """
+            try:
+                data = await request.json()
+                game_id = int(data.get("game_id", 0) or 0)
+                steam_id = int(data.get("steam_id", 0) or 0)
+                persona = data.get("persona_name", "") or ""
+                logger.info(f"[Game {game_id}] Lobby-chat !abandon from steam_id={steam_id} ({persona})")
+
+                discord_id = DB.fetch_one("SELECT discord_id FROM users WHERE steam_id = ?", (steam_id,))
+                if not discord_id:
+                    return web.json_response({
+                        "status": "rejected",
+                        "message": "your Steam account is not linked to a Discord account, so you cannot abandon from here.",
+                    })
+
+                result = await self.abandon_game(int(discord_id), source="lobby chat", game_id_hint=game_id or None)
+                return web.json_response({
+                    "status": "ok" if result["ok"] else "rejected",
+                    "message": result.get("plain") or result["message"],
+                })
+            except Exception as e:
+                logger.exception(f"Error handling player abandon callback: {e}")
+                return web.json_response({"status": "error", "message": str(e)}, status=500)
+
         app = web.Application()
         app.router.add_post("/game_result", handle_game_result)
         app.router.add_post("/poll_callback", handle_poll_callback)
         app.router.add_post("/lobby_ready", handle_lobby_ready)
         app.router.add_post("/game_started", handle_game_started)
+        app.router.add_post("/player_abandon", handle_player_abandon)
         
         runner = web.AppRunner(app)
         await runner.setup()
@@ -1510,6 +1610,347 @@ class Master_Bot(commands.Bot):
         site = web.TCPSite(runner, "127.0.0.1", callback_port)
         await site.start()
         logger.info(f"HTTP callback server started on port {callback_port}")
+
+    # Lobbymanager states in which the game has left the lobby (abandon no longer possible).
+    LAUNCHED_STATES = {"launching", "in_progress", "postgame", "completed"}
+
+    # ------------------------------------------------------------------ #
+    # Queue card: "a game is starting shortly" notice                     #
+    # ------------------------------------------------------------------ #
+
+    def _active_launch_notices(self) -> list[int]:
+        """Game ids whose 'starting shortly' notice is still live (expired ones are dropped)."""
+        now = time.time()
+        for gid in [gid for gid, until in self.launching_games.items() if until <= now]:
+            self.launching_games.pop(gid, None)
+        return sorted(self.launching_games.keys())
+
+    def _note_game_launching(self, game_id: int):
+        """Show 'Game N is starting shortly' on the queue card for LAUNCH_NOTICE_SECONDS (default 120)."""
+        seconds = int(self.config.get("LAUNCH_NOTICE_SECONDS", 120))
+        self.launching_games[game_id] = time.time() + seconds
+        asyncio.create_task(self._expire_launch_notice(game_id, seconds))
+
+    async def _expire_launch_notice(self, game_id: int, seconds: int):
+        try:
+            await asyncio.sleep(seconds + 1)
+            if game_id in self.launching_games and self.launching_games[game_id] <= time.time():
+                self.launching_games.pop(game_id, None)
+                await self.update_queue_status_message()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Failed to expire launch notice: {e}")
+
+    # ------------------------------------------------------------------ #
+    # Match card refresh (shared by swap / replace / abandon)             #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _discord_id_for_steam(steam_id) -> Optional[int]:
+        try:
+            discord_id = DB.fetch_one("SELECT discord_id FROM users WHERE steam_id = ?", (int(steam_id),))
+        except (TypeError, ValueError):
+            return None
+        return int(discord_id) if discord_id else None
+
+    def _teams_for_card(self, game_id: int, status: Optional[dict]) -> tuple[list[int], list[int]]:
+        """
+        Current Radiant/Dire Discord ids for a game. The lobbymanager's team lists are the
+        source of truth; when every Steam id resolves, game_map / game_map_inverse are
+        re-synced from them. Otherwise the local mapping is used.
+        """
+        if status and (status.get("radiant_team") or status.get("dire_team")):
+            radiant_steam = status.get("radiant_team") or []
+            dire_steam = status.get("dire_team") or []
+            radiant = [d for d in (self._discord_id_for_steam(s) for s in radiant_steam) if d]
+            dire = [d for d in (self._discord_id_for_steam(s) for s in dire_steam) if d]
+            if len(radiant) == len(radiant_steam) and len(dire) == len(dire_steam):
+                old_r, old_d = self.game_map_inverse.get(game_id, (set(), set()))
+                for gone in (old_r | old_d) - set(radiant) - set(dire):
+                    if self.game_map.get(gone) == game_id:
+                        self.game_map.pop(gone, None)
+                self.game_map_inverse[game_id] = (set(radiant), set(dire))
+                for d in radiant + dire:
+                    self.game_map[d] = game_id
+                return radiant, dire
+            logger.warning(
+                f"[Game {game_id}] Could not resolve every Steam id in the lobbymanager teams "
+                f"(radiant {len(radiant)}/{len(radiant_steam)}, dire {len(dire)}/{len(dire_steam)}); "
+                f"using local team mapping for the match card."
+            )
+        radiant_set, dire_set = self.game_map_inverse.get(game_id, (set(), set()))
+        return sorted(radiant_set), sorted(dire_set)
+
+    async def refresh_match_card(self, game_id: int, status: Optional[dict] = None) -> bool:
+        """
+        Rebuild the team/rating fields of a game's match card from the current teams while
+        keeping every other field (game mode poll, results, ...) and re-rendering the abandon
+        notice. Returns True if the card was edited.
+        """
+        message = self.lobby_messages.get(game_id)
+        if not message:
+            logger.warning(f"[Game {game_id}] No match card message to refresh.")
+            return False
+
+        if status is None:
+            try:
+                status = await self.rest_api.get_game_status(game_id)
+            except Exception as e:
+                logger.warning(f"[Game {game_id}] Could not fetch game status for match card refresh: {e}")
+                status = None
+
+        radiant, dire = self._teams_for_card(game_id, status)
+
+        old = message.embeds[0] if message.embeds else None
+        password = (status or {}).get("pass_key") or None
+        if not password and old:
+            password = next((f.value for f in old.fields if f.name == "Password"), "N/A")
+
+        embed = self.build_game_embed(game_id, radiant, dire, password or "N/A")
+        if old:
+            for f in old.fields:
+                if f.name == "Password" or f.name.startswith(("🌞", "🌚", "⚠️ Abandoned")):
+                    continue
+                embed.add_field(name=f.name, value=f.value, inline=f.inline)
+
+        state = self.abandon_state.get(game_id)
+        if state and state["players"]:
+            mentions = ", ".join(f"<@{pid}>" for pid in sorted(state["players"]))
+            embed.add_field(
+                name="⚠️ Abandoned — replacement needed",
+                value=(
+                    f"{mentions} abandoned the game.\n"
+                    f"The lobby stays open and the game is cancelled <t:{int(state['deadline'])}:R> "
+                    f"unless a mod runs `/force_replace game_id:{game_id}`."
+                ),
+                inline=False,
+            )
+
+        try:
+            await message.edit(embed=embed)
+        except discord.NotFound:
+            logger.warning(f"[Game {game_id}] Match card message no longer exists.")
+            self.lobby_messages.pop(game_id, None)
+            return False
+        except discord.HTTPException as e:
+            logger.exception(f"[Game {game_id}] Failed to edit match card: {e}")
+            return False
+        logger.info(f"[Game {game_id}] Match card refreshed: Radiant={radiant}, Dire={dire}")
+        return True
+
+    # ------------------------------------------------------------------ #
+    # Abandon: player leaves a game that is still in the lobby            #
+    # ------------------------------------------------------------------ #
+
+    async def abandon_game(self, discord_id: int, source: str = "discord", game_id_hint: Optional[int] = None) -> dict:
+        """
+        A player abandons the game they are currently in, if (and only if) that game is
+        still in the Dota lobby. The player is NOT removed from the team lists — /force_replace
+        needs them there — but a countdown starts: after ABANDON_TIMEOUT_SECONDS (default
+        300) without a replacement the game is cancelled.
+
+        Returns {"ok": bool, "message": <Discord text>, "plain": <lobby-chat-safe text>}.
+        """
+        game_id = self.game_map.get(discord_id)
+        if game_id is None and game_id_hint is not None and game_id_hint in self.game_map_inverse:
+            game_id = game_id_hint
+        if game_id is None:
+            msg = "You're not in an active game, so there is nothing to abandon."
+            return {"ok": False, "message": msg, "plain": msg}
+
+        minutes = max(1, self.abandon_timeout // 60)
+        state = self.abandon_state.get(game_id)
+        if state and discord_id in state["players"]:
+            deadline = int(state["deadline"])
+            return {
+                "ok": False,
+                "message": f"You've already abandoned Game {game_id}. It is cancelled <t:{deadline}:R> unless a mod finds a replacement.",
+                "plain": f"you already abandoned this game. It will be cancelled when the {minutes}-minute replacement window ends.",
+            }
+
+        status = None
+        try:
+            status = await self.rest_api.get_game_status(game_id)
+        except Exception as e:
+            logger.warning(f"[Game {game_id}] Could not fetch status for abandon request: {e}")
+        if status and (status.get("game_launched") or status.get("state") in self.LAUNCHED_STATES):
+            msg = f"Game {game_id} has already launched — abandoning is only possible while the game is still in the lobby."
+            return {"ok": False, "message": msg, "plain": "the game has already launched; abandon only works while still in the lobby."}
+        if game_id not in self.game_map_inverse and not status:
+            msg = f"Game {game_id} could not be found."
+            return {"ok": False, "message": msg, "plain": msg}
+
+        member = self.the_guild.get_member(discord_id) if self.the_guild else None
+        name = member.display_name if member else str(discord_id)
+
+        if state is None:
+            state = {"players": set(), "deadline": time.time() + self.abandon_timeout, "task": None}
+            self.abandon_state[game_id] = state
+            state["task"] = asyncio.create_task(self._abandon_countdown(game_id))
+        state["players"].add(discord_id)
+        deadline = int(state["deadline"])
+        logger.info(f"[Game {game_id}] {name} ({discord_id}) abandoned via {source}; cancellation at {deadline}")
+
+        # Lobby chat (via the lobbymanager)
+        try:
+            await self.rest_api.send_chat_message(
+                game_id,
+                f"{name} has abandoned the game. The lobby will stay open for {minutes} minutes to find a "
+                f"replacement (Discord mods: /force_replace). If nobody replaces them, the game is cancelled.",
+            )
+        except Exception as e:
+            logger.warning(f"[Game {game_id}] Could not post abandon message to lobby chat: {e}")
+
+        # Discord match channel
+        channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+        if channel:
+            try:
+                await channel.send(
+                    f"⚠️ <@{discord_id}> has abandoned **Game {game_id}** (via {source}). "
+                    f"The lobby stays open until <t:{deadline}:t> (<t:{deadline}:R>) for a replacement — "
+                    f"mods: `/force_replace game_id:{game_id} old_member:@{name} new_member:@<sub>`. "
+                    f"Otherwise the game will be cancelled."
+                )
+            except discord.HTTPException as e:
+                logger.warning(f"[Game {game_id}] Could not post abandon notice in match channel: {e}")
+
+        await self.refresh_match_card(game_id, status)
+
+        return {
+            "ok": True,
+            "message": (
+                f"You abandoned Game {game_id}. The lobby stays open <t:{deadline}:R> for a mod to find a "
+                f"replacement with `/force_replace`; otherwise the game is cancelled."
+            ),
+            "plain": f"{name} abandoned. {minutes}-minute replacement window started.",
+        }
+
+    async def _abandon_countdown(self, game_id: int):
+        """Cancel the game when the abandon window closes without a replacement."""
+        try:
+            state = self.abandon_state.get(game_id)
+            if not state:
+                return
+            await asyncio.sleep(max(0.0, state["deadline"] - time.time()))
+            state = self.abandon_state.get(game_id)
+            if not state or not state["players"]:
+                return
+            mentions = ", ".join(f"<@{pid}>" for pid in sorted(state["players"]))
+            minutes = max(1, self.abandon_timeout // 60)
+            logger.info(f"[Game {game_id}] Abandon window expired for {sorted(state['players'])} — cancelling game")
+
+            try:
+                await self.rest_api.send_chat_message(
+                    game_id, f"No replacement was found within {minutes} minutes — the game is cancelled."
+                )
+            except Exception as e:
+                logger.warning(f"[Game {game_id}] Could not post cancellation to lobby chat: {e}")
+
+            channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+            if channel:
+                try:
+                    await channel.send(
+                        f"❌ **Game {game_id} cancelled** — no replacement was found for {mentions} within {minutes} minutes."
+                    )
+                except discord.HTTPException as e:
+                    logger.warning(f"[Game {game_id}] Could not post cancellation notice: {e}")
+
+            await self.cancel_active_game(game_id, reason=f"no replacement found for abandoning player(s) within {minutes} minutes")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Abandon countdown failed: {e}")
+        finally:
+            self.abandon_state.pop(game_id, None)
+
+    async def _abandon_resolved(self, game_id: int, discord_id: int) -> bool:
+        """
+        Called after a successful /force_replace. If the replaced player had abandoned, they
+        are removed from the abandon list; once nobody is left the countdown is cancelled.
+        Returns True when the countdown was stopped.
+        """
+        state = self.abandon_state.get(game_id)
+        if not state or discord_id not in state["players"]:
+            return False
+        state["players"].discard(discord_id)
+        if state["players"]:
+            logger.info(f"[Game {game_id}] {discord_id} replaced; still waiting on {sorted(state['players'])}")
+            return False
+
+        self.abandon_state.pop(game_id, None)
+        task = state.get("task")
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+        logger.info(f"[Game {game_id}] Replacement found — abandon countdown cancelled")
+
+        try:
+            await self.rest_api.send_chat_message(game_id, "A replacement has joined — the cancellation countdown has been stopped.")
+        except Exception as e:
+            logger.warning(f"[Game {game_id}] Could not post replacement notice to lobby chat: {e}")
+        channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+        if channel:
+            try:
+                await channel.send(f"✅ Replacement found for **Game {game_id}** — the cancellation countdown has been stopped.")
+            except discord.HTTPException as e:
+                logger.warning(f"[Game {game_id}] Could not post replacement notice: {e}")
+        return True
+
+    def _cancel_abandon(self, game_id: int, reason: str):
+        """Silently drop any abandon countdown for a game (game launched / cleared)."""
+        state = self.abandon_state.pop(game_id, None)
+        if not state:
+            return
+        task = state.get("task")
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+        logger.info(f"[Game {game_id}] Abandon countdown dropped: {reason}")
+
+    async def cancel_active_game(self, game_id: int, reason: str = "") -> bool:
+        """
+        Cancel an unfinished game: mark the match card, clear Discord state/channels and tear
+        down the Dota lobby. Returns True if the lobbymanager teardown succeeded.
+        """
+        logger.info(f"[Game {game_id}] Cancelling game{(': ' + reason) if reason else ''}")
+
+        message = self.lobby_messages.get(game_id)
+        if message and message.embeds:
+            try:
+                embed = message.embeds[0]
+                embed.add_field(name="❌ Game cancelled", value=reason or "Cancelled by a moderator.", inline=False)
+                await message.edit(embed=embed, view=None)
+            except discord.HTTPException as e:
+                logger.warning(f"[Game {game_id}] Could not mark match card as cancelled: {e}")
+
+        try:
+            await self.clear_game(game_id)
+        except Exception:
+            logger.exception(f"[Game {game_id}] Failed to clear internal game state")
+
+        success = False
+        try:
+            success = await self.rest_api.delete_game(game_id)
+            if not success:
+                logger.warning(f"[Game {game_id}] Lobby teardown returned False")
+                channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+                if channel:
+                    await channel.send(f"Game {game_id} teardown may have failed. Please verify manually.")
+            else:
+                logger.info(f"[Game {game_id}] Torn down Dota client for cancelled game")
+        except Exception as e:
+            logger.exception(f"[Game {game_id}] Failed to tear down Dota client: {e}")
+            channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
+            if channel:
+                await channel.send(f"Error while tearing down Game {game_id}: {e}")
+
+        self.test_games.discard(game_id)
+        self.pending_matches.discard(game_id)
+        return success
+
+    def _next_test_game_id(self) -> int:
+        """Test lobbies use a separate id range (900001+) so they never consume real game ids."""
+        self._test_game_seq += 1
+        return self._test_game_seq
 
     def build_game_embed(self, game_id: int, radiant_ids: list[int], dire_ids: list[int], password: str = None) -> discord.Embed:
         """
@@ -1527,8 +1968,9 @@ class Master_Bot(commands.Bot):
         radiant_ratings = [DB.fetch_rating(pid) for pid in radiant_ids]
         dire_ratings = [DB.fetch_rating(pid) for pid in dire_ids]
 
-        r_radiant = DB.power_mean(radiant_ratings, 5)
-        r_dire = DB.power_mean(dire_ratings, 5)
+        # A side can be empty (solo test lobbies) — power_mean divides by the team size.
+        r_radiant = DB.power_mean(radiant_ratings, 5) if radiant_ratings else 0
+        r_dire = DB.power_mean(dire_ratings, 5) if dire_ratings else 0
 
         embed = discord.Embed(
             title=f"<:dota2:1389234828003770458> Gargamel League Game {game_id} <:dota2:1389234828003770458>",
@@ -1576,8 +2018,13 @@ class Master_Bot(commands.Bot):
             title="🎮 Gargamel League Queue 🎮", color=discord.Color.dark_gold()
         )
 
+        launching = self._active_launch_notices()
+
         if not full_queue:
-            embed.description = "*No Players are currently queueing.*"
+            if launching:
+                embed.description = "*No other players are currently queueing.*"
+            else:
+                embed.description = "*No Players are currently queueing.*"
 
         else:
             player_lines = "\n".join(
@@ -1614,6 +2061,23 @@ class Master_Bot(commands.Bot):
                     value=f"\n@here Enough players! Game will start in **1 minute** ⏳",
                     inline=False,
                 )
+
+        # A game was just created from this queue: keep a soft notice on the card for a while so
+        # the players who were pulled out don't just see an empty/shrunken queue box.
+        if launching:
+            if len(launching) == 1:
+                games_text = f"**Game {launching[0]}** is"
+            else:
+                games_text = ", ".join(f"**Game {gid}**" for gid in launching) + " are"
+            embed.add_field(
+                name="\ud83d\ude80 A game is starting shortly!",
+                value=(
+                    f"{games_text} launching. Selected players have been sent a Dota lobby invite "
+                    f"and are being moved into their team voice channels. "
+                    f"Everyone still listed above remains in the queue."
+                ),
+                inline=False,
+            )
 
         # Allowing custom messages to be added to the queue pane after details
         name = "\u200b"
@@ -1793,12 +2257,9 @@ class Master_Bot(commands.Bot):
 
                 await self.make_game(radiant, dire, cut_players)
 
-                # Update queue to indicate a game launched
-                remaining = len(self.coordinator.queue)
-                if remaining < self.config["TEAM_SIZE"] * 2:
-                    await self.update_queue_status_message(
-                        content="A game has launched! Players will be moved into your voice channels shortly."
-                    )
+                # make_game() registers a "game is starting shortly" notice that stays on the
+                # queue card (through every refresh) for a couple of minutes, so no separate
+                # one-shot message is needed here.
 
                 if len(self.coordinator.queue) >= self.config["TEAM_SIZE"] * 2:
                     await self.update_queue_status_message(
@@ -2360,14 +2821,14 @@ class Master_Bot(commands.Bot):
             user2: discord.Member,
         ):
             """
-            Slash command to force-swap two players and update the lobby message.
+            Slash command to force-swap two players and update the match card.
             """
             await interaction.response.defer(thinking=True)
-            
+
             # Get Steam IDs
             steam_id_1 = DB.fetch_steam_id(user1.id)
             steam_id_2 = DB.fetch_steam_id(user2.id)
-            
+
             if not steam_id_1 or not steam_id_2:
                 await interaction.followup.send(
                     f"⚠️ Could not find Steam IDs for one or both players."
@@ -2383,56 +2844,32 @@ class Master_Bot(commands.Bot):
                 )
                 return
 
-            # Swap them in internal mapping
-            if game_id not in self.game_map_inverse:
-                await interaction.followup.send(
-                    f"⚠️ Game {game_id} not found in internal records."
-                )
-                return
-
-            radiant_set, dire_set = self.game_map_inverse[game_id]
+            # Swap them in the internal mapping. Best effort only: the lobbymanager is the
+            # source of truth and refresh_match_card() re-syncs the mapping from it below.
+            radiant_set, dire_set = self.game_map_inverse.get(game_id, (set(), set()))
             if user1.id in radiant_set and user2.id in dire_set:
-                radiant_set.remove(user1.id)
-                dire_set.remove(user2.id)
+                radiant_set.discard(user1.id)
+                dire_set.discard(user2.id)
                 radiant_set.add(user2.id)
                 dire_set.add(user1.id)
             elif user2.id in radiant_set and user1.id in dire_set:
-                radiant_set.remove(user2.id)
-                dire_set.remove(user1.id)
+                radiant_set.discard(user2.id)
+                dire_set.discard(user1.id)
                 radiant_set.add(user1.id)
                 dire_set.add(user2.id)
             else:
-                await interaction.followup.send(
-                    "⚠️ One or both players are not on expected teams internally."
+                logger.warning(
+                    f"[Game {game_id}] Swap applied in lobbymanager but players were not on the expected "
+                    f"teams internally (radiant={radiant_set}, dire={dire_set}); re-syncing from lobbymanager."
                 )
-                return
-
-            # Update player->game_id mapping
+            self.game_map_inverse[game_id] = (radiant_set, dire_set)
             self.game_map[user1.id], self.game_map[user2.id] = game_id, game_id
 
-            # Recalculate ratings
-            radiant = list(radiant_set)
-            dire = list(dire_set)
-            # Edit original lobby message
-            lobby_msg = self.lobby_messages.get(game_id)
-
-            # Get password from game status
-            password = "N/A"
-            try:
-                status = await self.rest_api.get_game_status(game_id)
-                if status:
-                    password = status.get("pass_key", "N/A")
-            except Exception as e:
-                logger.warning(f"[Game {game_id}] Failed to get password from game status: {e}")
-            
-            embed = self.build_game_embed(game_id, radiant, dire, password)
-
-            if lobby_msg:
-                await lobby_msg.edit(embed=embed)
-                logger.info(f"[Game {game_id}] Updated match card embed after swap")
-
+            card_updated = await self.refresh_match_card(game_id)
             await interaction.followup.send(
-                f"✅ Swapped <@{user1.id}> and <@{user2.id}> in game {game_id} and updated lobby message."
+                f"✅ Swapped <@{user1.id}> and <@{user2.id}> in game {game_id}."
+                + (" Match card updated." if card_updated
+                   else " ⚠️ The match card could not be updated (no lobby message found).")
             )
 
         @app_commands.command(
@@ -2465,26 +2902,7 @@ class Master_Bot(commands.Bot):
                     f"No active game with ID {game_id}.", ephemeral=True
                 )
 
-            try:
-                await self.clear_game(game_id)
-            except Exception as e:
-                logger.exception(f"[cancel_game] Failed to clear internal game {game_id}")
-
-            # Tearing down steam/dota client for game
-            try:
-                success = await self.rest_api.delete_game(game_id)
-                if not success:
-                    logger.warning(f"[cancel_game] teardown_lobby() returned False for game {game_id}")
-                    channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-                    if channel:
-                        await channel.send(f"Game {game_id} teardown may have failed. Please verify manually.")
-                else:
-                    logger.info(f"[cancel_game] Torn down Dota client for canceled game {game_id}")
-            except Exception:
-                logger.exception(f"[cancel_game] Failed to teardown Dota client for game {game_id}: {e}")
-                channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-                if channel:
-                    await channel.send(f"Error while tearing down Game {game_id}: {e}")
+            await self.cancel_active_game(game_id, reason=f"Cancelled by {interaction.user.display_name}.")
 
             await interaction.followup.send(
                 f"Game {game_id} has been cancelled. ❌", ephemeral=True
@@ -2508,6 +2926,10 @@ class Master_Bot(commands.Bot):
             """
             Replaces one player with another in an active game.
 
+            The lobbymanager is updated first, then the teams are rebalanced, and finally the
+            match card is rebuilt from the lobbymanager's team lists. If the replaced player
+            had abandoned the game, the cancellation countdown is stopped.
+
             Args:
                 interaction (discord.Interaction): The command context.
                 game_id (int): ID of the game.
@@ -2515,11 +2937,11 @@ class Master_Bot(commands.Bot):
                 new_member (discord.Member): Player to add.
             """
             await interaction.response.defer(thinking=True)
-            
+
             # Get Steam IDs
             old_steam_id = DB.fetch_steam_id(old_member.id)
             new_steam_id = DB.fetch_steam_id(new_member.id)
-            
+
             if not old_steam_id or not new_steam_id:
                 await interaction.followup.send(
                     f"⚠️ Could not find Steam IDs for one or both players.",
@@ -2537,121 +2959,75 @@ class Master_Bot(commands.Bot):
                 )
                 return
 
-            # Update coordinator's in-memory game tracking (simple replace before rebalancing)
+            # Update the in-memory game tracking (simple replace before rebalancing)
             radiant_set, dire_set = self.game_map_inverse.get(game_id, (set(), set()))
-
             if old_member.id in radiant_set:
-                radiant_set.remove(old_member.id)
+                radiant_set.discard(old_member.id)
                 radiant_set.add(new_member.id)
             elif old_member.id in dire_set:
-                dire_set.remove(old_member.id)
+                dire_set.discard(old_member.id)
                 dire_set.add(new_member.id)
-
-            # Update maps to reflect this
+            else:
+                logger.warning(
+                    f"[Game {game_id}] {old_member.id} was not in the internal team mapping; "
+                    f"re-syncing from lobbymanager."
+                )
             self.game_map_inverse[game_id] = (radiant_set, dire_set)
-            self.game_map.pop(old_member.id, None)
+            if self.game_map.get(old_member.id) == game_id:
+                self.game_map.pop(old_member.id, None)
             self.game_map[new_member.id] = game_id
 
-            # Rebalance teams after replace
-            success = await self.coordinator.balance_teams(game_id)
+            # Rebalance teams after the replace. This is best effort: if it fails (e.g. a
+            # test lobby with fewer than TEAM_SIZE*2 players) the replace still stands and
+            # the match card must still be refreshed — the old code bailed out here and left
+            # the card stale.
+            rebalanced = False
+            try:
+                rebalanced = await self.coordinator.balance_teams(game_id)
+            except Exception as e:
+                logger.exception(f"[Game {game_id}] Rebalancing after replace failed: {e}")
+            if not rebalanced:
+                logger.warning(f"[Game {game_id}] Teams were not rebalanced after replace; keeping current teams.")
 
-            if not success:
-                await interaction.followup.send(
-                    f"⚠️ Could not replace <@{old_member.id}> with <@{new_member.id}>. Issue Balancing Teams after replace.",
-                    ephemeral=True,
-                )
-                return
-
-            if game_id not in self.game_map_inverse:
-                return await interaction.followup.send(
-                    f"No active game with ID {game_id}.", ephemeral=True,
-                )
-
-            # After rebalancing, fetch actual team assignments from REST API
-            # This ensures the match card reflects the actual teams in the lobby manager
-            # and that game_map_inverse is synced with REST API state
+            # Fetch the actual team assignments from the lobbymanager so the card and
+            # game_map_inverse reflect what the lobby will enforce.
             status = await self.rest_api.get_game_status(game_id)
-            if status:
-                # Get teams from REST API (Steam IDs)
-                radiant_steam_ids = status.get("radiant_team", [])
-                dire_steam_ids = status.get("dire_team", [])
-                
-                # Convert Steam IDs to Discord IDs
-                radiant_discord_ids = []
-                dire_discord_ids = []
-                
-                for steam_id in radiant_steam_ids:
-                    # Query database to find Discord ID for this Steam ID
-                    discord_id = DB.fetch_one(
-                        "SELECT discord_id FROM users WHERE steam_id = ?",
-                        (str(steam_id),)
-                    )
-                    if discord_id:
-                        radiant_discord_ids.append(int(discord_id))
-                
-                for steam_id in dire_steam_ids:
-                    # Query database to find Discord ID for this Steam ID
-                    discord_id = DB.fetch_one(
-                        "SELECT discord_id FROM users WHERE steam_id = ?",
-                        (str(steam_id),)
-                    )
-                    if discord_id:
-                        dire_discord_ids.append(int(discord_id))
-                
-                # Update game_map_inverse with actual teams from REST API
-                self.game_map_inverse[game_id] = (set(radiant_discord_ids), set(dire_discord_ids))
-                
-                # Use the teams from REST API for the embed
-                radiant = radiant_discord_ids
-                dire = dire_discord_ids
-                
-                logger.info(f"[Game {game_id}] Updated teams from REST API after replace: Radiant={len(radiant_discord_ids)}, Dire={len(dire_discord_ids)}")
-                
-                # Update voice channel assignments based on rebalanced teams
-                radiant_channel, dire_channel = self.game_channels.get(game_id, (None, None))
-                if radiant_channel and dire_channel:
-                    # Move players to their rebalanced team channels via the mover service.
-                    rebalance_pairs = []
-                    for discord_id in radiant_discord_ids:
-                        member = self.the_guild.get_member(discord_id)
-                        if member and member.voice:
-                            rebalance_pairs.append((member, radiant_channel))
-                    
-                    for discord_id in dire_discord_ids:
-                        member = self.the_guild.get_member(discord_id)
-                        if member and member.voice:
-                            rebalance_pairs.append((member, dire_channel))
-                    await self._dispatch_moves(rebalance_pairs, game_id)
-                
-                # Use the teams from REST API for the embed
-                radiant = radiant_discord_ids
-                dire = dire_discord_ids
-            else:
-                # Fallback to local state if REST API call fails
-                logger.warning(f"[Game {game_id}] Failed to get game status from REST API, using local state")
-                radiant_set, dire_set = self.game_map_inverse.get(game_id, (set(), set()))
-                radiant = list(radiant_set)
-                dire = list(dire_set)
+            radiant, dire = self._teams_for_card(game_id, status)
+            logger.info(f"[Game {game_id}] Teams after replace: Radiant={radiant}, Dire={dire}")
 
-            # Edit original lobby message
-            lobby_msg = self.lobby_messages.get(game_id)
+            # Move players to their (possibly rebalanced) team voice channels.
+            radiant_channel, dire_channel = self.game_channels.get(game_id, (None, None))
+            if radiant_channel and dire_channel:
+                rebalance_pairs = []
+                for discord_id in radiant:
+                    member = self.the_guild.get_member(discord_id)
+                    if member and member.voice and member.voice.channel != radiant_channel:
+                        rebalance_pairs.append((member, radiant_channel))
+                for discord_id in dire:
+                    member = self.the_guild.get_member(discord_id)
+                    if member and member.voice and member.voice.channel != dire_channel:
+                        rebalance_pairs.append((member, dire_channel))
+                if rebalance_pairs:
+                    try:
+                        await self._dispatch_moves(rebalance_pairs, game_id)
+                    except Exception as e:
+                        logger.exception(f"[Game {game_id}] Failed to move players after replace: {e}")
 
-            # Get password from game status (use cached status if available)
-            if not status:
-                status = await self.rest_api.get_game_status(game_id)
-            password = status.get("pass_key", "N/A") if status else "N/A"
-            
-            embed = self.build_game_embed(game_id, radiant, dire, password)
+            # If the replaced player had abandoned, this replacement resolves it.
+            countdown_stopped = await self._abandon_resolved(game_id, old_member.id)
 
-            if lobby_msg:
-                try:
-                    await lobby_msg.edit(embed=embed)
-                    logger.info(f"[Game {game_id}] Updated match card embed after replace")
-                except Exception as e:
-                    logger.exception(f"[Game {game_id}] Failed to update match card embed: {e}")
+            card_updated = await self.refresh_match_card(game_id, status)
 
+            notes = []
+            if not rebalanced:
+                notes.append("teams were not rebalanced")
+            if countdown_stopped:
+                notes.append("abandon countdown stopped")
+            if not card_updated:
+                notes.append("⚠️ match card could not be updated")
             await interaction.followup.send(
-                f"✅ Replaced {old_member.mention} with {new_member.mention} in game {game_id} and updated match card.",
+                f"✅ Replaced {old_member.mention} with {new_member.mention} in game {game_id}."
+                + (f" ({'; '.join(notes)})" if notes else " Match card updated."),
                 ephemeral=True,
             )
 
@@ -2659,6 +3035,161 @@ class Master_Bot(commands.Bot):
                 await old_member.send(f"You've been removed from game {game_id}.")
             except discord.Forbidden:
                 pass
+
+        # ------------------------------------------------------------------ #
+        # Lobby test harness                                                  #
+        # ------------------------------------------------------------------ #
+
+        @app_commands.command(
+            name="test_lobby",
+            description="[Mod] Solo lobby test harness: a real Dota lobby with just you (+ optional extra players)",
+        )
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(
+            launch="Actually launch the game once everyone is seated (default: launch is suppressed)",
+            teammate="Optional extra player on your team",
+            opponent="Optional player on the other team",
+        )
+        async def test_lobby(
+            interaction: discord.Interaction,
+            launch: bool = False,
+            teammate: discord.Member = None,
+            opponent: discord.Member = None,
+        ):
+            """
+            Creates a game exactly like the queue would — lobbymanager lobby, Steam invite +
+            password DM, Discord voice channels, match card with the game mode poll — except:
+              * the lobbymanager treats the lobby as full once every configured player is in
+                it, so the auto poll trigger fires with a single tester;
+              * one side may be empty and the league id is forced to 0;
+              * the launch is suppressed unless launch=True (a lobby chat message says when it
+                would have launched);
+              * no ratings or match rows are ever written for it.
+            Use /abandon, "!abandon" in lobby chat, /force_replace, /force_swap, the poll
+            buttons and /lobby_status against it. /cancel_game tears it down.
+            """
+            await interaction.response.defer(thinking=True, ephemeral=True)
+
+            radiant = [interaction.user.id] + ([teammate.id] if teammate else [])
+            dire = [opponent.id] if opponent else []
+            everyone = radiant + dire
+            if len(set(everyone)) != len(everyone):
+                return await interaction.followup.send("Each player can only be listed once.", ephemeral=True)
+
+            missing = [uid for uid in everyone if not DB.fetch_steam_id(uid)]
+            if missing:
+                return await interaction.followup.send(
+                    "No Steam ID on file for: " + ", ".join(f"<@{uid}>" for uid in missing), ephemeral=True
+                )
+            busy = [uid for uid in everyone if uid in self.game_map]
+            if busy:
+                return await interaction.followup.send(
+                    "Already in an active game: " + ", ".join(f"<@{uid}>" for uid in busy), ephemeral=True
+                )
+
+            game_id = None
+            for _ in range(5):  # skip ids still alive in the lobbymanager from an earlier test
+                candidate = self._next_test_game_id()
+                game_id = await self.make_game(radiant, dire, set(), test_mode=True, test_auto_launch=launch, game_id=candidate)
+                if game_id is not None:
+                    break
+            if game_id is None:
+                return await interaction.followup.send(
+                    "⚠️ The lobbymanager could not create a test lobby (see lobbymanager logs).", ephemeral=True
+                )
+
+            await interaction.followup.send(
+                f"🧪 **Test lobby {game_id}** requested (launch {'ENABLED' if launch else 'suppressed'}).\n"
+                f"1. Accept the Steam invite / join `Gargamel Test Lobby {game_id}` with the password from your DM.\n"
+                f"2. Joining the lobby should auto-trigger the game mode poll on the match card.\n"
+                f"3. Sit on your team slot — a wrong slot gets you kicked to unassigned; the lobby says when it would launch.\n"
+                f"4. Try `!abandon` in lobby chat or `/abandon`, then `/force_replace game_id:{game_id}` to stop the countdown.\n"
+                f"`/lobby_status game_id:{game_id}` shows the lobbymanager's view; `/cancel_game game_id:{game_id}` tears it down.",
+                ephemeral=True,
+            )
+
+        @app_commands.command(
+            name="lobby_status",
+            description="[Mod] Show the lobbymanager's view of a game (members, seating, poll, abandon state)",
+        )
+        @app_commands.checks.has_role("Mod")
+        @app_commands.describe(game_id="Game ID (leave blank for the most recent active game)")
+        async def lobby_status(interaction: discord.Interaction, game_id: int = None):
+            await interaction.response.defer(thinking=True, ephemeral=True)
+            if game_id is None:
+                if not self.game_map_inverse:
+                    return await interaction.followup.send("No active games.", ephemeral=True)
+                game_id = max(self.game_map_inverse.keys())
+
+            status = await self.rest_api.get_game_status(game_id)
+            if not status:
+                return await interaction.followup.send(
+                    f"Lobbymanager has no game {game_id} (or is unreachable).", ephemeral=True
+                )
+
+            team_names = {0: "Radiant", 1: "Dire", 4: "Unassigned"}
+
+            def fmt_member(m: dict) -> str:
+                sid = m.get("steam_id")
+                who = "🤖 bot" if m.get("is_bot") else None
+                if not who:
+                    did = self._discord_id_for_steam(sid)
+                    who = f"<@{did}>" if did else (m.get("name") or "unknown")
+                return f"{who} — {team_names.get(m.get('team'), f'team {m.get('team')}')} (`{sid}`)"
+
+            members = status.get("members") or []
+            expected = set(status.get("radiant_team") or []) | set(status.get("dire_team") or [])
+            in_lobby = {m.get("steam_id") for m in members}
+            absent = [f"<@{self._discord_id_for_steam(s)}>" if self._discord_id_for_steam(s) else f"`{s}`"
+                      for s in expected if s not in in_lobby]
+
+            embed = discord.Embed(title=f"🔎 Lobby status — Game {game_id}", color=discord.Color.blurple())
+            embed.add_field(
+                name="Lobby",
+                value=(
+                    f"state: `{status.get('state')}` · lobby_id: `{status.get('lobby_id')}` · "
+                    f"mode: `{status.get('game_mode')}` · launched: `{status.get('game_launched')}`\n"
+                    f"test_mode: `{status.get('test_mode')}` (auto_launch `{status.get('test_auto_launch')}`) · "
+                    f"chat joined: `{status.get('lobby_chat_joined')}`"
+                    + (f"\n⚠️ error: {status.get('error')}" if status.get("error") else "")
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="Poll",
+                value=(
+                    f"players present {status.get('players_present')}/{len(expected)} "
+                    f"(threshold {status.get('poll_threshold')}) · trigger sent: `{status.get('poll_callback_sent')}` · "
+                    f"active: `{status.get('polling_active')}` · done: `{status.get('polling_done')}`"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name=f"Seated: {status.get('radiant_count')} Radiant / {status.get('dire_count')} Dire",
+                value="\n".join(fmt_member(m) for m in members) or "*lobby empty*",
+                inline=False,
+            )
+            if absent:
+                embed.add_field(name="Not in lobby", value=", ".join(absent), inline=False)
+            state = self.abandon_state.get(game_id)
+            if state:
+                embed.add_field(
+                    name="⚠️ Abandoned",
+                    value=", ".join(f"<@{p}>" for p in sorted(state["players"]))
+                          + f" — cancels <t:{int(state['deadline'])}:R>",
+                    inline=False,
+                )
+            r_set, d_set = self.game_map_inverse.get(game_id, (set(), set()))
+            embed.add_field(
+                name="Bot mapping",
+                value=(
+                    f"Radiant: {', '.join(f'<@{p}>' for p in sorted(r_set)) or '*none*'}\n"
+                    f"Dire: {', '.join(f'<@{p}>' for p in sorted(d_set)) or '*none*'}\n"
+                    f"test game: `{game_id in self.test_games}` · match card: `{game_id in self.lobby_messages}`"
+                ),
+                inline=False,
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
         @app_commands.command(name="ping", description="Ping the bot")
         async def ping(interaction: discord.Interaction):
@@ -3163,6 +3694,8 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(force_start)
         self.tree.add_command(force_swap)
         self.tree.add_command(force_replace)
+        self.tree.add_command(test_lobby)
+        self.tree.add_command(lobby_status)
         self.tree.add_command(cancel_game)
         self.tree.add_command(ping)
         self.tree.add_command(clear_queue)
@@ -3191,6 +3724,14 @@ class Master_Bot(commands.Bot):
         league_id = getattr(game_info, "league_id", None)
 
         logger.info(f"League id: <{league_id}>")
+
+        # The game has left the lobby: any abandon countdown is moot now.
+        self._cancel_abandon(game_id, "game launched")
+
+        if game_id in self.test_games:
+            logger.info(f"[on_game_started] Game {game_id} is a test lobby — not recording match {match_id} in the database.")
+            self.pending_matches.discard(game_id)
+            return
 
         if game_id not in self.pending_matches:
             logger.warning(f"[on_game_started] Game {game_id} not in pending_matches (lobby_id: {lobby_id}). This may indicate the game was already processed or there was a tracking issue. Proceeding with database update anyway.")
@@ -3260,6 +3801,12 @@ class Master_Bot(commands.Bot):
             game_id (int): Identifier for the ended game.
             game_info: Object containing all game information
         """
+        if game_id in self.test_games:
+            # Test lobby: clean up Discord + Dota, but never touch ratings or match tables.
+            logger.info(f"[on_game_ended] Test lobby {game_id} ended — skipping rating/match updates.")
+            await self.cancel_active_game(game_id, reason="test lobby finished")
+            return
+
         try:
             logger.info(f"Entered on game ended")
             radiant, dire = self.game_map_inverse[game_id]
@@ -3418,6 +3965,8 @@ class Master_Bot(commands.Bot):
         Args:
             game_id (int): The ID of the game to cancel.
         """
+        self._cancel_abandon(game_id, "game cleared")
+        self.launching_games.pop(game_id, None)
         try:
             radiant, dire = self.game_map_inverse.pop(game_id)
 
@@ -3551,26 +4100,40 @@ class Master_Bot(commands.Bot):
         except Exception as e:
             logger.exception(f"Error getting next game id: {e}")
 
-    async def make_game(self, radiant, dire, cut_players):
+    async def make_game(
+        self,
+        radiant,
+        dire,
+        cut_players,
+        *,
+        test_mode: bool = False,
+        test_auto_launch: bool = False,
+        game_id: Optional[int] = None,
+    ):
         """
         Called when a new game is created.
 
-        Creates voice channels for Radiant and Dire teams.
-        Assigns channel permissions for players.
-        Sends match details and lobby password in lobby text channel.
-        Maintains internal mappings of players and game channels.
-
-        Note:
-            Movement of players to voice channels is currently commented out.
+        Asks the lobbymanager to create the Dota lobby; Discord channels, DMs and the match
+        card are created later by setup_discord_for_game() (lobby_ready callback).
 
         Args:
             radiant (list[int]): List of Discord IDs for Radiant team players.
             dire (list[int]): List of Discord IDs for Dire team players.
-        """
-        # Create a temporary game ID
+            cut_players (set[int]): Queued players who did not make this game.
+            test_mode (bool): Solo lobby test harness (see /test_lobby). No ratings/match rows
+                are written for the game, the lobbymanager treats the lobby as full once every
+                configured player is present, and the launch is suppressed unless
+                test_auto_launch is set.
+            game_id (int|None): Explicit id (used by test lobbies); default: next real game id.
 
-        game_id = self.get_next_game_id()
+        Returns:
+            int|None: the game id, or None if the lobby could not be created.
+        """
+        if game_id is None:
+            game_id = self.get_next_game_id()
         self.pending_matches.add(game_id)
+        if test_mode:
+            self.test_games.add(game_id)
 
         # Get Steam IDs for teams
         radiant_steam_ids = [DB.fetch_steam_id(did) for did in radiant]
@@ -3605,6 +4168,8 @@ class Master_Bot(commands.Bot):
         }
         
         game_started_url = f"http://localhost:{self.config.get('RESULT_CALLBACK_PORT', 9999)}/game_started"
+        abandon_url = f"http://localhost:{self.config.get('RESULT_CALLBACK_PORT', 9999)}/player_abandon"
+        game_name = f"Gargamel Test Lobby {game_id}" if test_mode else f"Gargamel League Game {game_id}"
         password = await self.rest_api.create_game(
             game_id=game_id,
             username=username,
@@ -3615,23 +4180,27 @@ class Master_Bot(commands.Bot):
             poll_callback_url=poll_callback_url,
             lobby_ready_url=lobby_ready_url,
             game_started_url=game_started_url,
+            abandon_url=abandon_url,
             server_region=server_region,
             game_mode=game_mode,
             allow_cheats=allow_cheats,
-            game_name=f"Gargamel League Game {game_id}",
+            game_name=game_name,
             pass_key=password,
             debug_steam_id=debug_steam_id,
+            test_mode=test_mode,
+            test_auto_launch=test_auto_launch,
         )
         if password == "-1":
             logger.error(f"[Game {game_id}] Failed to create Dota lobby. Aborting Discord setup.")
 
             channel = self.get_channel(int(self.config["MATCH_CHANNEL_ID"]))
-            if channel:
+            if channel and not test_mode:
                 await channel.send(f" **Game {game_id} failed to start.** Please re-queue for the next match.")
-            else:
+            elif not channel:
                 logger.warning(f"[Game {game_id}] MATCH_CHANNEL_ID not found, could not notify players.")
 
             self.pending_matches.discard(game_id)
+            self.test_games.discard(game_id)
             # Clean up pending setup
             self._pending_discord_setup.pop(game_id, None)
             return None  # or return False to signal caller
@@ -3639,9 +4208,16 @@ class Master_Bot(commands.Bot):
         # Update password in pending setup
         if game_id in self._pending_discord_setup:
             self._pending_discord_setup[game_id]['password'] = password
-        
+
+        if not test_mode:
+            # Keep "Game N is starting shortly" on the queue card for a while instead of just
+            # showing the players who were pulled out an emptier queue box.
+            self._note_game_launching(game_id)
+
         # Don't create Discord channels/messages yet - wait for lobby_ready callback
         logger.info(f"[Game {game_id}] Game creation request sent. Waiting for lobby to be established before Discord setup.")
+        if test_mode:
+            return game_id
         if cut_players:
             content = {
                 "name": f"** 🪑 Players who got put in the cuck chair last game (Selection Priority Increased for next game): 🪑**",
@@ -3650,6 +4226,7 @@ class Master_Bot(commands.Bot):
             await self.update_queue_status_message(content=content)
         else:
             await self.update_queue_status_message()
+        return game_id
 
     async def setup_discord_for_game(self, game_id: int, password: str):
         """
@@ -3753,6 +4330,9 @@ class Master_Bot(commands.Bot):
                 allowed_role="Mod",
             )
             message = await channel.send(embed=embed, view=view)
+            # Register the match card immediately: the auto poll trigger waits on this, and the
+            # voice moves below can take a long time (rate-limited / mover fallback).
+            self.lobby_messages[game_id] = message
 
             try:
                 # Collect all members that need moving into game channels
