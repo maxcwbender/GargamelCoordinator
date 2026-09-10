@@ -50,13 +50,19 @@ const profileByDiscord = db.prepare('SELECT * FROM profiles WHERE discord_id = ?
 const statsByAccount = db.prepare('SELECT personaname, wins, losses, matches, kills, deaths, assists, gold_per_minute FROM player_stats WHERE account_id = ? AND season = ?');
 const avatarByAccount = db.prepare('SELECT avatar_url FROM player_avatars WHERE account_id = ?');
 const awardCounts = db.prepare(`SELECT award_type, COUNT(*) AS c FROM match_mvps WHERE account_id = ? AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY award_type`);
-// "Top" heroes = the ones the player wins with: ranked by net wins (wins minus
-// losses), then games, then win rate. Net wins rewards winning volume but
-// penalizes losses, so a 2-3 hero (-1) sits below a 2-1 hero (+1), and a 1-0
-// hero (+1) ties a 3-2 hero (+1) but loses the tiebreak on games.
+// "Top" heroes = the ones the player wins with, ranked by a shrunk win rate:
+// (wins + k/2) / (games + k) with k = 6, the same estimator as Best Allies.
+// The prior pulls small samples toward 50%, so a 1-0 hero (0.57) sits below
+// 4-2 (0.58) and 2-0 (0.63), and 3-0 (0.67) still beats 3-2 (0.55). Heroes
+// with a single game only fill in when nothing else qualifies, so a new
+// player's card is never empty.
+const HERO_MIN_GAMES = 2;
+const HERO_SHRINK_K = 6;
 const topHeroesStmt = db.prepare(`SELECT hero_id, COUNT(*) AS games, SUM(won) AS wins FROM player_matches
     WHERE account_id = ? AND season = ? AND hero_id IS NOT NULL GROUP BY hero_id
-    ORDER BY (2 * SUM(won) - COUNT(*)) DESC, games DESC, (SUM(won) * 1.0 / COUNT(*)) DESC, hero_id LIMIT 3`);
+    ORDER BY (COUNT(*) >= ${HERO_MIN_GAMES}) DESC,
+             (SUM(won) + ${HERO_SHRINK_K / 2}.0) / (COUNT(*) + ${HERO_SHRINK_K}.0) DESC,
+             games DESC, hero_id LIMIT 3`);
 const recentMatchesStmt = db.prepare(`SELECT match_id, hero_id, won, kills, deaths, assists, gold_per_min, start_time, duration, game_mode
     FROM player_matches WHERE account_id = ? ORDER BY start_time DESC, match_id DESC LIMIT 10`);
 // Best allies: teammates (same match, same side) across the whole season,
@@ -187,11 +193,12 @@ export function buildProfile({ accountId = null, discordId = null }, viewerDisco
     };
 }
 
-// ─── MVP match list ──────────────────────────────────────────────────────────
+// ─── MVP / SVP match lists ───────────────────────────────────────────────────
 // Rebuilds match cards (same shape as /api/recent-matches) from player_matches
-// rows for every Season match where the player won MVP.
-const mvpMatchIdsStmt = db.prepare(`SELECT match_id FROM match_mvps
-    WHERE account_id = ? AND award_type = 'mvp' AND match_id >= ${SEASON_2_FIRST_MATCH} ORDER BY match_id DESC`);
+// rows for every Season match where the player won the award (mvp = best on
+// the winning team, svp = best on the losing team).
+const awardMatchIdsStmt = db.prepare(`SELECT match_id FROM match_mvps
+    WHERE account_id = ? AND award_type = ? AND match_id >= ${SEASON_2_FIRST_MATCH} ORDER BY match_id DESC`);
 const matchRowsStmt = db.prepare(`SELECT pm.account_id, pm.hero_id, pm.player_slot, pm.won, pm.kills, pm.deaths, pm.assists,
         pm.start_time, pm.duration, pm.game_mode, ps.personaname, pa.avatar_url
     FROM player_matches pm
@@ -237,19 +244,23 @@ function buildMatchCard(matchId) {
 }
 
 export function mountProfileRoutes(server) {
-    server.get('/api/players/:accountId/mvps', (req, res) => {
-        const accountId = Number(req.params.accountId);
-        if (!Number.isInteger(accountId) || accountId <= 0) return res.status(400).json({ error: 'Invalid account id' });
-        const profile = buildProfile({ accountId }, getSessionDiscordId(req));
-        if (!profile) return res.status(404).json({ error: 'No such player' });
-        const matches = mvpMatchIdsStmt.all(accountId).map(r => buildMatchCard(r.match_id)).filter(Boolean)
-            .sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
-        return res.json({
-            player: { accountId, name: profile.displayName, avatar: profile.steam.avatar || profile.discordAvatar },
-            season: CURRENT_SEASON,
-            matches,
+    // /api/players/:id/mvps and /api/players/:id/svps
+    for (const award of ['mvp', 'svp']) {
+        server.get(`/api/players/:accountId/${award}s`, (req, res) => {
+            const accountId = Number(req.params.accountId);
+            if (!Number.isInteger(accountId) || accountId <= 0) return res.status(400).json({ error: 'Invalid account id' });
+            const profile = buildProfile({ accountId }, getSessionDiscordId(req));
+            if (!profile) return res.status(404).json({ error: 'No such player' });
+            const matches = awardMatchIdsStmt.all(accountId, award).map(r => buildMatchCard(r.match_id)).filter(Boolean)
+                .sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
+            return res.json({
+                player: { accountId, name: profile.displayName, avatar: profile.steam.avatar || profile.discordAvatar },
+                season: CURRENT_SEASON,
+                award,
+                matches,
+            });
         });
-    });
+    }
 
     // Hero list for the favorite-hero pickers (from cached OpenDota constants).
     server.get('/api/heroes', (req, res) => {

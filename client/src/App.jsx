@@ -10,7 +10,7 @@ import LiveGame from './pages/LiveGame.jsx';
 import Notifications from './pages/Notifications.jsx';
 import SummerPlanning from './pages/SummerPlanning.jsx';
 import Profile from './pages/Profile.jsx';
-import PlayerMvps from './pages/PlayerMvps.jsx';
+import PlayerAwards from './pages/PlayerAwards.jsx';
 
 const PAGES = {
     '/': Home,
@@ -37,10 +37,11 @@ function CurrentPage() {
     }
 
     let page;
-    const mvpMatch = path.match(/^\/players\/(\d+)\/mvps\/?$/);
+    const awardMatch = path.match(/^\/players\/(\d+)\/(mvps|svps)\/?$/);
     const playerMatch = path.match(/^\/players\/(\d+)\/?$/);
-    if (mvpMatch) {
-        page = <PlayerMvps key={'mvps' + mvpMatch[1]} accountId={Number(mvpMatch[1])} />;
+    if (awardMatch) {
+        const award = awardMatch[2].slice(0, 3);
+        page = <PlayerAwards key={award + awardMatch[1]} accountId={Number(awardMatch[1])} award={award} />;
     } else if (playerMatch) {
         page = <Profile key={playerMatch[1]} accountId={Number(playerMatch[1])} />;
     } else if (path === '/profile') {

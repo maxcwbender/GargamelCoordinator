@@ -17,6 +17,20 @@ function HeroImg({ hero, className }) {
     return <img className={className} src={hero.img} alt={hero.name} title={hero.name} onError={() => setFailed(true)} />;
 }
 
+// MVP / SVP counters in the profile header. Non-zero counts link to the list
+// of matches the award was won in.
+function AwardStat({ count = 0, label, href }) {
+    const text = `${label}${count === 1 ? '' : 's'}`;
+    if (count > 0 && href) {
+        return (
+            <Link to={href} className="stat stat-link" title="See the matches">
+                <strong>{count}</strong><span>{text} ↗</span>
+            </Link>
+        );
+    }
+    return <div className="stat"><strong>{count}</strong><span>{text}</span></div>;
+}
+
 function pct(wins, games) {
     return games > 0 ? Math.round((wins / games) * 100) + '%' : '–';
 }
@@ -394,13 +408,8 @@ export default function Profile({ accountId }) {
                             <div className="stat"><strong>{pct(season.wins, season.matches)}</strong><span>Win rate</span></div>
                             <div className="stat"><strong>{season.kda.toFixed(2)}</strong><span>KDA</span></div>
                             <div className="stat"><strong>{Math.round(season.avgGPM)}</strong><span>Avg GPM</span></div>
-                            {season.mvpCount > 0 && p.accountId != null ? (
-                                <Link to={`/players/${p.accountId}/mvps`} className="stat stat-link" title="See the matches">
-                                    <strong>{season.mvpCount}</strong><span>MVP{season.mvpCount === 1 ? '' : 's'} ↗</span>
-                                </Link>
-                            ) : (
-                                <div className="stat"><strong>{season.mvpCount}</strong><span>MVP{season.mvpCount === 1 ? '' : 's'}</span></div>
-                            )}
+                            <AwardStat count={season.mvpCount} label="MVP" href={p.accountId != null ? `/players/${p.accountId}/mvps` : null} />
+                            <AwardStat count={season.svpCount} label="SVP" href={p.accountId != null ? `/players/${p.accountId}/svps` : null} />
                         </div>
                     ) : (
                         <div className="profile-nostats">No Season games on record yet.</div>
@@ -422,7 +431,7 @@ export default function Profile({ accountId }) {
                     <h2>Top Heroes{season ? ` · Season ${season.number}` : ''}</h2>
                     {p.topHeroes.length ? (
                         <>
-                            <p className="pref-help">Ranked by wins minus losses this season.</p>
+                            <p className="pref-help">Ranked by win rate, weighted by games played, so one lucky game does not top the list.</p>
                             <div className="top-heroes">
                                 {p.topHeroes.map((h, i) => (
                                     <div key={h.id} className="top-hero">
