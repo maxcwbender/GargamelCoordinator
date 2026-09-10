@@ -68,12 +68,13 @@ export function buildDemoProfile(opts = DEMO_DEFAULT_OPTIONS, prefs = null) {
             { ...heroById(1), games: 4, wins: 1, losses: 3 },
         ] : [],
         bestAllies: stats ? [
-            { accountId: 1001, name: 'WardGoblin', avatar: null, games: 9, wins: 7, losses: 2 },
-            { accountId: 1002, name: 'MidOrFeed', avatar: null, games: 6, wins: 5, losses: 1 },
-            { accountId: 1003, name: 'CarryPotential', avatar: null, games: 8, wins: 5, losses: 3 },
-            { accountId: 1004, name: 'JungleLifestyle', avatar: null, games: 5, wins: 3, losses: 2 },
-            { accountId: 1005, name: 'TiltedTed', avatar: null, games: 4, wins: 2, losses: 2 },
+            { accountId: 1001, name: 'WardGoblin', avatar: null, games: 14, wins: 9, losses: 5, rate: 0.6429, shrunkRate: 0.6000, lift: -0.0238 },
+            { accountId: 1002, name: 'MidOrFeed', avatar: null, games: 9, wins: 6, losses: 3, rate: 0.6667, shrunkRate: 0.6000, lift: 0.0000 },
+            { accountId: 1003, name: 'Spackle', avatar: null, games: 11, wins: 7, losses: 4, rate: 0.6364, shrunkRate: 0.5882, lift: -0.0303 },
+            { accountId: 1004, name: 'JungleLifestyle', avatar: null, games: 10, wins: 5, losses: 5, rate: 0.5000, shrunkRate: 0.5000, lift: -0.1667 },
+            { accountId: 1005, name: 'Level5Pichu', avatar: null, games: 22, wins: 9, losses: 13, rate: 0.4091, shrunkRate: 0.4286, lift: -0.2576 },
         ] : [],
+        allyMinGames: 4,
         recentMatches: stats ? [14, 74, 1, 5, 8, 26, 11, 2, 14, 74].map((heroId, n) => ({
             matchId: 8800000000 + n,
             hero: heroById(heroId),

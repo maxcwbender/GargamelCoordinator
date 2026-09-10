@@ -708,3 +708,29 @@
     margin-bottom: 16px;
   }
 }
+
+.ally-lift {
+  font-style: normal;
+  color: #1f8a52;
+  font-weight: 600;
+}
+
+.ally-lift.negative {
+  color: #c0392b;
+}
+
+.profile-stats .stat-link {
+  text-decoration: none;
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  transition: background 0.15s ease;
+}
+
+.profile-stats .stat-link:hover {
+  background: rgba(78, 159, 209, 0.12);
+}
+
+.profile-stats .stat-link strong {
+  color: #2c7cb0;
+}

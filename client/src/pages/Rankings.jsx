@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from '../router.jsx';
 import { Spinner, ErrorBox, EmptyState, PlayerLink } from '../components/shared.jsx';
 import MmrChart, { seriesStyle } from '../components/MmrChart.jsx';
 import { timeAgo } from '../format.js';
@@ -22,6 +23,15 @@ function formatValue(v, format) {
 function Avatar({ src, className }) {
     if (!src) return <div className={className}></div>;
     return <img src={src} alt="" className={className} />;
+}
+
+// Values on the League MVP board link to that player's MVP match list.
+function Value({ row, category }) {
+    const text = formatValue(row.value, category.format);
+    if (category.key === 'mvp' && row.accountId) {
+        return <Link to={`/players/${row.accountId}/mvps`} className="value-link" title="See the matches">{text} ↗</Link>;
+    }
+    return text;
 }
 
 function Leaderboard({ category, minGames }) {
@@ -51,7 +61,7 @@ function Leaderboard({ category, minGames }) {
                     <div className="board-top-name"><PlayerLink name={first.name} accountId={first.accountId} /></div>
                     <div className="board-top-detail">{first.detail}{first.detail ? ' · ' : ''}{first.games} game{first.games === 1 ? '' : 's'}</div>
                 </div>
-                <div className="board-top-value">{formatValue(first.value, category.format)}</div>
+                <div className="board-top-value"><Value row={first} category={category} /></div>
             </div>
             <table className="board-table">
                 <tbody>
@@ -66,7 +76,7 @@ function Leaderboard({ category, minGames }) {
                             </td>
                             <td className="stat-secondary hide-mobile">{r.detail}</td>
                             <td className="stat-secondary">{r.games} g</td>
-                            <td className="stat-value">{formatValue(r.value, category.format)}</td>
+                            <td className="stat-value"><Value row={r} category={category} /></td>
                         </tr>
                     ))}
                 </tbody>

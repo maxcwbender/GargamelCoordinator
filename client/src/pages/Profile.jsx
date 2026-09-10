@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from '../router.jsx';
 import { useAuth, loginUrl } from '../auth.jsx';
 import { Spinner, ErrorBox, PlayerLink } from '../components/shared.jsx';
 import RegistrationFields from '../components/RegistrationFields.jsx';
@@ -393,7 +394,13 @@ export default function Profile({ accountId }) {
                             <div className="stat"><strong>{pct(season.wins, season.matches)}</strong><span>Win rate</span></div>
                             <div className="stat"><strong>{season.kda.toFixed(2)}</strong><span>KDA</span></div>
                             <div className="stat"><strong>{Math.round(season.avgGPM)}</strong><span>Avg GPM</span></div>
-                            <div className="stat"><strong>{season.mvpCount}</strong><span>MVP{season.mvpCount === 1 ? '' : 's'}</span></div>
+                            {season.mvpCount > 0 && p.accountId != null ? (
+                                <Link to={`/players/${p.accountId}/mvps`} className="stat stat-link" title="See the matches">
+                                    <strong>{season.mvpCount}</strong><span>MVP{season.mvpCount === 1 ? '' : 's'} ↗</span>
+                                </Link>
+                            ) : (
+                                <div className="stat"><strong>{season.mvpCount}</strong><span>MVP{season.mvpCount === 1 ? '' : 's'}</span></div>
+                            )}
                         </div>
                     ) : (
                         <div className="profile-nostats">No Season games on record yet.</div>
@@ -471,10 +478,14 @@ export default function Profile({ accountId }) {
                     <h2>Best Allies{season ? ` · Season ${season.number}` : ''}</h2>
                     {p.bestAllies && p.bestAllies.length ? (
                         <>
-                            <p className="pref-help">Teammates with the most wins alongside {p.isOwner ? 'you' : p.displayName} this season.</p>
+                            <p className="pref-help">
+                                Teammates {p.isOwner ? 'you win' : `${p.displayName} wins`} with most often this season — ranked by win rate together
+                                ({p.allyMinGames || 4}+ games; small samples are pulled toward 50%), with the lift over {p.isOwner ? 'your' : 'their'} season average.
+                            </p>
                             <ul className="allies">
                                 {p.bestAllies.map(a => {
                                     const rate = a.games > 0 ? Math.round((a.wins / a.games) * 100) : 0;
+                                    const lift = a.lift != null ? Math.round(a.lift * 100) : null;
                                     return (
                                         <li key={a.accountId}>
                                             {a.avatar
@@ -485,15 +496,20 @@ export default function Profile({ accountId }) {
                                                 <div className="ally-bar"><div className="ally-fill" style={{ width: rate + '%' }} /></div>
                                             </div>
                                             <div className="ally-record">
-                                                <strong>{a.wins}–{a.losses}</strong>
-                                                <span>{rate}% · {a.games} game{a.games === 1 ? '' : 's'}</span>
+                                                <strong>{rate}%</strong>
+                                                <span>
+                                                    {a.wins}–{a.losses}
+                                                    {lift != null && (
+                                                        <> · <em className={'ally-lift' + (lift < 0 ? ' negative' : '')}>{lift > 0 ? '+' : ''}{lift} vs avg</em></>
+                                                    )}
+                                                </span>
                                             </div>
                                         </li>
                                     );
                                 })}
                             </ul>
                         </>
-                    ) : <p className="pref-empty">Not enough games together yet — allies appear after two or more shared wins or losses.</p>}
+                    ) : <p className="pref-empty">Not enough games together yet — allies appear after {p.allyMinGames || 4} or more games on the same team.</p>}
                 </div>
 
                 <SteamCard profile={p} flags={flags} onDemoLink={demo ? demoLink : null} />

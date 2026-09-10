@@ -45,7 +45,7 @@ function TeamPanel({ side, players }) {
     );
 }
 
-function MatchCard({ match }) {
+export function MatchCard({ match }) {
     const radiantPlayers = match.players.filter(p => p.isRadiant);
     const direPlayers = match.players.filter(p => !p.isRadiant);
     return (

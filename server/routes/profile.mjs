@@ -58,8 +58,12 @@ const topHeroesStmt = db.prepare(`SELECT hero_id, COUNT(*) AS games, SUM(won) AS
 const recentMatchesStmt = db.prepare(`SELECT match_id, hero_id, won, kills, deaths, assists, gold_per_min, start_time, duration, game_mode
     FROM player_matches WHERE account_id = ? ORDER BY start_time DESC, match_id DESC LIMIT 10`);
 // Best allies: teammates (same match, same side) across the whole season,
-// ranked by wins together, then win rate. Names/avatars from the season stats
-// + avatar cache.
+// ranked by a shrunk win rate — (wins + k/2) / (games + k) with k = 6 — so a
+// 2-0 pair can't leapfrog an 11-game 64% pair, and a 9-17 pair sinks despite
+// its raw win count. Minimum 4 games together. Names/avatars from the season
+// stats + avatar cache.
+const ALLY_MIN_GAMES = 4;
+const ALLY_SHRINK_K = 6;
 const bestAlliesStmt = db.prepare(`
     SELECT a.account_id, COUNT(*) AS games, SUM(a.won) AS wins,
            ps.personaname, pa.avatar_url
@@ -71,8 +75,8 @@ const bestAlliesStmt = db.prepare(`
     LEFT JOIN player_avatars pa ON pa.account_id = a.account_id
     WHERE me.account_id = @accountId AND me.season = @season
     GROUP BY a.account_id
-    HAVING games >= 2
-    ORDER BY wins DESC, (SUM(a.won) * 1.0 / COUNT(*)) DESC, games DESC, a.account_id
+    HAVING games >= ${ALLY_MIN_GAMES}
+    ORDER BY (SUM(a.won) + ${ALLY_SHRINK_K / 2}.0) / (COUNT(*) + ${ALLY_SHRINK_K}.0) DESC, games DESC, a.account_id
     LIMIT 5`);
 const upsertPrefs = db.prepare(`INSERT INTO profiles (discord_id, fav_heroes, fav_position, veto_mode, created_at, updated_at)
     VALUES (@id, @favHeroes, @favPosition, @vetoMode, @now, @now)
@@ -154,15 +158,24 @@ export function buildProfile({ accountId = null, discordId = null }, viewerDisco
             }))
             : [],
         bestAllies: accountId != null
-            ? bestAlliesStmt.all({ accountId, season: CURRENT_SEASON }).map(r => ({
-                accountId: r.account_id,
-                name: r.personaname || 'Anonymous',
-                avatar: r.avatar_url || null,
-                games: r.games,
-                wins: r.wins,
-                losses: r.games - r.wins,
-            }))
+            ? bestAlliesStmt.all({ accountId, season: CURRENT_SEASON }).map(r => {
+                const rate = r.wins / r.games;
+                // Lift: how much better the pair does than the player's own season rate
+                const baseline = stats && stats.matches > 0 ? stats.wins / stats.matches : null;
+                return {
+                    accountId: r.account_id,
+                    name: r.personaname || 'Anonymous',
+                    avatar: r.avatar_url || null,
+                    games: r.games,
+                    wins: r.wins,
+                    losses: r.games - r.wins,
+                    rate,
+                    shrunkRate: (r.wins + ALLY_SHRINK_K / 2) / (r.games + ALLY_SHRINK_K),
+                    lift: baseline != null ? rate - baseline : null,
+                };
+            })
             : [],
+        allyMinGames: ALLY_MIN_GAMES,
         prefs: {
             favHeroes: parseFavHeroes(prof?.fav_heroes).map(hero),
             favPosition: POSITION_KEYS.has(prof?.fav_position) ? prof.fav_position : null,
@@ -172,7 +185,70 @@ export function buildProfile({ accountId = null, discordId = null }, viewerDisco
     };
 }
 
+// ─── MVP match list ──────────────────────────────────────────────────────────
+// Rebuilds match cards (same shape as /api/recent-matches) from player_matches
+// rows for every Season match where the player won MVP.
+const mvpMatchIdsStmt = db.prepare(`SELECT match_id FROM match_mvps
+    WHERE account_id = ? AND award_type = 'mvp' AND match_id >= ${SEASON_2_FIRST_MATCH} ORDER BY match_id DESC`);
+const matchRowsStmt = db.prepare(`SELECT pm.account_id, pm.hero_id, pm.player_slot, pm.won, pm.kills, pm.deaths, pm.assists,
+        pm.start_time, pm.duration, pm.game_mode, ps.personaname, pa.avatar_url
+    FROM player_matches pm
+    LEFT JOIN player_stats ps ON ps.account_id = pm.account_id AND ps.season = ?
+    LEFT JOIN player_avatars pa ON pa.account_id = pm.account_id
+    WHERE pm.match_id = ? ORDER BY pm.player_slot`);
+const matchAwardsStmt = db.prepare('SELECT account_id, award_type FROM match_mvps WHERE match_id = ?');
+
+function buildMatchCard(matchId) {
+    const rows = matchRowsStmt.all(CURRENT_SEASON, matchId);
+    if (!rows.length) return null;
+    const awards = new Map(matchAwardsStmt.all(matchId).map(a => [`${a.award_type}:${a.account_id}`, true]));
+    const players = rows.map(r => {
+        const isRadiant = r.player_slot < 128;
+        const h = hero(r.hero_id);
+        return {
+            account_id: r.account_id,
+            personaname: r.personaname || 'Anonymous',
+            player_slot: r.player_slot,
+            isRadiant,
+            kills: r.kills, deaths: r.deaths, assists: r.assists,
+            avatar: r.avatar_url || null,
+            hero_id: r.hero_id,
+            heroName: h?.name || null,
+            heroImg: h?.img || null,
+            isMVP: awards.has(`mvp:${r.account_id}`),
+            isSVP: awards.has(`svp:${r.account_id}`),
+        };
+    });
+    const first = rows[0];
+    const radiantWin = (first.player_slot < 128) ? !!first.won : !first.won;
+    return {
+        match_id: matchId,
+        radiant_win: radiantWin,
+        // Team score in Dota is the team's kill count
+        radiant_score: players.filter(p => p.isRadiant).reduce((s, p) => s + (p.kills || 0), 0),
+        dire_score: players.filter(p => !p.isRadiant).reduce((s, p) => s + (p.kills || 0), 0),
+        duration: first.duration,
+        start_time: first.start_time,
+        game_mode: first.game_mode,
+        players,
+    };
+}
+
 export function mountProfileRoutes(server) {
+    server.get('/api/players/:accountId/mvps', (req, res) => {
+        const accountId = Number(req.params.accountId);
+        if (!Number.isInteger(accountId) || accountId <= 0) return res.status(400).json({ error: 'Invalid account id' });
+        const profile = buildProfile({ accountId }, getSessionDiscordId(req));
+        if (!profile) return res.status(404).json({ error: 'No such player' });
+        const matches = mvpMatchIdsStmt.all(accountId).map(r => buildMatchCard(r.match_id)).filter(Boolean)
+            .sort((a, b) => (b.start_time || 0) - (a.start_time || 0));
+        return res.json({
+            player: { accountId, name: profile.displayName, avatar: profile.steam.avatar || profile.discordAvatar },
+            season: CURRENT_SEASON,
+            matches,
+        });
+    });
+
     // Hero list for the favorite-hero pickers (from cached OpenDota constants).
     server.get('/api/heroes', (req, res) => {
         const heroes = Object.entries(dotaConstants.heroes)
