@@ -144,7 +144,7 @@ function MealForm({ dayDate, slotKey, pending, onStageIngredient, onUnstageIngre
                     placeholder="Notes (optional)" maxLength={300} />
             </div>
             <div className="ingredient-builder">
-                <div className="ing-builder-label">Ingredients you'll buy — added to Groceries</div>
+                <div className="ing-builder-label">Ingredients you'll buy, added to Groceries</div>
                 <div className="ing-chip-row">
                     {pending.map((ing, i) => (
                         <span key={i} className="ing-chip">
@@ -251,7 +251,7 @@ export default function SummerPlanning() {
         if (res.status === 401) {
             try { localStorage.removeItem('sp_token'); } catch {}
             setToken('');
-            throw new Error('Password changed — please re-enter it');
+            throw new Error('Password changed. Please re-enter it');
         }
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.error || ('Request failed (' + res.status + ')'));
@@ -335,7 +335,7 @@ export default function SummerPlanning() {
             <div className="overlay">
                 <form className="overlay-card" onSubmit={submitGate}>
                     <h1>Summer Planning</h1>
-                    <div className="sub">Enter your trip's password — it picks which trip you're planning</div>
+                    <div className="sub">Enter your trip's password. It picks which trip you're planning</div>
                     <input type="password" value={gatePassword} onChange={e => setGatePassword(e.target.value)}
                         placeholder="Trip password" autoComplete="current-password" required />
                     <button type="submit" className="btn btn-block" disabled={gateBusy}>Enter</button>
@@ -454,7 +454,7 @@ export default function SummerPlanning() {
             <li key={it.id}>
                 <span className="item-name">{it.item_name}</span>
                 <span className="item-notes">{it.notes || ''}</span>
-                <span className="item-by">— {it.created_by}</span>
+                <span className="item-by">by {it.created_by}</span>
                 {editBtn(it)}{removeBtn(it)}
             </li>
         );
@@ -498,7 +498,7 @@ export default function SummerPlanning() {
                 <div className="meal-line">
                     <span className="item-name">{meal.item_name}</span>
                     <span className="item-notes">{meal.notes || ''}</span>
-                    <span className="item-by">— {meal.created_by}</span>
+                    <span className="item-by">by {meal.created_by}</span>
                     {removeBtn(meal)}
                 </div>
                 {(chips.length > 0 || canEdit) && (
@@ -535,7 +535,7 @@ export default function SummerPlanning() {
                 <span className="item-name">{m.item_name}</span>
                 {m.source_item_id ? (data.items.filter(x => x.id === m.source_item_id).map(mealTag)) : null}
                 {m.notes ? <span className="item-notes">{m.notes}</span> : null}
-                <span className="item-by">— {m.created_by}</span>
+                <span className="item-by">by {m.created_by}</span>
                 {editBtn(m)}{removeBtn(m)}
             </li>
         );
@@ -577,7 +577,7 @@ export default function SummerPlanning() {
                     <span className="grocery-qty">{totalQty}×</span>
                     <span className="item-name">{group.name}</span>
                     {tags}
-                    <span className="item-by">— {contributors.join(', ')}</span>
+                    <span className="item-by">by {contributors.join(', ')}</span>
                     {purchasedBy ? <span className="purchased-tag">bought · {purchasedBy}</span> : null}
                     {single && canModify(group.members[0])
                         ? <>{editBtn(group.members[0])}{removeBtn(group.members[0])}</>
@@ -646,7 +646,7 @@ export default function SummerPlanning() {
                                             <div className="slot-header">{slot.label}</div>
                                             {meals.length > 0
                                                 ? <ul className="item-list">{meals.map(mealRow)}</ul>
-                                                : <div className="empty-note">Nothing claimed yet — be the hero.</div>}
+                                                : <div className="empty-note">Nothing claimed yet. Be the hero.</div>}
                                             <MealForm
                                                 dayDate={selectedDay.date}
                                                 slotKey={slot.key}

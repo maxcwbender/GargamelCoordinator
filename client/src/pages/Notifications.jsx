@@ -54,7 +54,7 @@ export default function Notifications() {
             const onIosClick = async (e) => {
                 e.preventDefault();
                 const ok = await copyTopic();
-                setIosButtonLabel(ok ? 'Topic copied! Now open ntfy → + → paste' : 'Copy failed — long-press the topic below');
+                setIosButtonLabel(ok ? 'Topic copied! Now open ntfy → + → paste' : 'Copy failed. Long-press the topic below');
             };
             button = <a className="signup-button" href="#" onClick={onIosClick}>{iosButtonLabel || 'Copy topic to subscribe'}</a>;
             subscribeStep = (

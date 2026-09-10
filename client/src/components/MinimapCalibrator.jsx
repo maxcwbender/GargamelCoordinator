@@ -149,7 +149,7 @@ export default function MinimapCalibrator({ liveGames = [] }) {
                 {overridden && <div className="calib-note">A calibration override is active on this browser (the live page is using it).</div>}
                 {backgroundMissing && !previewBackground && (
                     <div className="calib-note warn">
-                        No background image is deployed at <code>/minimap_background.png</code> — put the map image in
+                        No background image is deployed at <code>/minimap_background.png</code>. Put the map image in
                         <code> client/public/minimap_background.png</code> and rebuild. You can preview a candidate below first.
                     </div>
                 )}

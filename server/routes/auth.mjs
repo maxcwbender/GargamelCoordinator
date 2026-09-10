@@ -39,7 +39,7 @@ export function mountAuthRoutes(server) {
             return res.redirect('/profile?authError=' + encodeURIComponent(msg));
         }
         const pending = consumeOAuthState(req.query.state);
-        if (!pending) return res.redirect('/?authError=' + encodeURIComponent('Login session expired — please try again'));
+        if (!pending) return res.redirect('/?authError=' + encodeURIComponent('Login session expired. Please try again'));
 
         try {
             const { accessToken, tokenType } = await exchangeCode(String(req.query.code || ''));
@@ -60,7 +60,7 @@ export function mountAuthRoutes(server) {
             return res.redirect(pending.returnTo || '/profile');
         } catch (err) {
             logger.error(`[Auth] callback failed: ${err.message}`);
-            return res.redirect('/?authError=' + encodeURIComponent('Login failed — please try again'));
+            return res.redirect('/?authError=' + encodeURIComponent('Login failed. Please try again'));
         }
     });
 

@@ -43,7 +43,7 @@ function Leaderboard({ category, minGames }) {
                     <h2>{category.title}</h2>
                     <p>{category.subtitle}</p>
                 </div>
-                <p className="board-empty">Nobody qualifies yet — {minGames} games needed.</p>
+                <p className="board-empty">Nobody qualifies yet: {minGames} games needed.</p>
             </div>
         );
     }
@@ -95,7 +95,7 @@ function MmrPanel({ mmr }) {
         return (
             <div className="board">
                 <div className="board-head"><h2>Biggest MMR Climb</h2><p>Most Garg MMR gained this season</p></div>
-                <p className="board-empty">No MMR history yet — it builds from the bot's match records ({mmr.minGames}+ games needed).</p>
+                <p className="board-empty">No MMR history yet. It builds from the bot's match records ({mmr.minGames}+ games needed).</p>
             </div>
         );
     }
@@ -233,7 +233,7 @@ export default function Rankings() {
                         return (
                             <div className={'role-source-note' + (pct < 80 ? ' warn' : '')}>
                                 Core/support roles come from OpenDota lane data for {pct}% of games ({lane} of {total});
-                                the rest use a wards/GPM estimate{pct < 80 ? ' — treat these boards as approximate until more matches are parsed' : ''}.
+                                the rest use a wards/GPM estimate{pct < 80 ? '. Treat these boards as approximate until more matches are parsed' : ''}.
                             </div>
                         );
                     })()}
@@ -246,7 +246,7 @@ export default function Rankings() {
                                     setCategory(prev => ({ ...prev, [tab]: c.key }));
                                 }}>
                                 <span className="rail-title">{c.title}</span>
-                                <span className="rail-sub">{c.chart ? 'Chart →' : (c.rows[0] ? c.rows[0].name : '—')}</span>
+                                <span className="rail-sub">{c.chart ? 'Chart →' : (c.rows[0] ? c.rows[0].name : 'No qualifiers yet')}</span>
                             </button>
                         ))}
                     </nav>

@@ -50,11 +50,13 @@ const profileByDiscord = db.prepare('SELECT * FROM profiles WHERE discord_id = ?
 const statsByAccount = db.prepare('SELECT personaname, wins, losses, matches, kills, deaths, assists, gold_per_minute FROM player_stats WHERE account_id = ? AND season = ?');
 const avatarByAccount = db.prepare('SELECT avatar_url FROM player_avatars WHERE account_id = ?');
 const awardCounts = db.prepare(`SELECT award_type, COUNT(*) AS c FROM match_mvps WHERE account_id = ? AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY award_type`);
-// "Top" heroes = the ones the player wins with: most wins this season, then
-// win rate, then games (a 0-2 hero never outranks a 1-0 one).
+// "Top" heroes = the ones the player wins with: ranked by net wins (wins minus
+// losses), then games, then win rate. Net wins rewards winning volume but
+// penalizes losses, so a 2-3 hero (-1) sits below a 2-1 hero (+1), and a 1-0
+// hero (+1) ties a 3-2 hero (+1) but loses the tiebreak on games.
 const topHeroesStmt = db.prepare(`SELECT hero_id, COUNT(*) AS games, SUM(won) AS wins FROM player_matches
     WHERE account_id = ? AND season = ? AND hero_id IS NOT NULL GROUP BY hero_id
-    ORDER BY wins DESC, (SUM(won) * 1.0 / COUNT(*)) DESC, games DESC, hero_id LIMIT 3`);
+    ORDER BY (2 * SUM(won) - COUNT(*)) DESC, games DESC, (SUM(won) * 1.0 / COUNT(*)) DESC, hero_id LIMIT 3`);
 const recentMatchesStmt = db.prepare(`SELECT match_id, hero_id, won, kills, deaths, assists, gold_per_min, start_time, duration, game_mode
     FROM player_matches WHERE account_id = ? ORDER BY start_time DESC, match_id DESC LIMIT 10`);
 // Best allies: teammates (same match, same side) across the whole season,

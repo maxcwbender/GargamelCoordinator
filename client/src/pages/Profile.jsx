@@ -141,7 +141,7 @@ function PreferencesCard({ profile, onSaved, saveHandler = null, fallbackHeroes 
                             <div key={idx} className="hero-picker">
                                 <HeroImg hero={heroes.find(h => h.id === favHeroes[idx]) || profile.prefs.favHeroes[idx]} className="fav-hero-img" />
                                 <select value={favHeroes[idx] ?? ''} onChange={e => setHeroAt(idx, e.target.value)} disabled={heroes.length === 0}>
-                                    <option value="">{heroes.length ? '— none —' : 'Loading heroes…'}</option>
+                                    <option value="">{heroes.length ? 'none' : 'Loading heroes…'}</option>
                                     {heroOptions(idx).map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
                                 </select>
                             </div>
@@ -172,7 +172,7 @@ function PreferencesCard({ profile, onSaved, saveHandler = null, fallbackHeroes 
                         The one mode you absolutely do not want to play. Games you're in will exclude it from the mode vote (coming soon).
                     </p>
                     <select value={vetoMode} onChange={e => setVetoMode(e.target.value)} className="veto-select">
-                        <option value="">— no veto —</option>
+                        <option value="">no veto</option>
                         {options.vetoModes.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                     </select>
                 </div>
@@ -231,7 +231,7 @@ function SteamCard({ profile, flags, onDemoLink = null }) {
             {flags.linkError && <div className="profile-banner error">Linking failed: {flags.linkError}</div>}
             <p className="pref-help">
                 You're logged in, but not registered for the Gargamel League yet. Make sure your Steam account is
-                added under <strong>Connections</strong> in your Discord settings, pick your rank, then link — this
+                added under <strong>Connections</strong> in your Discord settings, pick your rank, then link. This
                 registers you and adds you to the Discord server.
             </p>
             <form onSubmit={startLink}>
@@ -368,10 +368,10 @@ export default function Profile({ accountId }) {
         <div className="page-content pc-profile">
             {demo && (
                 <div className="demo-banner">
-                    Demo mode — this is a synthetic profile. Use the panel to switch states; saves and the Steam link are simulated and nothing is written to the server.
+                    Demo mode: this is a synthetic profile. Use the panel to switch states; saves and the Steam link are simulated and nothing is written to the server.
                 </div>
             )}
-            {flags.linked && <div className="profile-banner ok">Steam linked — you're registered for the Gargamel League. Check Discord!</div>}
+            {flags.linked && <div className="profile-banner ok">Steam linked! You're registered for the Gargamel League. Check Discord!</div>}
 
             <div className="profile-header">
                 <div className="profile-avatars">
@@ -422,7 +422,7 @@ export default function Profile({ accountId }) {
                     <h2>Top Heroes{season ? ` · Season ${season.number}` : ''}</h2>
                     {p.topHeroes.length ? (
                         <>
-                            <p className="pref-help">Ranked by wins this season.</p>
+                            <p className="pref-help">Ranked by wins minus losses this season.</p>
                             <div className="top-heroes">
                                 {p.topHeroes.map((h, i) => (
                                     <div key={h.id} className="top-hero">
@@ -434,7 +434,7 @@ export default function Profile({ accountId }) {
                                 ))}
                             </div>
                         </>
-                    ) : <p className="pref-empty">No hero history yet — it fills in after the next season crawl.</p>}
+                    ) : <p className="pref-empty">No hero history yet. It fills in after the next season crawl.</p>}
                 </div>
 
                 <PreferencesCard
@@ -479,13 +479,11 @@ export default function Profile({ accountId }) {
                     {p.bestAllies && p.bestAllies.length ? (
                         <>
                             <p className="pref-help">
-                                Teammates {p.isOwner ? 'you win' : `${p.displayName} wins`} with most often this season — ranked by win rate together
-                                ({p.allyMinGames || 4}+ games; small samples are pulled toward 50%), with the lift over {p.isOwner ? 'your' : 'their'} season average.
+                                Teammates you win with most often this season.
                             </p>
                             <ul className="allies">
                                 {p.bestAllies.map(a => {
                                     const rate = a.games > 0 ? Math.round((a.wins / a.games) * 100) : 0;
-                                    const lift = a.lift != null ? Math.round(a.lift * 100) : null;
                                     return (
                                         <li key={a.accountId}>
                                             {a.avatar
@@ -497,19 +495,14 @@ export default function Profile({ accountId }) {
                                             </div>
                                             <div className="ally-record">
                                                 <strong>{rate}%</strong>
-                                                <span>
-                                                    {a.wins}–{a.losses}
-                                                    {lift != null && (
-                                                        <> · <em className={'ally-lift' + (lift < 0 ? ' negative' : '')}>{lift > 0 ? '+' : ''}{lift} vs avg</em></>
-                                                    )}
-                                                </span>
+                                                <span>{a.wins}–{a.losses} · {a.games} game{a.games === 1 ? '' : 's'}</span>
                                             </div>
                                         </li>
                                     );
                                 })}
                             </ul>
                         </>
-                    ) : <p className="pref-empty">Not enough games together yet — allies appear after {p.allyMinGames || 4} or more games on the same team.</p>}
+                    ) : <p className="pref-empty">Not enough games together yet. Allies appear after {p.allyMinGames || 4} or more games on the same team.</p>}
                 </div>
 
                 <SteamCard profile={p} flags={flags} onDemoLink={demo ? demoLink : null} />

@@ -13,13 +13,13 @@ export default function ProfileDemoControls({ options, onChange, onReset, log })
     return (
         <aside className="demo-panel">
             <div className="demo-panel-title">Profile demo</div>
-            <p className="demo-panel-note">Nothing here touches the server — saves and the Steam link are simulated.</p>
+            <p className="demo-panel-note">Nothing here touches the server: saves and the Steam link are simulated.</p>
 
             <div className="demo-group">
                 <div className="demo-group-title">Viewing as</div>
                 <label className="demo-radio">
                     <input type="radio" name="viewer" checked={options.viewer === 'owner'} onChange={() => set('viewer', 'owner')} />
-                    the player (owner — can edit)
+                    the player (owner, can edit)
                 </label>
                 <label className="demo-radio">
                     <input type="radio" name="viewer" checked={options.viewer === 'visitor'} onChange={() => set('viewer', 'visitor')} />

@@ -55,7 +55,7 @@ export default function Minimap({
                         key={'t' + t.bit}
                         className={`tower ${team}${(towerState & (1 << t.bit)) ? '' : ' destroyed'}${draggable ? ' draggable' : ''}`}
                         style={{ left: t.x + '%', top: t.y + '%' }}
-                        title={`${team === 'radiant' ? 'Radiant' : 'Dire'} ${t.label} (bit ${t.bit}) — ${t.x}%, ${t.y}%`}
+                        title={`${team === 'radiant' ? 'Radiant' : 'Dire'} ${t.label} (bit ${t.bit}) · ${t.x}%, ${t.y}%`}
                         {...dragHandlers(team, 'towers', i)}
                     />
                 ))}
@@ -64,7 +64,7 @@ export default function Minimap({
                         key={'r' + r.bit}
                         className={`barracks ${team}${(barracksState & (1 << r.bit)) ? '' : ' destroyed'}${draggable ? ' draggable' : ''}`}
                         style={{ left: r.x + '%', top: r.y + '%' }}
-                        title={`${team === 'radiant' ? 'Radiant' : 'Dire'} ${r.label} barracks — ${r.x}%, ${r.y}%`}
+                        title={`${team === 'radiant' ? 'Radiant' : 'Dire'} ${r.label} barracks · ${r.x}%, ${r.y}%`}
                         {...dragHandlers(team, 'barracks', i)}
                     />
                 ))}
