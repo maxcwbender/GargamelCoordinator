@@ -50,17 +50,21 @@ const profileByDiscord = db.prepare('SELECT * FROM profiles WHERE discord_id = ?
 const statsByAccount = db.prepare('SELECT personaname, wins, losses, matches, kills, deaths, assists, gold_per_minute FROM player_stats WHERE account_id = ? AND season = ?');
 const avatarByAccount = db.prepare('SELECT avatar_url FROM player_avatars WHERE account_id = ?');
 const awardCounts = db.prepare(`SELECT award_type, COUNT(*) AS c FROM match_mvps WHERE account_id = ? AND match_id >= ${SEASON_2_FIRST_MATCH} GROUP BY award_type`);
-// "Top" heroes = the ones the player wins with, ranked by a shrunk win rate:
-// (wins + k/2) / (games + k) with k = 6, the same estimator as Best Allies.
-// The prior pulls small samples toward 50%, so a 1-0 hero (0.57) sits below
-// 4-2 (0.58) and 2-0 (0.63), and 3-0 (0.67) still beats 3-2 (0.55). Heroes
-// with a single game only fill in when nothing else qualifies, so a new
-// player's card is never empty.
+// "Top" heroes = the ones the player wins with. Three tiers, then a shrunk
+// win rate within each:
+//   1. winning-or-even record beats a losing record (a 1-0 hero outranks 2-3);
+//   2. within that, heroes played 2+ times beat single-game heroes, so a lucky
+//      1-0 can't jump above a 3-2;
+//   3. shrunk win rate (wins + k/2) / (games + k) with k = 6, the same
+//      estimator as Best Allies, so 4-2 (0.58) beats 3-2 (0.55), then games.
+// Single-game and losing heroes still fill in when nothing better exists, so
+// a new player's card is never empty.
 const HERO_MIN_GAMES = 2;
 const HERO_SHRINK_K = 6;
 const topHeroesStmt = db.prepare(`SELECT hero_id, COUNT(*) AS games, SUM(won) AS wins FROM player_matches
     WHERE account_id = ? AND season = ? AND hero_id IS NOT NULL GROUP BY hero_id
-    ORDER BY (COUNT(*) >= ${HERO_MIN_GAMES}) DESC,
+    ORDER BY (2 * SUM(won) >= COUNT(*)) DESC,
+             (COUNT(*) >= ${HERO_MIN_GAMES}) DESC,
              (SUM(won) + ${HERO_SHRINK_K / 2}.0) / (COUNT(*) + ${HERO_SHRINK_K}.0) DESC,
              games DESC, hero_id LIMIT 3`);
 const recentMatchesStmt = db.prepare(`SELECT match_id, hero_id, won, kills, deaths, assists, gold_per_min, start_time, duration, game_mode
