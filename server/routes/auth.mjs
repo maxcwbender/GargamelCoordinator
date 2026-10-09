@@ -5,14 +5,18 @@ import {
     createSession, destroySession, setSessionCookie, clearSessionCookie,
     getSessionDiscordId, requireAuth,
 } from '../services/auth.mjs';
-import { registerWithDiscordToken, RANKS } from '../services/registration.mjs';
+import { registerWithDiscordToken, rejoinGuildWithDiscordToken, getRegistration, RANKS } from '../services/registration.mjs';
 import { buildProfile } from './profile.mjs';
+import { forgetGuildMembership } from '../services/discord.mjs';
 
 // ─── Website login via Discord ───────────────────────────────────────────────
 //   GET  /api/auth/login?returnTo=/path   -> Discord consent (identify)
 //   GET  /api/auth/link-steam?rank=&referredBy=  (logged in) -> Discord consent
 //        (identify connections guilds.join), then registers via the shared
 //        registration service — same result as the home-page flow.
+//   GET  /api/auth/rejoin                 (logged in, registered) -> Discord consent
+//        (identify guilds.join), then re-adds them to the Discord server; the bot
+//        re-queues them for mod review as a returning player.
 //   GET  /api/auth/callback               -> Discord sends the user back here
 //   POST /api/auth/logout
 //   GET  /api/auth/me                     -> { enabled, user|null }
@@ -30,6 +34,15 @@ export function mountAuthRoutes(server) {
         const referredBy = typeof req.query.referredBy === 'string' ? req.query.referredBy.slice(0, 100) : '';
         const state = createOAuthState({ mode: 'link', rank, referredBy, returnTo: '/profile' });
         return res.redirect(authorizeUrl({ state, scopes: ['identify', 'connections', 'guilds.join'] }));
+    });
+
+    server.get('/api/auth/rejoin', requireAuth, (req, res) => {
+        if (!authEnabled()) return res.status(503).json({ error: 'Login is not configured on this server' });
+        if (!getRegistration(req.discordId)) {
+            return res.redirect('/profile?rejoinError=' + encodeURIComponent('You are not registered yet. Link your Steam account first.'));
+        }
+        const state = createOAuthState({ mode: 'rejoin', returnTo: '/profile' });
+        return res.redirect(authorizeUrl({ state, scopes: ['identify', 'guilds.join'] }));
     });
 
     server.get('/api/auth/callback', async (req, res) => {
@@ -55,7 +68,17 @@ export function mountAuthRoutes(server) {
                 if (result.status >= 400) {
                     return res.redirect('/profile?linkError=' + encodeURIComponent(String(result.body?.result || 'Linking failed')));
                 }
+                forgetGuildMembership(user.id);
                 return res.redirect('/profile?linked=1');
+            }
+            if (pending.mode === 'rejoin') {
+                const result = await rejoinGuildWithDiscordToken({ tokenType, accessToken, discordID: user.id });
+                if (result.status >= 400) {
+                    return res.redirect('/profile?rejoinError=' + encodeURIComponent(String(result.body?.result || 'Rejoin failed')));
+                }
+                forgetGuildMembership(user.id);
+                logger.info(`[Auth] ${user.username} (${user.id}) rejoined the Discord server via profile`);
+                return res.redirect('/profile?rejoined=1');
             }
             return res.redirect(pending.returnTo || '/profile');
         } catch (err) {

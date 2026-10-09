@@ -39,16 +39,13 @@ startDiscordBackgroundWork();
 
 // ─── Global Error Handlers ───────────────────────────────────────────────────
 process.on('uncaughtException', (error) => {
-    logger.error('[FATAL] Uncaught Exception:', error.message);
-    logger.error('[FATAL] Stack:', error.stack);
+    logger.error({ err: error }, '[FATAL] Uncaught Exception');
     // Don't exit - try to keep running
 });
 
 process.on('unhandledRejection', (reason) => {
-    logger.error('[FATAL] Unhandled Promise Rejection:', reason);
-    if (reason instanceof Error) {
-        logger.error('[FATAL] Stack:', reason.stack);
-    }
+    if (reason instanceof Error) logger.error({ err: reason }, '[FATAL] Unhandled Promise Rejection');
+    else logger.error(`[FATAL] Unhandled Promise Rejection: ${String(reason)}`);
     // Don't exit - try to keep running
 });
 

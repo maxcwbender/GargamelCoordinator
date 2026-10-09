@@ -219,8 +219,7 @@ export function mountLeagueRoutes(server) {
 
         } catch (error) {
             const elapsed = Date.now() - requestStart;
-            logger.error(`[API /api/live-game] ERROR after ${elapsed}ms:`, error.message || error);
-            logger.error('[API /api/live-game] Stack:', error.stack);
+            logger.error({ err: error }, `[API /api/live-game] ERROR after ${elapsed}ms`);
             // Return inactive rather than crashing
             return res.json({ active: false, gameCount: 0, games: [], pendingGames: [], error: 'server_error' });
         }
@@ -242,8 +241,10 @@ export function mountLeagueRoutes(server) {
 
             return res.json({ active: games.length > 0, gameCount: games.length });
         } catch (error) {
-            logger.error('[API /api/live-game/status] ERROR:', error.message || error);
-            return res.json({ active: false, gameCount: 0, error: 'server_error' });
+            // Steam's live-league endpoint returns 5xx for a minute or so now and then;
+            // keep answering with the last known status instead of flapping to "error".
+            logger.warn(`[API /api/live-game/status] Steam fetch failed (${error.message || error}); serving last known status`);
+            return res.json({ active: !!liveGameCache.isActive, gameCount: liveGameCache.gameCount || 0, stale: true });
         }
     });
 }

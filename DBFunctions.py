@@ -6,6 +6,19 @@ with open("config.json") as configFile:
 
 con = sqlite3.connect("allUsers.db")
 
+# --- Schema migrations (idempotent; the website's server/db.mjs applies the same ones) ---
+# mod_notes.superseded: 1 marks review rows from a previous registration pass. When a
+# registered player leaves Discord and rejoins, they go back through moderation, and the
+# old approvals/rejections must not count toward the new decision (they are kept for history).
+for _sql in (
+    "ALTER TABLE mod_notes ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0",
+):
+    try:
+        con.execute(_sql)
+        con.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
 def fetch_one(query, params=()):
     """Execute a SQL query and return a single row or None.
 
@@ -140,7 +153,7 @@ def query_mod_results(user_id: int) -> tuple[int, int, int]:
     Returns:
         tuple(int, int, int): Counts of (approvals, disapprovals, undecided) mod votes.
     """
-    query = f"SELECT result FROM mod_notes WHERE registrant_id = ?"
+    query = "SELECT result FROM mod_notes WHERE registrant_id = ? AND superseded = 0"
     rows = fetch_all(
         query, (user_id,)
     )
@@ -148,6 +161,75 @@ def query_mod_results(user_id: int) -> tuple[int, int, int]:
     D = sum(1 for r in rows if r[0] == 0)
     W = sum(1 for r in rows if r[0] not in (0, 1))
     return A, D, W
+
+# --- Registration queue (returning players) ---
+
+def fetch_registration(discord_id):
+    """
+    Returns the registration row for a Discord id, or None if they never registered.
+
+    Returns:
+        dict | None: {"steam_id", "rating", "modsRemaining", "referred_by", "dateCreated"}
+    """
+    row = con.execute(
+        "SELECT steam_id, rating, modsRemaining, referred_by, dateCreated FROM users WHERE discord_id = ?",
+        (discord_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {"steam_id": row[0], "rating": row[1], "modsRemaining": row[2], "referred_by": row[3], "dateCreated": row[4]}
+
+def is_fresh_registrant(discord_id, mods_required: int) -> bool:
+    """
+    True when the user is sitting in the registration queue untouched: every mod review
+    is still outstanding and no live (non-superseded) mod_notes row exists for them.
+    This is the state right after a first-time website registration, so a member-join
+    event for such a user must NOT be treated as a returning player.
+    """
+    reg = fetch_registration(discord_id)
+    if not reg or reg["modsRemaining"] < mods_required:
+        return False
+    live_notes = fetch_one(
+        "SELECT COUNT(*) FROM mod_notes WHERE registrant_id = ? AND superseded = 0",
+        (discord_id,),
+    )
+    return not live_notes
+
+def requeue_returning_registrant(discord_id, mods_required: int) -> dict:
+    """
+    Puts a previously registered player back into the registration queue, keeping their
+    rating (MMR) but requiring a fresh round of mod review:
+      - previous mod_notes rows are marked superseded (kept for history, ignored by
+        query_mod_results and the /poll_registration exclusion),
+      - any mod who still had this player assigned is released,
+      - modsRemaining is reset to mods_required.
+
+    Returns:
+        dict: {"rating", "approvals", "rejections", "notes"} describing the prior pass,
+        so the mod-channel notice can summarise what earlier reviewers decided.
+    """
+    A, D, _ = query_mod_results(discord_id)
+    prior_notes = [
+        (mod_id, result, notes)
+        for mod_id, result, notes in fetch_all(
+            "SELECT mod_id, result, notes FROM mod_notes WHERE registrant_id = ? AND superseded = 0",
+            (discord_id,),
+        )
+    ]
+    with con:
+        con.execute(
+            "UPDATE mod_notes SET superseded = 1 WHERE registrant_id = ? AND superseded = 0",
+            (discord_id,),
+        )
+        con.execute(
+            "UPDATE users SET assignedRegistrant = NULL WHERE assignedRegistrant = ?",
+            (discord_id,),
+        )
+        con.execute(
+            "UPDATE users SET modsRemaining = ? WHERE discord_id = ?",
+            (int(mods_required), discord_id),
+        )
+    return {"rating": fetch_rating(discord_id), "approvals": A, "rejections": D, "notes": prior_notes}
 
 def power_mean(ratings: list[int], p: int = 5) -> int:
     return int((sum(r ** p for r in ratings) / len(ratings)) ** (1 / p))

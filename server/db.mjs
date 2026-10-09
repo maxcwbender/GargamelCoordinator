@@ -12,6 +12,8 @@ const columnMigrations = [
     'ALTER TABLE player_stats ADD COLUMN obs_ward_count INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN season INTEGER DEFAULT 1',
     'ALTER TABLE users ADD COLUMN referred_by TEXT',
+    // Old mod reviews of a player who left Discord and rejoined (see Master_Bot on_member_join)
+    'ALTER TABLE mod_notes ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0',
 ];
 for (const sql of columnMigrations) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }

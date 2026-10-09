@@ -2,6 +2,7 @@ import { db } from '../db.mjs';
 import { logger } from '../logger.mjs';
 import { CURRENT_SEASON, SEASON_2_FIRST_MATCH } from '../config.mjs';
 import { dotaConstants } from '../services/opendota.mjs';
+import { fetchGuildMembership } from '../services/discord.mjs';
 import { getSessionDiscordId, requireAuth, discordAvatarUrl } from '../services/auth.mjs';
 
 // ─── Player profiles: public stats + owner-editable preferences ─────────────
@@ -288,9 +289,12 @@ export function mountProfileRoutes(server) {
         return res.json(profile);
     });
 
-    server.get('/api/profile/me', requireAuth, (req, res) => {
+    server.get('/api/profile/me', requireAuth, async (req, res) => {
         const profile = buildProfile({ discordId: req.discordId }, req.discordId);
         if (!profile) return res.status(404).json({ error: 'Profile not found' });
+        // Registered players who left the Discord server get a "Rejoin" button;
+        // inGuild is null when Discord could not be asked (button stays hidden).
+        profile.discord = { inGuild: profile.steam.linked ? await fetchGuildMembership(req.discordId) : null };
         return res.json(profile);
     });
 

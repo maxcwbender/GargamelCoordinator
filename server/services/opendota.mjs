@@ -53,7 +53,7 @@ export async function fetchDotaConstants() {
         dotaConstants.lastFetched = Date.now();
         logger.info(`[Constants] Loaded ${Object.keys(dotaConstants.heroes).length} heroes, ${Object.keys(dotaConstants.items).length} items`);
     } catch (err) {
-        logger.error('[Constants] Failed to fetch:', err.message);
+        logger.error(`[Constants] Failed to fetch: ${err.message}`);
     }
 }
 

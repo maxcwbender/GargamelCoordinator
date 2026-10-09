@@ -2302,6 +2302,67 @@ class Master_Bot(commands.Bot):
         # ensure normal command processing continues
         await self.process_commands(message)
 
+    async def on_member_join(self, member: discord.Member):
+        """
+        Fired when someone joins the guild (invite link or the website's guilds.join).
+
+        Players who registered before, left the server and came back lost their roles
+        on the way out (Discord drops them on leave), so they are put back into the
+        registration queue as a *returning* player: rating/MMR is kept, previous mod
+        decisions are superseded, and the mod channel is told to re-review them.
+        Brand-new registrants (website flow, review untouched) are left alone — the
+        pipe handler already announced them.
+        """
+        if member.bot or self.the_guild is None or member.guild.id != self.the_guild.id:
+            return
+        try:
+            reg = DB.fetch_registration(member.id)
+            if not reg:
+                logger.info(f"[on_member_join] {member} ({member.id}) joined; not registered — nothing to do.")
+                return
+
+            mods_required = int(self.config["MOD_ASSIGNMENT"])
+            if DB.is_fresh_registrant(member.id, mods_required):
+                logger.info(f"[on_member_join] {member} ({member.id}) joined as a new registrant; already in the queue.")
+                return
+
+            prior = DB.requeue_returning_registrant(member.id, mods_required)
+            logger.info(
+                f"[on_member_join] Returning player {member} ({member.id}) re-queued for registration: "
+                f"rating={prior['rating']}, prior approvals={prior['approvals']}, prior rejections={prior['rejections']}, "
+                f"superseded notes={prior['notes']}"
+            )
+
+            mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
+            if mod_chan:
+                history = f"{prior['approvals']} approval(s) / {prior['rejections']} rejection(s)"
+                referral = f" | Referred by: **{reg['referred_by']}**" if reg.get("referred_by") else ""
+                await mod_chan.send(
+                    f"<@{member.id}> rejoined the server and is back in the registration queue as a "
+                    f"**returning player** (Rating: **{prior['rating']}**, previous review: {history}{referral}). "
+                    f"They have no Contender role until re-approved — use /poll_registration."
+                )
+            else:
+                logger.error(f"[on_member_join] Could not find mod channel: {self.config.get('MOD_CHANNEL_ID')}")
+
+            try:
+                await member.send(
+                    "Welcome back to the Gargamel League! Since you left the server, a mod needs to "
+                    "re-approve you before you can queue again. Your rating has been kept."
+                )
+            except (discord.Forbidden, discord.HTTPException) as e:
+                logger.info(f"[on_member_join] Could not DM returning player {member.id}: {e}")
+        except Exception as e:
+            logger.exception(f"[on_member_join] Error handling join for {member.id}: {e}")
+
+    async def on_member_remove(self, member: discord.Member):
+        """Log departures so a later rejoin can be traced; registration data is kept."""
+        try:
+            registered = DB.fetch_registration(member.id) is not None
+            logger.info(f"[on_member_remove] {member} ({member.id}) left the server (registered={registered}).")
+        except Exception as e:
+            logger.exception(f"[on_member_remove] Error logging departure of {member.id}: {e}")
+
     async def on_ready(self):
         """
         Called when the bot is ready and connected.
@@ -2367,7 +2428,7 @@ class Master_Bot(commands.Bot):
                 WHERE modsRemaining > 0
                 AND NOT EXISTS(
                     SELECT 1 FROM mod_notes
-                    WHERE mod_id = ? AND registrant_id = discord_id AND result IS NOT NULL
+                    WHERE mod_id = ? AND registrant_id = discord_id AND result IS NOT NULL AND superseded = 0
                 )
                 ORDER BY dateCreated ASC
                 LIMIT 1
@@ -2665,7 +2726,7 @@ class Master_Bot(commands.Bot):
             for registrant in pending_registrants:
                 discord_id = registrant[0]
                 has_reviewed = DB.fetch_one(
-                    "SELECT 1 FROM mod_notes WHERE mod_id = ? AND registrant_id = ? AND result IS NOT NULL",
+                    "SELECT 1 FROM mod_notes WHERE mod_id = ? AND registrant_id = ? AND result IS NOT NULL AND superseded = 0",
                     (mod_id, discord_id)
                 )
                 if has_reviewed:
@@ -2752,7 +2813,7 @@ class Master_Bot(commands.Bot):
 
             # Check if this mod has already reviewed this user (completed review with result)
             already_reviewed = DB.fetch_one(
-                "SELECT 1 FROM mod_notes WHERE mod_id = ? AND registrant_id = ? AND result IS NOT NULL",
+                "SELECT 1 FROM mod_notes WHERE mod_id = ? AND registrant_id = ? AND result IS NOT NULL AND superseded = 0",
                 (mod_id, user.id)
             )
             if already_reviewed:
@@ -4010,7 +4071,7 @@ class Master_Bot(commands.Bot):
             )
 
         except Exception as e:
-            logger.exception(f"[Game {game_id}] Error clearing game: ", e)
+            logger.exception(f"[Game {game_id}] Error clearing game: {e}")
 
 
     async def on_steam_id_found(self, discord_id: int):

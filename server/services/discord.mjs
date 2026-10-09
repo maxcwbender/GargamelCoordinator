@@ -49,8 +49,41 @@ export async function refreshDiscordMembers() {
             logger.info(`Refreshed Discord members cache: ${members.length} members with avatars`);
         }
     } catch (err) {
-        logger.error('Error refreshing Discord members cache:', err);
+        logger.error({ err }, 'Error refreshing Discord members cache');
     }
+}
+
+// ─── Per-user guild membership (profile page "Rejoin the Discord") ──────────
+// The 12-hour members cache is too stale to tell whether someone just left, so
+// the owner's own profile asks Discord directly; answers are memoised briefly.
+// Resolves true / false, or null when Discord could not be asked (then the
+// caller should assume nothing).
+const membershipMemo = new Map(); // discordId -> { value, at }
+const MEMBERSHIP_MEMO_TTL = 60 * 1000;
+
+export async function fetchGuildMembership(discordId) {
+    const id = String(discordId);
+    const memo = membershipMemo.get(id);
+    if (memo && Date.now() - memo.at < MEMBERSHIP_MEMO_TTL) return memo.value;
+    if (!BOT_TOKEN) return null;
+    let value = null;
+    try {
+        const res = await fetch(`https://discord.com/api/guilds/${config.GUILD_ID}/members/${id}`, {
+            headers: { 'Authorization': `Bot ${BOT_TOKEN}` },
+        });
+        if (res.ok) value = true;
+        else if (res.status === 404) value = false;
+        else logger.warn(`[Discord] membership check for ${id} returned ${res.status}`);
+    } catch (err) {
+        logger.warn(`[Discord] membership check for ${id} failed: ${err.message}`);
+    }
+    if (value !== null) membershipMemo.set(id, { value, at: Date.now() });
+    return value;
+}
+
+// Drop the memoised answer after we changed it ourselves (guild join via OAuth).
+export function forgetGuildMembership(discordId) {
+    membershipMemo.delete(String(discordId));
 }
 
 export function startDiscordBackgroundWork() {

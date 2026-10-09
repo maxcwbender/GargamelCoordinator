@@ -554,6 +554,19 @@
   flex-shrink: 0;
 }
 
+.rejoin-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fff7e6;
+  border: 1px solid #f0c27b;
+}
+
+.rejoin-panel .authenticate-button {
+  display: inline-block;
+  margin-top: 8px;
+}
+
 .steam-status {
   font-weight: 700;
   color: #1f8a52;

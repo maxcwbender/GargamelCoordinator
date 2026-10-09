@@ -43,8 +43,10 @@ function takeUrlFlags() {
         linked: params.get('linked') === '1',
         linkError: params.get('linkError'),
         authError: params.get('authError'),
+        rejoined: params.get('rejoined') === '1',
+        rejoinError: params.get('rejoinError'),
     };
-    if (flags.linked || flags.linkError || flags.authError) {
+    if (flags.linked || flags.linkError || flags.authError || flags.rejoined || flags.rejoinError) {
         window.history.replaceState({}, '', window.location.pathname);
     }
     return flags;
@@ -206,6 +208,10 @@ function SteamCard({ profile, flags, onDemoLink = null }) {
     const referral = useRef(null);
 
     if (profile.steam.linked) {
+        // Registered, but not currently in the Discord server (left and never came
+        // back): offer the way back in. Roles are gone, so the bot re-queues them
+        // for mod approval on rejoin — their rating is kept.
+        const leftDiscord = profile.isOwner && profile.discord?.inGuild === false;
         return (
             <div className="profile-card">
                 <h2>Steam</h2>
@@ -218,6 +224,16 @@ function SteamCard({ profile, flags, onDemoLink = null }) {
                         <div className="steam-sub">{profile.steamName || 'Registered for Gargamel'} · open Steam profile ↗</div>
                     </div>
                 </a>
+                {flags.rejoinError && <div className="profile-banner error">Rejoining failed: {flags.rejoinError}</div>}
+                {leftDiscord && (
+                    <div className="rejoin-panel">
+                        <p className="pref-help">
+                            You're registered for the Gargamel League but not in the Discord server right now.
+                            Rejoin below — a mod will re-approve you (your rating is kept) before you can queue again.
+                        </p>
+                        <a className="authenticate-button" href="/api/auth/rejoin">Rejoin the Gargamel Discord</a>
+                    </div>
+                )}
             </div>
         );
     }
@@ -386,6 +402,7 @@ export default function Profile({ accountId }) {
                 </div>
             )}
             {flags.linked && <div className="profile-banner ok">Steam linked! You're registered for the Gargamel League. Check Discord!</div>}
+            {flags.rejoined && <div className="profile-banner ok">Welcome back! You've rejoined the Gargamel Discord — a mod will re-approve you shortly.</div>}
 
             <div className="profile-header">
                 <div className="profile-avatars">

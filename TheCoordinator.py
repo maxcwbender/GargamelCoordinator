@@ -34,20 +34,26 @@ class TheCoordinator:
     def in_queue(self, discord_id: int) -> bool:
         return discord_id in self.queue
 
+    def _display_name(self, discord_id: int) -> str:
+        """Resolve a Discord ID to a display name for logging; falls back to the raw ID."""
+        guild = getattr(self.discordBot, "the_guild", None)
+        member = guild.get_member(discord_id) if guild else None
+        return member.display_name if member else str(discord_id)
+
     def add_player(self, user: int, rating: int) -> int:
         """Add a player to the queue with their rating and join time."""
         if user not in self.queue:
             join_time = time.time()
             human_time = datetime.fromtimestamp(join_time).strftime("%Y-%m-%d %H:%M:%S")
             self.queue[user] = (rating, join_time, random.random())
-            logger.info(f"[Coordinator] Added {user} to queue (rating={rating}, time={human_time})")
+            logger.info(f"[Coordinator] Added {self._display_name(user)} ({user}) to queue (rating={rating}, time={human_time})")
         return len(self.queue)
 
     def remove_player(self, user: int) -> bool:
         """Remove a player from the queue."""
         removed = self.queue.pop(user, None) is not None
         if removed:
-            logger.info(f"[Coordinator] Removed {user} from queue.")
+            logger.info(f"[Coordinator] Removed {self._display_name(user)} ({user}) from queue.")
         return removed
 
     def get_queue(self) -> List[Tuple[int, int]]:
