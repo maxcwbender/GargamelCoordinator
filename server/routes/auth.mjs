@@ -11,10 +11,11 @@ import { forgetGuildMembership } from '../services/discord.mjs';
 
 // ─── Website login via Discord ───────────────────────────────────────────────
 //   GET  /api/auth/login?returnTo=/path   -> Discord consent (identify)
-//   GET  /api/auth/link-steam?rank=&ref=  (logged in) -> Discord consent
+//   GET  /api/auth/link-steam?rank=&ref=&referredBy=  (logged in) -> Discord consent
 //        (identify connections guilds.join), then registers via the shared
 //        registration service — same result as the home-page flow. `ref` is the
-//        hidden promo-link tag the client captured (never shown to the user).
+//        hidden promo-link tag the client captured (never shown to the user);
+//        `referredBy` is the Discord member picked in the "Referred By" box.
 //   GET  /api/auth/rejoin                 (logged in, registered) -> Discord consent
 //        (identify guilds.join), then re-adds them to the Discord server; the bot
 //        re-queues them for mod review as a returning player.
@@ -33,7 +34,8 @@ export function mountAuthRoutes(server) {
         const rank = typeof req.query.rank === 'string' ? req.query.rank : '';
         if (!RANKS.includes(rank)) return res.status(400).json({ error: 'Please select your Dota 2 rank' });
         const referralSource = normalizeReferralSource(req.query.ref);
-        const state = createOAuthState({ mode: 'link', rank, referralSource, returnTo: '/profile' });
+        const referredBy = typeof req.query.referredBy === 'string' ? req.query.referredBy.slice(0, 100) : '';
+        const state = createOAuthState({ mode: 'link', rank, referralSource, referredBy, returnTo: '/profile' });
         return res.redirect(authorizeUrl({ state, scopes: ['identify', 'connections', 'guilds.join'] }));
     });
 
@@ -64,7 +66,8 @@ export function mountAuthRoutes(server) {
 
             if (pending.mode === 'link') {
                 const result = await registerWithDiscordToken({
-                    tokenType, accessToken, rank: pending.rank, referralSource: pending.referralSource,
+                    tokenType, accessToken, rank: pending.rank,
+                    referralSource: pending.referralSource, referredBy: pending.referredBy,
                 });
                 if (result.status >= 400) {
                     return res.redirect('/profile?linkError=' + encodeURIComponent(String(result.body?.result || 'Linking failed')));

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from '../router.jsx';
 import { useAuth, loginUrl } from '../auth.jsx';
 import { Spinner, ErrorBox, PlayerLink } from '../components/shared.jsx';
@@ -206,6 +206,10 @@ function PreferencesCard({ profile, onSaved, saveHandler = null, fallbackHeroes 
 function SteamCard({ profile, flags, onDemoLink = null }) {
     const [rank, setRank] = useState('');
     const [rankInvalid, setRankInvalid] = useState(false);
+    const referral = useRef(null);
+    // Arrived via a hidden ?ref= promo link: that tag is the attribution and the
+    // "Referred By" box is not shown.
+    const [referralSource] = useState(() => getReferralSource());
 
     if (profile.steam.linked) {
         // Registered, but not currently in the Discord server (left and never came
@@ -250,11 +254,10 @@ function SteamCard({ profile, flags, onDemoLink = null }) {
     const startLink = (e) => {
         e.preventDefault();
         if (!rank) { setRankInvalid(true); return; }
-        // The hidden referral tag (if they arrived via a ?ref= promo link) rides
-        // along silently; it is never shown on the page.
-        const ref = getReferralSource() || '';
-        if (onDemoLink) { onDemoLink(rank, ref); return; }
-        const params = new URLSearchParams({ rank, ref });
+        const ref = referralSource || '';
+        const referredBy = referral.current || '';
+        if (onDemoLink) { onDemoLink(rank, ref, referredBy); return; }
+        const params = new URLSearchParams({ rank, ref, referredBy });
         window.location.href = '/api/auth/link-steam?' + params.toString();
     };
 
@@ -272,6 +275,8 @@ function SteamCard({ profile, flags, onDemoLink = null }) {
                     rank={rank}
                     onRankChange={v => { setRank(v); setRankInvalid(false); }}
                     rankInvalid={rankInvalid}
+                    showReferral={!referralSource}
+                    onReferralChange={name => { referral.current = name; }}
                 />
                 <button type="submit" className="authenticate-button">Link Steam via Discord</button>
             </form>
@@ -323,8 +328,8 @@ export default function Profile({ accountId }) {
         return buildDemoProfile(demoOptions, prefs);
     };
 
-    const demoLink = (rank, ref) => {
-        demoLogAdd(`GET /api/auth/link-steam?rank=${rank}&ref=${encodeURIComponent(ref)} -> Discord consent -> /api/auth/callback`);
+    const demoLink = (rank, ref, referredBy) => {
+        demoLogAdd(`GET /api/auth/link-steam?rank=${rank}&ref=${encodeURIComponent(ref)}&referredBy=${encodeURIComponent(referredBy)} -> Discord consent -> /api/auth/callback`);
         setDemoOptions(o => ({ ...o, linked: true }));
         setFlags({ linked: true, linkError: null, authError: null });
     };

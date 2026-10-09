@@ -11,10 +11,16 @@ con = sqlite3.connect("allUsers.db")
 # registered player leaves Discord and rejoins, they go back through moderation, and the
 # old approvals/rejections must not count toward the new decision (they are kept for history).
 # users.referral_source: hidden ?ref= tag from the promo link a registrant arrived through
-# (e.g. "reddit"). Replaces the user-facing referred_by field; shown only to mods.
+# (e.g. "reddit"); users.referred_by is the Discord member a regular visitor named instead.
+# Both are shown only to mods.
+# referral_stats: first-time registrations per referral link tag (kind 'link') and per
+# referring player (kind 'player'); written by the website, read by /referral_stats.
 for _sql in (
     "ALTER TABLE mod_notes ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN referral_source TEXT",
+    """CREATE TABLE IF NOT EXISTS referral_stats (
+        kind TEXT NOT NULL, key TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
+        first_at TEXT NOT NULL, last_at TEXT NOT NULL, PRIMARY KEY (kind, key))""",
 ):
     try:
         con.execute(_sql)
@@ -164,6 +170,20 @@ def query_mod_results(user_id: int) -> tuple[int, int, int]:
     D = sum(1 for r in rows if r[0] == 0)
     W = sum(1 for r in rows if r[0] not in (0, 1))
     return A, D, W
+
+# --- Referral tally ---
+
+def fetch_referral_stats():
+    """
+    Referral tally rows, busiest first within each kind.
+
+    Returns:
+        list[tuple]: (kind, key, count, first_at, last_at); kind is 'link' for a ?ref=
+        promo-link tag or 'player' for a Discord member named in "Referred By".
+    """
+    return fetch_all(
+        "SELECT kind, key, count, first_at, last_at FROM referral_stats ORDER BY kind, count DESC, key"
+    )
 
 # --- Registration queue (returning players) ---
 

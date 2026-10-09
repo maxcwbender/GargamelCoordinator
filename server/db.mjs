@@ -22,6 +22,19 @@ for (const sql of columnMigrations) {
     try { db.exec(sql); } catch (_) { /* column already exists */ }
 }
 
+// Referral tally: first-time registrations per referral link tag (kind 'link',
+// key = the ?ref= value) and per referring player (kind 'player', key = the
+// Discord display name picked in the "Referred By" box). Maintained by
+// services/registration.mjs; the bot reads it for /referral_stats.
+db.exec(`CREATE TABLE IF NOT EXISTS referral_stats (
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    first_at TEXT NOT NULL,
+    last_at TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+)`);
+
 // Ensure match_mvps table exists with composite key (match_id, award_type)
 {
     const cols = db.pragma('table_info(match_mvps)');

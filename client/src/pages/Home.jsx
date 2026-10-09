@@ -1,22 +1,25 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import RegistrationFields from '../components/RegistrationFields.jsx';
 import { getReferralSource, clearReferralSource } from '../referral.js';
 
 const OAUTH_URL = 'https://discord.com/oauth2/authorize?client_id=822929136711893063&response_type=token&redirect_uri=http%3A%2F%2Fwww.gargamel-league.com%2F&scope=identify+connections+guilds.join';
 
 // Registration page. Two phases:
-//   1. No OAuth token in the URL fragment -> show the rank form; the button
-//      stores the rank in sessionStorage and sends the user to Discord.
+//   1. No OAuth token in the URL fragment -> show the rank/referral form; the
+//      button stores selections in sessionStorage and sends the user to Discord.
 //   2. Discord redirected back with #access_token -> PUT the registration to
 //      the backend and show success/failure.
-// The referral source (hidden ?ref= tag on the link the visitor arrived with)
-// was captured on app load and is sent silently with the registration.
+// Attribution comes from one of two places: a hidden ?ref= tag on the link the
+// visitor arrived with (captured on app load, sent silently, and the "Referred
+// By" box is hidden), or otherwise the Discord member they pick in that box.
 export default function Home() {
     const [state, setState] = useState('init'); // init | auth | loading | success | error
     const [errorMessage, setErrorMessage] = useState('There was a problem linking your accounts. Please try again.');
     const [rank, setRank] = useState('');
     const [rankInvalid, setRankInvalid] = useState(false);
     const [authError] = useState(() => new URLSearchParams(window.location.search).get('authError'));
+    const [referralSource] = useState(() => getReferralSource());
+    const confirmedReferral = useRef(null);
 
     useEffect(() => {
         const fragment = new URLSearchParams(window.location.hash.slice(1));
@@ -30,14 +33,20 @@ export default function Home() {
 
         setState('loading');
 
-        // Retrieve the rank that was selected before OAuth
+        // Retrieve the rank and referral that were selected before OAuth
         const selectedRank = sessionStorage.getItem('selectedRank');
+        const referredBy = sessionStorage.getItem('referredBy');
         sessionStorage.removeItem('selectedRank');
-        const referralSource = getReferralSource();
+        sessionStorage.removeItem('referredBy');
+        const refTag = getReferralSource();
 
         fetch('/', {
             method: 'PUT',
-            body: JSON.stringify({ accessToken, tokenType, rank: selectedRank, referralSource: referralSource || undefined }),
+            body: JSON.stringify({
+                accessToken, tokenType, rank: selectedRank,
+                referralSource: refTag || undefined,
+                referredBy: referredBy || undefined,
+            }),
             headers: { 'Content-Type': 'application/json' }
         }).then(async response => {
             const data = await response.json().catch(() => ({}));
@@ -64,8 +73,9 @@ export default function Home() {
             setRankInvalid(true);
             return;
         }
-        // Store rank in sessionStorage so we can retrieve it after the OAuth redirect
+        // Store rank and referral in sessionStorage so we can retrieve them after OAuth redirect
         sessionStorage.setItem('selectedRank', rank);
+        sessionStorage.setItem('referredBy', confirmedReferral.current || '');
     };
 
     return (
@@ -92,6 +102,8 @@ export default function Home() {
                             rank={rank}
                             onRankChange={v => { setRank(v); setRankInvalid(false); }}
                             rankInvalid={rankInvalid}
+                            showReferral={!referralSource}
+                            onReferralChange={name => { confirmedReferral.current = name; }}
                         />
                         <a className="authenticate-button" href={OAUTH_URL} onClick={onRegisterClick}>
                             Register for the Gargamel League

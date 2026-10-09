@@ -2785,6 +2785,44 @@ class Master_Bot(commands.Bot):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         @app_commands.command(
+            name="referral_stats",
+            description="How many first-time registrations each referral link and referring player brought in"
+        )
+        async def referral_stats(interaction: discord.Interaction):
+            """
+            Shows the referral tally (users.referral_source / referred_by at first registration).
+
+            Args:
+                interaction (discord.Interaction): Interaction invoking the command.
+            """
+            chan_id = int(self.config["MOD_CHANNEL_ID"])
+            if interaction.channel_id != chan_id:
+                return await interaction.response.send_message(
+                    f"<@{interaction.user.id}>: please use <#{chan_id}>", ephemeral=True
+                )
+
+            rows = DB.fetch_referral_stats()
+            if not rows:
+                return await interaction.response.send_message("No referrals recorded yet.", ephemeral=True)
+
+            def fmt(items):
+                lines = [f"**{key}** — {count} (last {last_at[:10]})" for _, key, count, _, last_at in items[:20]]
+                if len(items) > 20:
+                    lines.append(f"…and {len(items) - 20} more")
+                return "\n".join(lines) or "none yet"
+
+            links = [r for r in rows if r[0] == "link"]
+            players = [r for r in rows if r[0] == "player"]
+            embed = discord.Embed(
+                title="📈 Referral Stats",
+                description="First-time registrations by where they came from",
+                color=discord.Color.green()
+            )
+            embed.add_field(name=f"Referral links (?ref=) — {sum(r[2] for r in links)} total", value=fmt(links), inline=False)
+            embed.add_field(name=f"Referred by players — {sum(r[2] for r in players)} total", value=fmt(players), inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        @app_commands.command(
             name="assign_registrant",
             description="Assign a specific player from the registration queue to yourself"
         )
@@ -3769,6 +3807,7 @@ class Master_Bot(commands.Bot):
         self.tree.add_command(set_behavior_score)
         self.tree.add_command(notify)
         self.tree.add_command(list_registration_queue)
+        self.tree.add_command(referral_stats)
         self.tree.add_command(assign_registrant)
         self.tree.add_command(force_start)
         self.tree.add_command(force_swap)

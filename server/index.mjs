@@ -1,6 +1,7 @@
 import express from 'express';
 import { logger } from './logger.mjs';
 import { startOpenDotaBackgroundWork } from './services/opendota.mjs';
+import { startDiscordBackgroundWork } from './services/discord.mjs';
 import { mountLeagueRoutes } from './routes/league.mjs';
 import { mountRegisterRoutes } from './routes/register.mjs';
 import { mountPlanningRoutes } from './routes/planning.mjs';
@@ -30,10 +31,11 @@ mountProfileRoutes(server);
 mountRankingsRoutes(server);
 mountStatic(server);
 
-// The background OpenDota crawl starts after the routes are wired so
-// server.listen isn't blocked — the landing page must come up instantly even
-// while the first ~15s match crawl is still running.
+// Background caches (OpenDota crawl, Discord members) start after the routes are
+// wired so server.listen isn't blocked — the landing page must come up instantly
+// even while the first ~15s match crawl is still running.
 startOpenDotaBackgroundWork();
+startDiscordBackgroundWork();
 
 // ─── Global Error Handlers ───────────────────────────────────────────────────
 process.on('uncaughtException', (error) => {
