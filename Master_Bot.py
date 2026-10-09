@@ -46,6 +46,24 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def referral_parts(referral_source, referred_by):
+    """Mod-facing attribution fragments for a registrant.
+
+    referral_source is the hidden ``?ref=`` tag from the promo link they registered
+    through (e.g. "reddit"); referred_by is the Discord member named on the old
+    user-facing referral field, kept so rows from before the switch still show it.
+
+    Returns:
+        list[str]: Markdown fragments such as ``["Source: **reddit**"]`` (may be empty).
+    """
+    parts = []
+    if referral_source:
+        parts.append(f"Source: **{referral_source}**")
+    if referred_by:
+        parts.append(f"Referred by: **{referred_by}**")
+    return parts
+
+
 class RESTAPIClient:
     """
     REST API client for communicating with the Go-based lobby manager (lobbymanager.go).
@@ -2336,7 +2354,7 @@ class Master_Bot(commands.Bot):
             mod_chan = self.get_channel(int(self.config["MOD_CHANNEL_ID"]))
             if mod_chan:
                 history = f"{prior['approvals']} approval(s) / {prior['rejections']} rejection(s)"
-                referral = f" | Referred by: **{reg['referred_by']}**" if reg.get("referred_by") else ""
+                referral = "".join(f" | {p}" for p in referral_parts(reg.get("referral_source"), reg.get("referred_by")))
                 await mod_chan.send(
                     f"<@{member.id}> rejoined the server and is back in the registration queue as a "
                     f"**returning player** (Rating: **{prior['rating']}**, previous review: {history}{referral}). "
@@ -2709,7 +2727,7 @@ class Master_Bot(commands.Bot):
 
             pending_registrants = DB.fetch_all(
                 """
-                SELECT discord_id, rating, dateCreated, modsRemaining, referred_by
+                SELECT discord_id, rating, dateCreated, modsRemaining, referred_by, referral_source
                 FROM users
                 WHERE modsRemaining > 0
                 ORDER BY dateCreated ASC
@@ -2741,7 +2759,7 @@ class Master_Bot(commands.Bot):
             )
 
             for registrant in pending_registrants[:25]:  # Discord embed field limit
-                discord_id, rating, date_created, mods_remaining, referred_by = registrant
+                discord_id, rating, date_created, mods_remaining, referred_by, referral_source = registrant
                 rating_display = rating if rating else "Not set"
 
                 # Try to get user's display name
@@ -2753,7 +2771,7 @@ class Master_Bot(commands.Bot):
 
                 # Mark if already reviewed by this mod
                 status_marker = "✅ (you reviewed)" if discord_id in already_reviewed else "⏳ Available"
-                referral_line = f"\n**Referred By:** {referred_by}" if referred_by else ""
+                referral_line = "".join(f"\n{p}" for p in referral_parts(referral_source, referred_by))
 
                 embed.add_field(
                     name=f"{user_name} (<@{discord_id}>)",
@@ -4112,8 +4130,9 @@ class Master_Bot(commands.Bot):
                     # Get rating and referral information to include in notification
                     rating = DB.fetch_one(f"SELECT rating FROM users WHERE discord_id = {discord_id}")
                     referred_by = DB.fetch_one(f"SELECT referred_by FROM users WHERE discord_id = {discord_id}")
+                    referral_source = DB.fetch_one(f"SELECT referral_source FROM users WHERE discord_id = {discord_id}")
                     rating_text = f" (Rating: **{rating}**)" if rating else ""
-                    referral_text = f" | Referred by: **{referred_by}**" if referred_by else ""
+                    referral_text = "".join(f" | {p}" for p in referral_parts(referral_source, referred_by))
                     await mod_chan.send(f"<@{discord_id}> joined registration queue!{rating_text}{referral_text}")
                     logger.info(f"[on_steam_id_found] Sent notification to mod channel for {discord_id}")
                 else:

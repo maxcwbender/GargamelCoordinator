@@ -12,6 +12,9 @@ const columnMigrations = [
     'ALTER TABLE player_stats ADD COLUMN obs_ward_count INTEGER DEFAULT 0',
     'ALTER TABLE player_stats ADD COLUMN season INTEGER DEFAULT 1',
     'ALTER TABLE users ADD COLUMN referred_by TEXT',
+    // Hidden ?ref= tag from the promo link a registrant arrived through (e.g.
+    // "reddit"); replaces the user-facing referred_by field. Shown only to mods.
+    'ALTER TABLE users ADD COLUMN referral_source TEXT',
     // Old mod reviews of a player who left Discord and rejoined (see Master_Bot on_member_join)
     'ALTER TABLE mod_notes ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0',
 ];

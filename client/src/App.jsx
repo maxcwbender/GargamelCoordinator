@@ -11,6 +11,11 @@ import Notifications from './pages/Notifications.jsx';
 import SummerPlanning from './pages/SummerPlanning.jsx';
 import Profile from './pages/Profile.jsx';
 import PlayerAwards from './pages/PlayerAwards.jsx';
+import { captureReferralSource } from './referral.js';
+
+// Pull a hidden ?ref= tag off whatever URL the visitor arrived on (promo links)
+// before any page renders, so it is stored and gone from the address bar.
+captureReferralSource();
 
 const PAGES = {
     '/': Home,

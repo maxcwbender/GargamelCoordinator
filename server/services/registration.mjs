@@ -3,7 +3,16 @@ import net from 'net';
 import { db } from '../db.mjs';
 import { logger } from '../logger.mjs';
 import { config, BOT_TOKEN } from '../config.mjs';
-import { discordMembersCache } from './discord.mjs';
+
+// Referral attribution. Promo links carry a hidden tag (https://www.gargamel-league.com/?ref=reddit);
+// the client captures it and sends it with the registration. Any lower-case
+// slug is accepted so new sources need no code change. Returns null for nothing
+// usable. Mirrors client/src/referral.js.
+export function normalizeReferralSource(raw) {
+    if (typeof raw !== 'string') return null;
+    const slug = raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 32);
+    return slug || null;
+}
 
 // Rank -> starting rating. Shared by the legacy home-page flow (PUT /) and the
 // logged-in "Link to Steam" flow on profiles.
@@ -81,12 +90,14 @@ async function addMemberToGuild(discordID, accessToken) {
 //
 // A player who registered before keeps their rating (their MMR history is the
 // better signal than a freshly self-reported rank); only the Steam link and the
-// referral are refreshed. If they had left the Discord server, the bot's
+// referral source are refreshed. If they had left the Discord server, the bot's
 // member-join handler puts them back into the registration queue as a
 // returning player.
-export async function registerWithDiscordToken({ tokenType, accessToken, rank, referredBy: rawReferredBy }) {
-    const validNames = new Set((discordMembersCache.data || []).map(m => m.name));
-    const referredBy = (rawReferredBy && validNames.has(rawReferredBy)) ? rawReferredBy : null;
+//
+// referralSource is the hidden promo-link tag (see normalizeReferralSource);
+// it is stored for mods and never echoed back to the registrant.
+export async function registerWithDiscordToken({ tokenType, accessToken, rank, referralSource: rawReferralSource }) {
+    const referralSource = normalizeReferralSource(rawReferralSource);
 
     if (!tokenType || !accessToken) {
         logger.error('Registration: missing tokenType or accessToken');
@@ -135,19 +146,20 @@ export async function registerWithDiscordToken({ tokenType, accessToken, rank, r
         const rating = RANK_TO_RATING[rank] || 3000; // Default to 3000 if rank not found
         const existing = getRegistration(discordID);
         if (existing) {
-            logger.info(`Registration: ${discordID} is already registered (rating ${existing.rating}, steam ${existing.steam_id}); keeping their rating, refreshing steam/referral`);
+            logger.info(`Registration: ${discordID} is already registered (rating ${existing.rating}, steam ${existing.steam_id}); keeping their rating, refreshing steam/referral source`);
         } else {
             logger.info(`Converting rank '${rank}' to rating ${rating} for user ${discordID}`);
         }
+        if (referralSource) logger.info(`Registration: ${discordID} arrived via referral source '${referralSource}'`);
 
         try {
             db.prepare(`
-                INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched, rating, referred_by)
+                INSERT INTO users (discord_id, steam_id, dateCreated, modsRemaining, timesVouched, rating, referral_source)
                 VALUES (?, ?, datetime('now'), ?, 0, ?, ?)
                 ON CONFLICT(discord_id) DO UPDATE SET
                     steam_id = excluded.steam_id,
-                    referred_by = COALESCE(excluded.referred_by, referred_by)
-            `).run(discordID, steamID, config.MOD_ASSIGNMENT, rating, referredBy || null);
+                    referral_source = COALESCE(excluded.referral_source, referral_source)
+            `).run(discordID, steamID, config.MOD_ASSIGNMENT, rating, referralSource);
         } catch (err) {
             logger.error({ err }, 'DB upsert error');
         }

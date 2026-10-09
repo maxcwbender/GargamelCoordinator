@@ -20,7 +20,7 @@ const STATE_TTL_MS = 10 * 60 * 1000;
 const SECURE_COOKIE = SITE_URL.startsWith('https://');
 
 // ─── OAuth state (CSRF token + what to do when Discord sends the user back) ──
-const pendingStates = new Map(); // state -> { mode, returnTo, rank, referredBy, createdAt }
+const pendingStates = new Map(); // state -> { mode, returnTo, rank, referralSource, createdAt }
 
 function pruneStates() {
     const cutoff = Date.now() - STATE_TTL_MS;

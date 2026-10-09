@@ -5,15 +5,16 @@ import {
     createSession, destroySession, setSessionCookie, clearSessionCookie,
     getSessionDiscordId, requireAuth,
 } from '../services/auth.mjs';
-import { registerWithDiscordToken, rejoinGuildWithDiscordToken, getRegistration, RANKS } from '../services/registration.mjs';
+import { registerWithDiscordToken, rejoinGuildWithDiscordToken, getRegistration, normalizeReferralSource, RANKS } from '../services/registration.mjs';
 import { buildProfile } from './profile.mjs';
 import { forgetGuildMembership } from '../services/discord.mjs';
 
 // ─── Website login via Discord ───────────────────────────────────────────────
 //   GET  /api/auth/login?returnTo=/path   -> Discord consent (identify)
-//   GET  /api/auth/link-steam?rank=&referredBy=  (logged in) -> Discord consent
+//   GET  /api/auth/link-steam?rank=&ref=  (logged in) -> Discord consent
 //        (identify connections guilds.join), then registers via the shared
-//        registration service — same result as the home-page flow.
+//        registration service — same result as the home-page flow. `ref` is the
+//        hidden promo-link tag the client captured (never shown to the user).
 //   GET  /api/auth/rejoin                 (logged in, registered) -> Discord consent
 //        (identify guilds.join), then re-adds them to the Discord server; the bot
 //        re-queues them for mod review as a returning player.
@@ -31,8 +32,8 @@ export function mountAuthRoutes(server) {
         if (!authEnabled()) return res.status(503).json({ error: 'Login is not configured on this server' });
         const rank = typeof req.query.rank === 'string' ? req.query.rank : '';
         if (!RANKS.includes(rank)) return res.status(400).json({ error: 'Please select your Dota 2 rank' });
-        const referredBy = typeof req.query.referredBy === 'string' ? req.query.referredBy.slice(0, 100) : '';
-        const state = createOAuthState({ mode: 'link', rank, referredBy, returnTo: '/profile' });
+        const referralSource = normalizeReferralSource(req.query.ref);
+        const state = createOAuthState({ mode: 'link', rank, referralSource, returnTo: '/profile' });
         return res.redirect(authorizeUrl({ state, scopes: ['identify', 'connections', 'guilds.join'] }));
     });
 
@@ -63,7 +64,7 @@ export function mountAuthRoutes(server) {
 
             if (pending.mode === 'link') {
                 const result = await registerWithDiscordToken({
-                    tokenType, accessToken, rank: pending.rank, referredBy: pending.referredBy,
+                    tokenType, accessToken, rank: pending.rank, referralSource: pending.referralSource,
                 });
                 if (result.status >= 400) {
                     return res.redirect('/profile?linkError=' + encodeURIComponent(String(result.body?.result || 'Linking failed')));

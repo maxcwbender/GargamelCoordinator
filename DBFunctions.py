@@ -10,8 +10,11 @@ con = sqlite3.connect("allUsers.db")
 # mod_notes.superseded: 1 marks review rows from a previous registration pass. When a
 # registered player leaves Discord and rejoins, they go back through moderation, and the
 # old approvals/rejections must not count toward the new decision (they are kept for history).
+# users.referral_source: hidden ?ref= tag from the promo link a registrant arrived through
+# (e.g. "reddit"). Replaces the user-facing referred_by field; shown only to mods.
 for _sql in (
     "ALTER TABLE mod_notes ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN referral_source TEXT",
 ):
     try:
         con.execute(_sql)
@@ -169,15 +172,16 @@ def fetch_registration(discord_id):
     Returns the registration row for a Discord id, or None if they never registered.
 
     Returns:
-        dict | None: {"steam_id", "rating", "modsRemaining", "referred_by", "dateCreated"}
+        dict | None: {"steam_id", "rating", "modsRemaining", "referred_by", "referral_source", "dateCreated"}
     """
     row = con.execute(
-        "SELECT steam_id, rating, modsRemaining, referred_by, dateCreated FROM users WHERE discord_id = ?",
+        "SELECT steam_id, rating, modsRemaining, referred_by, referral_source, dateCreated FROM users WHERE discord_id = ?",
         (discord_id,),
     ).fetchone()
     if not row:
         return None
-    return {"steam_id": row[0], "rating": row[1], "modsRemaining": row[2], "referred_by": row[3], "dateCreated": row[4]}
+    return {"steam_id": row[0], "rating": row[1], "modsRemaining": row[2], "referred_by": row[3],
+            "referral_source": row[4], "dateCreated": row[5]}
 
 def is_fresh_registrant(discord_id, mods_required: int) -> bool:
     """
