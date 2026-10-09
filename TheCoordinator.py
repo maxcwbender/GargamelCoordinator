@@ -11,6 +11,9 @@ from DBFunctions import (
     fetch_steam_id,
     fetch_behavior_score,
     BEHAVIOR_SCORE_MAX,
+    save_queue_state,
+    load_queue_state,
+    clear_queue_state,
 )
 import logging
 import time
@@ -25,11 +28,64 @@ with open("config.json") as configFile:
 class TheCoordinator:
     def __init__(self, discordBot, dota_talker):
         # user_id -> (rating, join_time, random_tiebreaker)
+        # Mirrored write-through to the queue_state table after every change so a crash or
+        # restart can restore it (see restore_queue); the dict stays the source of truth at runtime.
         self.queue = {}
         self.discordBot = discordBot
         self.dota_talker = dota_talker
 
     # --- Queue Management ---
+
+    def _persist_queue(self):
+        """Mirror the in-memory queue to the DB. Never lets a DB hiccup break queueing."""
+        try:
+            save_queue_state(self.queue)
+        except Exception:
+            logger.exception("[Coordinator] Failed to persist queue state")
+
+    def restore_queue(self, max_age_seconds: float) -> List[int]:
+        """
+        Put the players from the last run's persisted queue back into the in-memory queue.
+
+        Called once on startup. Entries already in memory are left alone (safe on reconnects).
+        Ratings are refreshed from the users table in case they changed while the bot was down.
+        A snapshot older than max_age_seconds is discarded instead: those players have long
+        since wandered off and re-queueing them would only trigger pointless ready checks.
+
+        Returns:
+            list[int]: discord ids that were restored, oldest join first.
+        """
+        try:
+            saved, age = load_queue_state()
+        except Exception:
+            logger.exception("[Coordinator] Could not read persisted queue state")
+            return []
+        if not saved:
+            return []
+        if age is not None and age > max_age_seconds:
+            logger.info(
+                f"[Coordinator] Discarding persisted queue of {len(saved)} player(s): "
+                f"snapshot is {age / 60:.0f} min old (limit {max_age_seconds / 60:.0f} min)."
+            )
+            try:
+                clear_queue_state()
+            except Exception:
+                logger.exception("[Coordinator] Could not clear stale queue state")
+            return []
+
+        restored = []
+        for user, (rating, join_time, tiebreak) in sorted(saved.items(), key=lambda x: (x[1][1], x[1][2])):
+            if user in self.queue:
+                continue
+            current_rating = fetch_rating(user) or rating
+            self.queue[user] = (current_rating, join_time, tiebreak)
+            restored.append(user)
+            logger.info(
+                f"[Coordinator] Restored {self._display_name(user)} ({user}) to queue after restart "
+                f"(rating={current_rating}, queued since {datetime.fromtimestamp(join_time).strftime('%Y-%m-%d %H:%M:%S')})"
+            )
+        self._persist_queue()
+        return restored
 
     def in_queue(self, discord_id: int) -> bool:
         return discord_id in self.queue
@@ -47,6 +103,7 @@ class TheCoordinator:
             human_time = datetime.fromtimestamp(join_time).strftime("%Y-%m-%d %H:%M:%S")
             self.queue[user] = (rating, join_time, random.random())
             logger.info(f"[Coordinator] Added {self._display_name(user)} ({user}) to queue (rating={rating}, time={human_time})")
+            self._persist_queue()
         return len(self.queue)
 
     def remove_player(self, user: int) -> bool:
@@ -54,6 +111,7 @@ class TheCoordinator:
         removed = self.queue.pop(user, None) is not None
         if removed:
             logger.info(f"[Coordinator] Removed {self._display_name(user)} ({user}) from queue.")
+            self._persist_queue()
         return removed
 
     def get_queue(self) -> List[Tuple[int, int]]:
@@ -67,6 +125,7 @@ class TheCoordinator:
         """Clear all players from the queue."""
         self.queue.clear()
         logger.info("[Coordinator] Queue cleared.")
+        self._persist_queue()
 
     # --- Game Logic ---
 
@@ -254,6 +313,7 @@ class TheCoordinator:
         # --- Step 4: Remove selected players from queue ---
         for user in team1_users + team2_users:
             del self.queue[user]
+        self._persist_queue()
 
         cut_players = set(self.queue.keys())
 

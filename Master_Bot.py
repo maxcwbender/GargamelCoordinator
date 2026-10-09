@@ -595,6 +595,14 @@ class Master_Bot(commands.Bot):
         for task in pending:
             logger.debug(f" - {task}")
 
+    def _maybe_start_game_loop(self):
+        """Kick off the game countdown if the queue is full and no countdown is already running."""
+        if len(self.coordinator.queue) < self.config["TEAM_SIZE"] * 2:
+            return
+        if self.pending_game_task is None or self.pending_game_task.done():
+            start_game_timer = 15 if self.config["DEBUG_MODE"] else 60
+            self.pending_game_task = asyncio.create_task(self._start_game_loop(start_game_timer))
+
     async def queue_user(self, interaction: discord.Interaction, respond=True):
         """Add a user to the queue with proper interaction handling."""
         response_sent = False
@@ -660,12 +668,7 @@ class Master_Bot(commands.Bot):
         self.notifier.queue_update(pool_size, self.config["TEAM_SIZE"] * 2)
 
         # Start game loop if enough players
-        if pool_size >= self.config["TEAM_SIZE"] * 2:
-            if self.pending_game_task is None or self.pending_game_task.done():
-                start_game_timer = 60
-                if self.config["DEBUG_MODE"]:
-                    start_game_timer = 15
-                self.pending_game_task = asyncio.create_task(self._start_game_loop(start_game_timer))
+        self._maybe_start_game_loop()
 
         # Send success message
         if respond:
@@ -2403,7 +2406,27 @@ class Master_Bot(commands.Bot):
 
         # Purging any leftover voice channels on boot, moving all members to General.
         await self.clean_up_voice_channels()
-        await self.update_queue_status_message(new_message=True)
+
+        # Put back whoever was in the game queue when the bot last stopped (crash, deploy
+        # restart). The coordinator mirrors every queue change to the DB, so this is the
+        # state from the moment we went down. Snapshots older than QUEUE_RESTORE_MAX_AGE_SECONDS
+        # (default 3h) are discarded. The ready check still protects against ghosts.
+        restored = self.coordinator.restore_queue(
+            float(self.config.get("QUEUE_RESTORE_MAX_AGE_SECONDS", 3 * 3600))
+        )
+        restore_note = None
+        if restored:
+            logger.info(f"[on_ready] Restored {len(restored)} player(s) to the queue after restart: {restored}")
+            restore_note = {
+                "name": "♻️ Bot restarted",
+                "value": (
+                    f"Restored **{len(restored)}** player(s) who were queued before the restart. "
+                    f"No longer around? Hit **Leave**."
+                ),
+            }
+        await self.update_queue_status_message(new_message=True, content=restore_note)
+        if restored:
+            self._maybe_start_game_loop()
 
         # --------------- #
         # Slash Commands  #

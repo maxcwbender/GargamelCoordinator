@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 
 with open("config.json") as configFile:
     config: dict = json.load(configFile)
@@ -21,6 +22,11 @@ for _sql in (
     """CREATE TABLE IF NOT EXISTS referral_stats (
         kind TEXT NOT NULL, key TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
         first_at TEXT NOT NULL, last_at TEXT NOT NULL, PRIMARY KEY (kind, key))""",
+    # queue_state: write-through mirror of the in-memory game queue (TheCoordinator.queue) so a
+    # crash or restart can put the same players back in the queue. Bot-only; see save_queue_state.
+    """CREATE TABLE IF NOT EXISTS queue_state (
+        discord_id INTEGER PRIMARY KEY, rating INTEGER NOT NULL, join_time REAL NOT NULL,
+        tiebreak REAL NOT NULL, saved_at REAL NOT NULL)""",
 ):
     try:
         con.execute(_sql)
@@ -170,6 +176,43 @@ def query_mod_results(user_id: int) -> tuple[int, int, int]:
     D = sum(1 for r in rows if r[0] == 0)
     W = sum(1 for r in rows if r[0] not in (0, 1))
     return A, D, W
+
+# --- Game queue persistence (crash / restart recovery) ---
+
+def save_queue_state(queue: dict):
+    """
+    Replace the persisted game queue with the current in-memory one, atomically.
+
+    Args:
+        queue (dict): discord_id -> (rating, join_time, tiebreak), as TheCoordinator keeps it.
+    """
+    now = time.time()
+    con.execute("DELETE FROM queue_state")
+    con.executemany(
+        "INSERT INTO queue_state (discord_id, rating, join_time, tiebreak, saved_at) VALUES (?, ?, ?, ?, ?)",
+        [(int(user), int(rating), float(join_time), float(tiebreak), now)
+         for user, (rating, join_time, tiebreak) in queue.items()],
+    )
+    con.commit()
+
+def load_queue_state():
+    """
+    The persisted game queue from the last run.
+
+    Returns:
+        tuple[dict, float | None]: (discord_id -> (rating, join_time, tiebreak), age in seconds of
+        the snapshot) — ({}, None) when nothing was saved.
+    """
+    rows = fetch_all("SELECT discord_id, rating, join_time, tiebreak, saved_at FROM queue_state")
+    if not rows:
+        return {}, None
+    players = {int(r[0]): (int(r[1]), float(r[2]), float(r[3])) for r in rows}
+    age = time.time() - max(float(r[4]) for r in rows)
+    return players, age
+
+def clear_queue_state():
+    """Forget the persisted game queue."""
+    execute("DELETE FROM queue_state")
 
 # --- Referral tally ---
 
